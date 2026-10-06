@@ -1,0 +1,98 @@
+/* themes/light · Ajustes de componentes específicos del tema claro. */
+
+:root[data-theme="light"] .app-shell,
+:root[data-theme="light"] .bottom-nav {
+  background: var(--surface);
+}
+
+:root[data-theme="light"] .cash-card,
+:root[data-theme="light"] .client-row,
+:root[data-theme="light"] .settings-row,
+:root[data-theme="light"] .search-field,
+:root[data-theme="light"] .detail-balance,
+:root[data-theme="light"] .credit-details,
+:root[data-theme="light"] .payment-history {
+  border-color: var(--line);
+  background: var(--card);
+  box-shadow: 0 2px 9px #1118270a;
+}
+
+:root[data-theme="light"] .work-base,
+:root[data-theme="light"] .cash-card-footer,
+:root[data-theme="light"] .detail-balance>div,
+:root[data-theme="light"] .payment-history li {
+  border-color: var(--line);
+}
+
+:root[data-theme="light"] .bottom-nav {
+  border-color: var(--line);
+}
+
+:root[data-theme="light"] .status-current {
+  background: #E4F7EC;
+  color: #087A38;
+}
+
+:root[data-theme="light"] .status-late {
+  background: #FCEAE5;
+  color: #A52E0A;
+}
+
+:root[data-theme="light"] .client-avatar {
+  color: #172033;
+}
+
+:root[data-theme="light"] .payment-modal {
+  background: var(--surface);
+  color: var(--text);
+}
+
+:root[data-theme="light"] .modal-backdrop {
+  background: #0008;
+}
+
+:root[data-theme="light"] .method-card,
+:root[data-theme="light"] .voucher-field input {
+  border-color: var(--line);
+  background: var(--card);
+  color: var(--text);
+}
+
+:root[data-theme="light"] .cash-card {
+  border-color: var(--primary);
+}
+
+:root[data-theme="light"] .login-card {
+  background: var(--card);
+}
+
+:root[data-theme="light"] .custom-modal {
+  background: linear-gradient(145deg,#fff,#F5F7FA);
+}
+
+[data-theme="light"] .audit-table tfoot th,
+[data-theme="light"] .audit-table tfoot td {
+  background: #EFF6FF;
+}
+
+:root[data-theme="light"] .worker-daily-metrics,
+:root[data-theme="light"] .worker-metrics-grid article {
+  border-color: var(--line);
+  background: var(--card);
+}
+
+:root[data-theme="light"] .status-current {
+  color: #087A38;
+  background: #E4F7EC;
+}
+
+:root[data-theme="light"] .status-late {
+  color: #A52E0A;
+  background: #FCEAE5;
+}
+
+:root[data-theme="light"] .payment-behavior,
+:root[data-theme="light"] .client-risk-line {
+  color: color-mix(in srgb,var(--behavior-color,var(--success)) 60%,#111827);
+  background: color-mix(in srgb,var(--behavior-color,var(--success)) 12%,#FFFFFF);
+}

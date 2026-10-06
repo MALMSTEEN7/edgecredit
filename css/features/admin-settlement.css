@@ -1,0 +1,602 @@
+/* features/admin-settlement · Liquidación / cuadre de caja. */
+
+.settlement-card {
+  min-height: 130px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 17px 18px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--card);
+  box-shadow: 0 4px 14px #0000000a;
+}
+
+.settlement-card>span {
+  margin-bottom: 12px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+}
+
+.settlement-card h3 {
+  min-height: 19px;
+  margin: 0 0 8px;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.settlement-card>strong {
+  font: 700 20px Manrope,sans-serif;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -.3px;
+}
+
+.income-card>span {
+  color: var(--success-color);
+}
+
+.expense-card>span {
+  color: var(--alert-color);
+}
+
+.closing-card>span {
+  color: var(--primary);
+}
+
+.difference-card {
+  grid-column: 1/-1;
+  min-height: 150px;
+  border-width: 2px;
+}
+
+.difference-card>span {
+  color: var(--muted);
+}
+
+.difference-card>strong {
+  font-size: 30px;
+}
+
+.difference-card.is-balanced {
+  border-color: var(--success-color);
+}
+
+.difference-card.is-balanced>strong,
+.difference-card.is-balanced>small {
+  color: var(--success-color);
+}
+
+.difference-card.is-short {
+  border-color: var(--alert-color);
+}
+
+.difference-card.is-short>strong,
+.difference-card.is-short>small {
+  color: var(--alert-color);
+}
+
+.difference-card.is-surplus {
+  border-color: #D9A400;
+}
+
+.difference-card.is-surplus>strong,
+.difference-card.is-surplus>small {
+  color: #D9A400;
+}
+
+.difference-card>small {
+  margin-top: 6px;
+  font-size: 11px;
+}
+
+.admin-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  margin-top: 18px;
+}
+
+.admin-actions>p:first-child {
+  align-self: flex-start;
+  margin: 0 0 12px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.close-route-button {
+  min-height: 54px;
+}
+
+.close-route-button:disabled {
+  cursor: not-allowed;
+  opacity: .45;
+  filter: grayscale(.4);
+  box-shadow: none;
+}
+
+.admin-feedback {
+  align-self: flex-end;
+  min-height: 18px;
+  margin: 9px 0 0;
+  color: var(--alert-color);
+  font-size: 11px;
+  text-align: right;
+}
+
+@media (max-width:767px) {
+  .admin-actions {
+    align-items: stretch;
+  }
+
+  .close-route-button {
+    min-height: 48px;
+  }
+
+  .admin-feedback {
+    text-align: left;
+  }
+
+  .difference-card {
+    grid-column: 1/-1;
+  }
+}
+
+.settlement-card {
+  background: linear-gradient(145deg,var(--card) 0%,rgba(41,121,255,.055) 100%);
+}
+
+.difference-card.is-balanced {
+  background: linear-gradient(145deg,var(--card) 0%,rgba(0,200,83,.10) 100%);
+}
+
+.difference-card.is-short {
+  background: linear-gradient(145deg,var(--card) 0%,rgba(191,54,12,.12) 100%);
+}
+
+.settlement-layout {
+  display: grid;
+  grid-template-columns: minmax(0,1fr) minmax(0,1fr);
+  gap: 16px;
+}
+
+.settlement-group {
+  min-width: 0;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: linear-gradient(145deg,var(--card),rgba(41,121,255,.035));
+}
+
+.settlement-group>header {
+  display: grid;
+  gap: 5px;
+  margin-bottom: 15px;
+  padding-bottom: 13px;
+  border-bottom: 1px solid var(--line);
+}
+
+.settlement-group>header span {
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 1px;
+}
+
+.income-group>header span {
+  color: var(--success-color);
+}
+
+.expense-group>header span {
+  color: var(--alert-color);
+}
+
+.settlement-group>header small {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.settlement-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit,minmax(150px,1fr));
+  gap: 10px;
+}
+
+.settlement-fields .settlement-card {
+  min-height: 98px;
+  padding: 13px;
+  border-radius: 13px;
+  box-shadow: none;
+}
+
+.settlement-fields .settlement-card h3 {
+  min-height: 0;
+  margin: 0 0 10px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.settlement-layout::before {
+  grid-column: 1/-1;
+  height: 1px;
+  background: var(--line);
+  content: "";
+  grid-row: 2;
+}
+
+.difference-card {
+  grid-column: 1/-1;
+  grid-row: 4;
+  min-height: 190px;
+  align-items: center;
+  text-align: center;
+  background: linear-gradient(145deg,var(--card),rgba(41,121,255,.045));
+}
+
+.difference-card h3 {
+  margin: 0 0 8px;
+  font-size: 16px;
+}
+
+.difference-card>strong {
+  font: 800 clamp(38px,6vw,58px) Manrope,sans-serif;
+  letter-spacing: -1.8px;
+  font-variant-numeric: tabular-nums;
+}
+
+.difference-card>small {
+  font-size: 12px;
+}
+
+@media (min-width:768px) {
+  .settlement-fields {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width:767px) {
+  .settlement-layout {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+
+  .settlement-group {
+    padding: 15px;
+  }
+
+  .settlement-layout::before {
+    grid-row: 3;
+    grid-column: 1;
+  }
+
+  .difference-card {
+    grid-column: 1;
+    grid-row: 5;
+    min-height: 160px;
+  }
+
+  .settlement-fields {
+    grid-template-columns: repeat(auto-fit,minmax(135px,1fr));
+  }
+}
+
+.editable-money {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+}
+
+.editable-money>span {
+  font: 500 15px Manrope,sans-serif;
+}
+
+.editable-money input {
+  width: 100%;
+  min-width: 0;
+  padding: 1px 0;
+  border: 0;
+  border-bottom: 1px solid transparent;
+  outline: 0;
+  background: transparent;
+  color: var(--text);
+  font: 700 20px Manrope,sans-serif;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -.3px;
+}
+
+.editable-money input:focus {
+  border-bottom-color: var(--primary);
+}
+
+.editable-money input::-webkit-inner-spin-button,
+.editable-money input::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.editable-money input[type=number] {
+  appearance: textfield;
+  -moz-appearance: textfield;
+}
+
+.settlement-card h3 {
+  color: var(--muted);
+  font-size: .875rem;
+}
+
+.difference-card>strong,
+.settlement-card input,
+.editable-money input {
+  font-variant-numeric: tabular-nums lining-nums;
+  text-align: right;
+}
+
+.settlement-card input,
+.editable-money input {
+  color: var(--text);
+  font-weight: 700;
+  font-size: clamp(1.25rem,2vw,1.75rem);
+}
+
+.difference-card>strong {
+  font-size: clamp(2rem,4vw,2.75rem);
+  font-weight: 800;
+}
+
+.editable-money input {
+  width: 100%;
+  min-width: 0;
+}
+
+@media (max-width:767px) {
+  .settlement-fields {
+    grid-template-columns: minmax(0,1fr);
+  }
+}
+
+.card-finance {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: center;
+  gap: .65rem;
+  padding: 1.125rem 1.25rem;
+}
+
+.card-finance .finance-label {
+  display: block;
+  margin: 0;
+  color: var(--muted);
+  font-size: .875rem;
+  font-weight: 500;
+  letter-spacing: normal;
+  text-transform: none;
+}
+
+.card-finance .editable-money {
+  width: 100%;
+  display: flex;
+  align-items: baseline;
+  gap: .45rem;
+  color: var(--muted);
+}
+
+.card-finance .finance-amount {
+  display: block;
+  flex: 1 1 auto;
+  width: 100%;
+  min-width: 0;
+  margin: 0;
+  padding: .1rem 0;
+  border: 0;
+  border-bottom: 1px solid transparent;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: clamp(2rem,3vw,2.5rem);
+  font-weight: 700;
+  line-height: 1.15;
+  letter-spacing: -.035em;
+  font-variant-numeric: tabular-nums lining-nums;
+  text-align: right;
+}
+
+.card-finance .finance-amount:focus-visible {
+  border-bottom-color: var(--primary);
+  outline: 0;
+  box-shadow: 0 1px 0 var(--primary);
+}
+
+.card-finance .finance-amount::-webkit-inner-spin-button,
+.card-finance .finance-amount::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.card-finance .finance-amount[type=number] {
+  appearance: textfield;
+  -moz-appearance: textfield;
+}
+
+.difference-card .finance-amount {
+  flex: 0 0 auto;
+  width: 100%;
+  font-size: clamp(2.25rem,4vw,3rem);
+  text-align: left;
+}
+
+@media (max-width:767px) {
+  .card-finance {
+    padding: 1rem;
+  }
+
+  .card-finance .finance-amount {
+    font-size: 2rem;
+  }
+}
+
+.settlement-layout {
+  grid-template-columns: repeat(2,minmax(0,1fr));
+  align-items: start;
+  gap: 16px;
+}
+
+.settlement-layout::before {
+  display: none;
+}
+
+.income-group,
+.expense-group {
+  grid-column: auto;
+  grid-row: auto;
+  min-width: 0;
+}
+
+.difference-card {
+  grid-column: 1/-1;
+  grid-row: auto;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
+
+.difference-card .finance-amount {
+  align-self: center;
+  text-align: center;
+}
+
+.expense-group .settlement-fields {
+  grid-template-columns: repeat(auto-fit,minmax(min(100%,150px),1fr));
+}
+
+@media (max-width:767px) {
+  .settlement-layout {
+    grid-template-columns: minmax(0,1fr);
+    gap: 12px;
+  }
+
+  .income-group,
+  .expense-group,
+  .difference-card {
+    grid-column: 1;
+  }
+
+  .difference-card {
+    grid-row: auto;
+    min-height: 150px;
+  }
+}
+
+.income-group .settlement-fields,
+.expense-group .settlement-fields {
+  grid-template-columns: repeat(3,minmax(0,1fr));
+  gap: 10px;
+}
+
+.settlement-fields .settlement-card {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.settlement-fields .finance-amount {
+  font-size: clamp(1.2rem,2vw,1.65rem);
+  letter-spacing: -.055em;
+}
+
+.closing-card {
+  border-color: color-mix(in srgb,var(--success) 24%,var(--line));
+}
+
+.closing-card .finance-label {
+  color: var(--success)!important;
+}
+
+.difference-card .finance-amount {
+  align-self: center;
+  text-align: center;
+}
+
+@media (max-width:920px) {
+  .income-group .settlement-fields,
+  .expense-group .settlement-fields {
+    grid-template-columns: repeat(2,minmax(0,1fr));
+  }
+}
+
+@media (max-width:767px) {
+  .income-group .settlement-fields,
+  .expense-group .settlement-fields {
+    grid-template-columns: minmax(0,1fr);
+  }
+}
+
+/* Ritmo vertical de la liquidación: accesos operativos → ingresos/egresos → cuadre
+ * de caja comparten el mismo espacio (--settlement-gap) para que se vea simétrico. */
+[data-admin-panel="settlement"] {
+  --settlement-gap: 16px;
+}
+
+@media (max-width:767px) {
+  [data-admin-panel="settlement"] {
+    --settlement-gap: 12px;
+  }
+}
+
+.settlement-layout {
+  gap: var(--settlement-gap);
+}
+
+.ops-summary.admin-ops-summary {
+  margin: 0 0 var(--settlement-gap);
+}
+
+/* Campos de la liquidación en vertical: una fila por concepto, etiqueta a la
+ * izquierda y monto editable a la derecha (más cómodo para corregir valores). */
+.settlement-layout .settlement-fields {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 10px;
+}
+
+.settlement-layout .settlement-fields .settlement-card {
+  min-height: 68px;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 16px;
+}
+
+.settlement-layout .settlement-fields .settlement-card .finance-label {
+  flex: 0 0 auto;
+  min-height: 0;
+  margin: 0;
+  font-size: 13px;
+}
+
+.settlement-layout .settlement-fields .editable-money {
+  flex: 1 1 auto;
+  width: auto;
+  max-width: 280px;
+  justify-content: flex-end;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  transition: border-color .15s ease, box-shadow .15s ease;
+}
+
+.settlement-layout .settlement-fields .editable-money:focus-within {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 18%, transparent);
+}
+
+.settlement-layout .settlement-fields .editable-money input {
+  border-bottom: 0;
+  font-size: clamp(1.15rem, 1.5vw, 1.45rem);
+}

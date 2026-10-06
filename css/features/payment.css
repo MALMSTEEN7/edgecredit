@@ -1,0 +1,213 @@
+/* features/payment · Modal de registro de pago. */
+
+.amount-label,
+.payment-method legend {
+  display: block;
+  margin-bottom: 9px;
+  color: #BDBDBD;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.amount-input-wrap {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 0 11px;
+  border-bottom: 1px solid #3D3D3D;
+  color: #929292;
+}
+
+.amount-input-wrap>span {
+  font: 500 25px Manrope,sans-serif;
+}
+
+.amount-input-wrap input {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text);
+  font: 700 42px Manrope,sans-serif;
+  letter-spacing: -1.5px;
+}
+
+.amount-input-wrap input::placeholder {
+  color: #565656;
+}
+
+.amount-input-wrap input::-webkit-inner-spin-button,
+.amount-input-wrap input::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.amount-input-wrap input[type=number] {
+  appearance: textfield;
+  -moz-appearance: textfield;
+}
+
+.payment-method {
+  margin: 22px 0 0;
+  padding: 0;
+  border: 0;
+}
+
+.payment-method legend {
+  margin-bottom: 10px;
+}
+
+.method-options {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 9px;
+}
+
+.method-option {
+  position: relative;
+  cursor: pointer;
+}
+
+.method-option input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+}
+
+.method-card {
+  min-height: 61px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 11px;
+  border: 1px solid #393939;
+  border-radius: 13px;
+  background: var(--card);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.method-card>span {
+  font-size: 19px;
+}
+
+.method-option input:checked+.method-card {
+  border-color: var(--primary);
+  color: var(--text);
+  box-shadow: inset 0 0 0 1px var(--primary);
+}
+
+.method-option input:focus-visible+.method-card {
+  outline: 2px solid #8EB7FF;
+  outline-offset: 2px;
+}
+
+.voucher-field {
+  display: grid;
+  gap: 7px;
+  margin-top: 16px;
+}
+
+.voucher-field label {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.voucher-field label span {
+  color: var(--red);
+}
+
+.voucher-field input {
+  height: 46px;
+  padding: 0 12px;
+  border: 1px solid #454545;
+  border-radius: 11px;
+  outline: 0;
+  background: var(--card);
+  color: var(--text);
+  font-size: 13px;
+}
+
+.voucher-field input:focus {
+  border-color: var(--primary);
+}
+
+.voucher-field input::placeholder {
+  color: #777;
+}
+
+.voucher-field small {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.form-note {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 17px 0;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.form-note span {
+  font-size: 16px;
+}
+
+.submit-payment {
+  margin-top: 9px;
+}
+
+@media (prefers-reduced-motion:no-preference) {
+  .method-card {
+    transition: border-color .16s ease,background-color .16s ease,transform .16s ease;
+  }
+}
+
+.gps-confirmation {
+  color: var(--success);
+}
+
+.voucher-field input[type=file] {
+  height: auto;
+  min-height: 46px;
+  padding: 9px 10px;
+  border: 1px dashed var(--line);
+  border-radius: 11px;
+  background: var(--card);
+  color: var(--text);
+  font-size: 12px;
+}
+
+@media (min-width:768px) {
+  .submit-payment {
+    width: fit-content;
+    max-width: 320px;
+    min-width: 160px;
+    padding-right: 22px;
+    padding-left: 22px;
+  }
+}
+
+@media (max-width:767px) {
+  .submit-payment {
+    width: 100%;
+    max-width: 100%;
+    min-height: 48px;
+  }
+}
+
+.voucher-field .file-picker-control {
+  margin-top: 1px;
+}
+
+/* Estado real de la captura GPS del abono */
+.gps-confirmation[data-tone="pending"] {
+  color: var(--muted);
+}
+
+.gps-confirmation[data-tone="off"] {
+  color: #F9A825;
+}

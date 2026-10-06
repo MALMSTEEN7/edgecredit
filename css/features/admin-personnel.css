@@ -1,0 +1,495 @@
+/* features/admin-personnel · Gestión de personal y vencimientos. */
+
+.personnel-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit,minmax(280px,1fr));
+  gap: 12px;
+}
+
+.add-worker-button {
+  min-height: 42px;
+  font-size: 12px;
+}
+
+@media (max-width:767px) {
+  .add-worker-button {
+    min-height: 48px;
+  }
+}
+
+/* ── Tarjeta de trabajador ── */
+.personnel-list {
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 340px), 1fr));
+  align-items: start;
+  gap: 14px;
+}
+
+.personnel-card {
+  display: grid;
+  align-content: start;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: linear-gradient(145deg, var(--card), rgba(41,121,255,.04));
+}
+
+.personnel-card.is-blocked {
+  border-color: color-mix(in srgb, var(--alert-color) 45%, var(--line));
+  background: linear-gradient(145deg, var(--card), color-mix(in srgb, var(--alert-color) 7%, transparent));
+}
+
+.personnel-head {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+}
+
+.personnel-head .admin-avatar {
+  width: 44px;
+  height: 44px;
+  font-size: 14px;
+}
+
+.personnel-title {
+  display: grid;
+  justify-items: start;
+  gap: 5px;
+  min-width: 0;
+}
+
+.personnel-title strong {
+  overflow: hidden;
+  max-width: 100%;
+  font: 800 15px Manrope, sans-serif;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.personnel-route-chip {
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--primary) 16%, transparent);
+  color: var(--primary);
+  font-size: 10.5px;
+  font-weight: 700;
+}
+
+.personnel-access .access-switch-text {
+  min-width: 62px;
+  font-size: 11.5px;
+}
+
+.personnel-card.is-blocked .personnel-access .access-switch-text {
+  color: var(--alert-color);
+}
+
+.personnel-facts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 14px;
+  margin: 0;
+  padding: 12px;
+  border-radius: 12px;
+  background: var(--surface);
+}
+
+.personnel-facts div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.personnel-facts dt {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+
+.personnel-facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.personnel-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.personnel-badge {
+  padding: 4px 9px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 10.5px;
+  font-weight: 600;
+}
+
+.personnel-badge.is-ok {
+  border-color: color-mix(in srgb, var(--success) 40%, var(--line));
+  color: var(--success);
+}
+
+.personnel-badge.is-danger {
+  border-color: color-mix(in srgb, var(--alert-color) 45%, var(--line));
+  color: var(--alert-color);
+}
+
+.personnel-actions {
+  display: grid;
+  gap: 6px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.personnel-actions-main {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.personnel-actions-main button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 38px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 11.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.personnel-actions-main button:hover {
+  border-color: color-mix(in srgb, var(--primary) 50%, var(--line));
+}
+
+.personnel-actions-main .worker-location-button {
+  border-color: rgba(41,121,255,.35);
+  background: rgba(41,121,255,.08);
+  color: var(--primary);
+}
+
+.personnel-actions-extra {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.personnel-actions-extra .danger-action:only-child {
+  margin-left: auto;
+}
+
+.personnel-link {
+  min-height: 30px;
+  padding: 4px 2px;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+.personnel-link:hover {
+  color: var(--text);
+}
+
+.personnel-link.danger-action {
+  color: var(--alert-color);
+}
+
+@media (max-width:420px) {
+  .personnel-actions-main button {
+    font-size: 10.5px;
+  }
+}
+
+.vehicle-expiries {
+  display: grid;
+  grid-template-columns: repeat(2,minmax(0,1fr));
+  gap: 8px;
+  width: 100%;
+}
+
+.expiry-indicator {
+  display: grid;
+  gap: 4px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--success-color);
+  border-radius: 10px;
+  background: var(--surface);
+}
+
+.expiry-indicator>span {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.expiry-indicator>strong {
+  font-size: 12px;
+}
+
+.expiry-indicator>small {
+  font-size: 10px;
+  color: var(--success-color);
+}
+
+.expiry-soon {
+  border-left-color: #D5A000;
+}
+
+.expiry-soon>small {
+  color: #D5A000;
+}
+
+.expiry-warning {
+  border-left-color: #F07824;
+}
+
+.expiry-warning>small {
+  color: #F07824;
+}
+
+.expiry-critical {
+  border-left-color: var(--alert-color);
+}
+
+.expiry-critical>small {
+  color: var(--alert-color);
+}
+
+.expiry-unknown>small {
+  color: var(--muted);
+}
+
+.worker-location-button {
+  white-space: nowrap;
+}
+
+@media (max-width:767px) {
+  .vehicle-expiries {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+.two-factor-badge {
+  color: var(--muted);
+}
+
+.two-factor-badge.is-active {
+  color: var(--success);
+}
+
+/* ── Horario de acceso de trabajadores ── */
+.access-schedule-card {
+  display: grid;
+  gap: 14px;
+  margin: 0 0 18px;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--card);
+}
+
+.access-schedule-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.access-schedule-head h3 {
+  margin: 0 0 4px;
+  font: 800 15px Manrope, sans-serif;
+}
+
+.access-schedule-head p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.access-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.access-switch input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.access-switch-track {
+  position: relative;
+  width: 40px;
+  height: 22px;
+  border-radius: 999px;
+  background: var(--line);
+  transition: background .2s;
+}
+
+.access-switch-track::after {
+  content: "";
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  transition: transform .2s;
+}
+
+.access-switch input:checked + .access-switch-track {
+  background: var(--primary);
+}
+
+.access-switch input:checked + .access-switch-track::after {
+  transform: translateX(18px);
+}
+
+.access-switch input:focus-visible + .access-switch-track {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+.access-schedule-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 14px 18px;
+  transition: opacity .2s;
+}
+
+.access-schedule-body.is-disabled {
+  opacity: .45;
+}
+
+.access-days {
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.access-days legend {
+  margin-bottom: 7px;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.access-days-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.access-day input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.access-day span {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.access-day input:checked + span {
+  border-color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 18%, var(--surface));
+  color: var(--text);
+}
+
+.access-day input:focus-visible + span {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+.access-day input:disabled + span {
+  cursor: not-allowed;
+}
+
+.access-times {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(120px, 1fr));
+  gap: 10px;
+}
+
+.access-schedule-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.access-schedule-foot .primary-button {
+  width: auto;
+  min-height: 42px;
+  padding: 0 18px;
+}
+
+.access-status {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+.access-status[data-tone="open"] { color: var(--success); }
+.access-status[data-tone="closed"] { color: var(--alert-color); }
+.access-status[data-tone="pending"] { color: var(--primary); }
+
+.access-note {
+  color: var(--muted);
+  font-size: 10.5px;
+  line-height: 1.45;
+}
+
+@media (max-width:767px) {
+  .access-schedule-body {
+    grid-template-columns: 1fr;
+  }
+
+  .access-schedule-foot {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .access-schedule-foot .primary-button {
+    width: 100%;
+  }
+}

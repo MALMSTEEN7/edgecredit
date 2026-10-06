@@ -1,0 +1,222 @@
+/* features/admin-evidence · Comprobantes del día. */
+
+.expense-evidence-panel {
+  margin-top: 16px;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--card);
+}
+
+.expense-evidence-panel h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.expense-evidence-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 13px;
+}
+
+.expense-evidence-item {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+}
+
+.expense-evidence-item>div {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+}
+
+.expense-evidence-item strong {
+  font-variant-numeric: tabular-nums;
+}
+
+.expense-evidence-item span,
+.expense-evidence-empty {
+  color: var(--muted);
+  font-size: .8rem;
+  overflow-wrap: anywhere;
+}
+
+.expense-receipt-link {
+  flex: 0 0 auto;
+  min-height: 42px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 12px;
+  border: 1px solid color-mix(in srgb,var(--primary) 45%,var(--line));
+  border-radius: 10px;
+  color: var(--primary);
+  font-size: .8rem;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.expense-receipt-link:hover {
+  background: color-mix(in srgb,var(--primary) 12%,var(--surface));
+}
+
+@media (max-width:767px) {
+  .expense-evidence-item {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .expense-receipt-link {
+    width: fit-content;
+  }
+}
+
+.route-evidence-grid {
+  display: grid;
+  grid-template-columns: repeat(2,minmax(0,1fr));
+  align-items: start;
+  gap: 14px;
+}
+
+.route-evidence-grid .expense-evidence-panel {
+  min-width: 0;
+  margin: 0;
+}
+
+.expense-evidence-item {
+  min-width: 0;
+}
+
+.expense-receipt-link {
+  min-width: 100px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 5px;
+  text-align: center;
+}
+
+@media (max-width:900px) {
+  .route-evidence-grid {
+    grid-template-columns: minmax(0,1fr);
+  }
+}
+
+@media (max-width:767px) {
+  .expense-evidence-item {
+    align-items: center;
+    flex-direction: row;
+  }
+}
+
+/* Selector de fecha de auditoría */
+.receipts-date-picker {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.receipts-date-picker input {
+  height: 38px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text);
+  color-scheme: inherit;
+  font: 600 12px var(--font-sans);
+}
+
+.receipts-date-picker input:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+.receipts-date-picker .secondary-button {
+  min-height: 38px;
+}
+
+.receipts-date-picker .secondary-button:disabled {
+  opacity: .45;
+  cursor: default;
+}
+
+/* Resumen por panel y registros sin comprobante */
+.evidence-summary {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.evidence-summary.has-missing {
+  color: #F9A825;
+  font-weight: 600;
+}
+
+.expense-evidence-item .evidence-title {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.expense-evidence-item.is-missing-evidence {
+  border-color: color-mix(in srgb, #F9A825 45%, var(--line));
+  border-left: 4px solid #F9A825;
+  background: color-mix(in srgb, #F9A825 6%, var(--surface));
+}
+
+.evidence-missing-badge {
+  flex: 0 0 auto;
+  min-width: 100px;
+  min-height: 42px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 12px;
+  border: 1px dashed color-mix(in srgb, #F9A825 70%, transparent);
+  border-radius: 10px;
+  color: #F9A825;
+  font-size: .78rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.evidence-missing-badge > span {
+  width: 18px;
+  height: 18px;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 50%;
+  background: #F9A825;
+  color: #1A1A1A;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+:root[data-theme="light"] .evidence-summary.has-missing,
+:root[data-theme="light"] .evidence-missing-badge {
+  color: #8A5A00;
+}
+
+button.expense-receipt-link {
+  background: transparent;
+  font: inherit;
+  font-size: .8rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: transform .12s ease, background-color .15s ease;
+}
+
+button.expense-receipt-link:active {
+  transform: scale(.97);
+}

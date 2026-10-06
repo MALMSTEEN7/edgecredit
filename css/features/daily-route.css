@@ -1,0 +1,308 @@
+/* features/daily-route · Constructor de ruta diaria. */
+
+.route-builder-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 16px;
+}
+
+.route-builder-panel {
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--card);
+}
+
+.route-builder-panel h2 {
+  margin: 0 0 5px;
+  font: 700 16px Manrope,sans-serif;
+}
+
+.route-builder-panel>p {
+  margin: 0 0 13px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.route-drag-list {
+  display: grid;
+  gap: 8px;
+  min-height: 105px;
+  padding: 8px;
+  border: 1px dashed var(--line);
+  border-radius: 12px;
+}
+
+.route-drag-list.is-drop-target {
+  border-color: var(--primary);
+  background: color-mix(in srgb,var(--primary) 7%,var(--card));
+}
+
+.route-sort-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: var(--surface);
+  cursor: grab;
+  touch-action: manipulation;
+}
+
+.route-sort-item:active {
+  cursor: grabbing;
+}
+
+.route-sort-item.is-dragging {
+  opacity: .45;
+}
+
+.route-drag-handle {
+  color: var(--muted);
+  font-size: 20px;
+  user-select: none;
+}
+
+.route-sort-copy {
+  display: grid;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+}
+
+.route-sort-copy strong {
+  font-size: 12px;
+}
+
+.route-sort-copy small {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.route-empty {
+  align-self: center;
+  margin: 0;
+  padding: 16px;
+  color: var(--muted);
+  font-size: 12px;
+  text-align: center;
+}
+
+@media (min-width:768px) {
+  .route-builder-grid {
+    grid-template-columns: repeat(2,minmax(0,1fr));
+  }
+}
+
+.route-card-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.route-card-actions button {
+  min-height: 34px;
+  padding: 0 9px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--card);
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.route-card-actions [data-route-move] {
+  min-width: 34px;
+  padding: 0;
+  color: var(--muted);
+  font-size: 16px;
+}
+
+.route-card-actions .route-add-button {
+  border-color: var(--primary);
+  background: var(--primary);
+  color: #fff;
+}
+
+.route-card-actions .route-done-button {
+  border-color: color-mix(in srgb,var(--success) 45%,var(--line));
+  color: var(--success);
+}
+
+.route-sort-item {
+  flex-wrap: wrap;
+}
+
+.route-sort-copy {
+  flex: 1 1 100px;
+}
+
+@media (max-width:767px) {
+  .route-sort-item {
+    gap: 7px;
+    padding: 9px;
+  }
+
+  .route-card-actions {
+    flex: 1 0 100%;
+    justify-content: flex-end;
+  }
+
+  .route-card-actions button {
+    min-height: 40px;
+  }
+
+  .route-builder-panel {
+    padding: 12px;
+  }
+}
+
+.route-card-actions {
+  min-width: 0;
+}
+
+.route-sort-item .route-card-actions button {
+  cursor: pointer;
+}
+
+.route-library-search {
+  margin: 12px 0 14px;
+  height: 42px;
+}
+
+.route-library-search+.route-drag-list {
+  margin-top: 0;
+}
+
+.route-card-actions .route-collected-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 33px;
+  padding: 0 9px;
+  border-radius: 9px;
+  background: color-mix(in srgb,var(--success) 12%,var(--card));
+  color: var(--success);
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.route-sort-item[data-route-mode="daily"] {
+  cursor: grab;
+}
+
+.route-sort-item[data-route-mode="daily"] .route-drag-handle {
+  touch-action: none;
+}
+
+.route-sort-item.is-drop-target {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+@media (max-width:767px) {
+  .route-library-search {
+    margin-top: 10px;
+  }
+
+  .route-card-actions {
+    justify-content: flex-start;
+  }
+
+  .route-sort-item[data-route-mode="daily"] {
+    padding: 12px;
+  }
+}
+
+.route-drag-handle {
+  touch-action: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.route-done-button:disabled {
+  opacity: .4;
+  cursor: not-allowed;
+  filter: saturate(.35);
+}
+
+.route-no-payment-button,
+.route-reopen-button {
+  border-color: var(--line)!important;
+  color: var(--muted)!important;
+  background: transparent!important;
+}
+
+.route-no-payment-note {
+  color: #F9A825;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.route-paid-badge {
+  border-color: color-mix(in srgb,var(--success) 45%,var(--line))!important;
+  color: var(--success)!important;
+  background: color-mix(in srgb,var(--success) 10%,var(--card))!important;
+}
+
+/* Indicadores de la visita (no son botones) */
+.route-status-chip {
+  min-height: 34px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+  cursor: default;
+  user-select: none;
+}
+
+.route-status-chip.is-paid {
+  border-color: color-mix(in srgb, var(--success) 45%, var(--line));
+  background: color-mix(in srgb, var(--success) 12%, transparent);
+  color: var(--success);
+}
+
+.route-status-chip.is-no-payment {
+  border-color: color-mix(in srgb, #F9A825 45%, var(--line));
+  background: color-mix(in srgb, #F9A825 10%, transparent);
+  color: #F9A825;
+}
+
+.route-status-chip.is-pending {
+  border-style: dashed;
+}
+
+.route-status-chip.is-in-route {
+  border-color: color-mix(in srgb, var(--primary) 40%, var(--line));
+  color: var(--primary);
+}
+
+.route-sort-item.is-visited {
+  opacity: .85;
+}
+
+.route-status-chip.is-in-route {
+  border-color: transparent;
+  background: none;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.route-status-chip.is-in-route::before {
+  margin-right: 6px;
+  color: var(--primary);
+  content: "✓";
+}

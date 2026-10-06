@@ -1,0 +1,64 @@
+/* tokens · Variables de diseño (fuente única de verdad) para tema oscuro y claro.
+ * Paleta "Dark Fintech": superficie #121212, tarjetas #1E1E1E, acento #2979FF, texto #E0E0E0.
+ * Los componentes solo consumen var(--…); para re-marcar la app basta con editar este archivo. */
+
+:root {
+  color-scheme: dark;
+
+  /* Superficies */
+  --outer: #000000;
+  --surface: #121212;
+  --card: #1E1E1E;
+  --card-raised: #242424;
+  --line: #2A2A2A;
+
+  /* Marca y texto */
+  --primary: #2979FF;
+  --accent: var(--primary);
+  --text: #E0E0E0;
+  --muted: #9CA3AF;
+  --avatar-bg: #34313A;
+  --avatar-text: #E0E0E0;
+
+  /* Semánticos */
+  --success: #00C853;
+  --alert: #BF360C;
+  --success-color: var(--success);
+  --alert-color: var(--alert);
+  --green: var(--success);
+  --red: var(--alert);
+
+  /* Forma, tipografía y espaciado */
+  --radius: 18px;
+  --font-sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-display: var(--font-sans);
+  --space-1: .5rem;
+  --space-2: .75rem;
+  --space-3: 1rem;
+  --space-4: 1.5rem;
+  --space-5: 2rem;
+
+  font-family: var(--font-sans);
+  background: var(--outer);
+  color: var(--text);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+  --outer: #F5F7FA;
+  --surface: #F5F7FA;
+  --card: #FFFFFF;
+  --card-raised: #FFFFFF;
+  --line: #E5E7EB;
+  --primary: #2563EB; /* más oscuro que el acento para mantener contraste AA sobre blanco */
+  --text: #111827;
+  --muted: #4B5563;
+  --avatar-bg: #E8EEF7;
+  --avatar-text: #1F2937;
+  --success: #008A3B;
+  --alert: #A52E0A;
+  color: var(--text);
+  background: var(--outer);
+}

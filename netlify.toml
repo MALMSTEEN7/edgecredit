@@ -1,0 +1,4 @@
+# Netlify publica solo los archivos de la app (no el código fuente ni la base de datos).
+[build]
+  command = "mkdir -p public && cp -r index.html config.js manifest.webmanifest icon.svg icon-192.png icon-512.png dist public/ && cp _headers public/"
+  publish = "public"

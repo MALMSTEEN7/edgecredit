@@ -1,0 +1,206 @@
+/* features/clients · Listas y tarjetas de clientes. */
+
+.client-list {
+  display: grid;
+  gap: 8px;
+}
+
+.client-row {
+  width: 100%;
+  min-height: 72px;
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 12px;
+  border: 1px solid #292929;
+  border-radius: 15px;
+  background: var(--card);
+  text-align: left;
+  cursor: pointer;
+}
+
+.client-row:active {
+  border-color: #4A4A4A;
+}
+
+.client-main {
+  display: grid;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+}
+
+.client-main strong {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.client-main>span {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.row-chevron {
+  color: #777;
+  font-size: 23px;
+  line-height: 1;
+}
+
+@media (max-width:370px) {
+  .client-row {
+    gap: 8px;
+    padding: 10px;
+  }
+}
+
+@media (min-width:768px) {
+  .client-row {
+    min-width: 0;
+  }
+}
+
+@media (max-width:767px) {
+  .client-row {
+    width: 100%;
+  }
+}
+
+.client-row.is-dragging {
+  opacity: .45;
+}
+
+.directory-drag-handle {
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 20px;
+  width: 20px;
+  color: var(--muted);
+  font-size: 19px;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.client-row.is-drop-target {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+.directory-drag-handle {
+  touch-action: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.client-risk-line {
+  display: flex!important;
+  align-items: center;
+  gap: 6px;
+  overflow: visible!important;
+  color: var(--behavior-color,#00C853)!important;
+  font-size: 10px!important;
+  white-space: nowrap!important;
+}
+
+.client-risk-line .behavior-dot {
+  width: 7px;
+  height: 7px;
+  flex-basis: 7px;
+  box-shadow: none;
+}
+
+.client-risk-line {
+  width: max-content;
+  max-width: 100%;
+  display: inline-flex;
+  align-items: center;
+  gap: .4rem;
+  padding: .3rem .6rem;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  font-size: .75rem;
+  font-weight: 700;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.client-risk-line {
+  margin: 0;
+  color: var(--behavior-color,var(--success));
+  border-color: color-mix(in srgb,var(--behavior-color,var(--success)) 34%,transparent);
+  background: color-mix(in srgb,var(--behavior-color,var(--success)) 16%,var(--card));
+  font-size: .75rem!important;
+  font-weight: 700;
+}
+
+.client-row {
+  min-width: 0;
+  min-height: 76px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+}
+
+.client-main {
+  min-width: 0;
+  flex: 1 1 auto;
+  text-align: left;
+}
+
+.client-main strong {
+  font-size: .9rem;
+}
+
+.client-main>span:not(.client-risk-line) {
+  font-size: .8rem;
+}
+
+.client-row>.status {
+  flex: 0 0 auto;
+  margin-left: auto;
+}
+
+.client-row>.row-chevron {
+  flex: 0 0 auto;
+}
+
+.client-risk-line {
+  max-width: max-content;
+  overflow: hidden!important;
+  text-overflow: ellipsis;
+}
+
+@media (min-width:768px) {
+  .client-row {
+    min-height: 82px;
+    padding: 16px 18px;
+  }
+
+  .client-main strong {
+    font-size: 1rem;
+  }
+
+  .client-main>span:not(.client-risk-line) {
+    font-size: .875rem;
+  }
+
+  .client-risk-line {
+    font-size: .75rem;
+  }
+}
+
+@media (max-width:767px) {
+  .client-row {
+    min-height: 76px;
+    padding: 12px;
+    gap: 9px;
+  }
+
+  .client-row>.status {
+    padding: .28rem .48rem;
+  }
+}

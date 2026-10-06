@@ -1,0 +1,756 @@
+/* features/admin-reports · Reportes financieros y tablas de auditoría. */
+
+.report-tabs {
+  display: flex;
+  gap: 7px;
+  margin: 0 0 16px;
+  padding: 5px;
+  border: 1px solid var(--line);
+  border-radius: 13px;
+  background: var(--card);
+}
+
+.report-tab {
+  flex: 1;
+  min-height: 40px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.report-tab.is-active {
+  background: linear-gradient(135deg,#2979FF,#1746A2);
+  color: #fff;
+}
+
+.report-panel {
+  padding: 22px;
+  border: 1px solid var(--line);
+  border-radius: 17px;
+  background: linear-gradient(145deg,var(--card),rgba(41,121,255,.04));
+}
+
+.report-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.report-heading h3 {
+  margin: 0;
+  font: 700 18px Manrope,sans-serif;
+}
+
+.report-period {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.report-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit,minmax(180px,1fr));
+  gap: 12px;
+}
+
+.report-metrics article,
+.insurance-split article {
+  display: grid;
+  gap: 9px;
+  padding: 15px;
+  border: 1px solid var(--line);
+  border-radius: 13px;
+  background: var(--surface);
+}
+
+.report-metrics span,
+.insurance-summary span {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.report-metrics strong,
+.insurance-summary strong {
+  font: 700 19px Manrope,sans-serif;
+}
+
+.report-note {
+  margin: 16px 0 0;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.insurance-summary {
+  display: grid;
+  gap: 13px;
+}
+
+.insurance-total {
+  display: grid;
+  gap: 9px;
+  padding: 18px;
+  border: 1px solid var(--primary);
+  border-radius: 14px;
+  background: linear-gradient(135deg,rgba(41,121,255,.12),var(--surface));
+}
+
+.insurance-total strong {
+  font-size: 26px;
+}
+
+.insurance-split {
+  display: grid;
+  grid-template-columns: repeat(auto-fit,minmax(180px,1fr));
+  gap: 12px;
+}
+
+@media (max-width:767px) {
+  .report-heading {
+    flex-direction: column;
+  }
+}
+
+.report-panel {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.report-table-wrap {
+  width: 100%;
+  max-width: 100%;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--card);
+  overscroll-behavior-inline: contain;
+  scrollbar-width: thin;
+  scrollbar-color: var(--line) transparent;
+}
+
+.audit-table {
+  width: 100%;
+  min-width: 920px;
+  border-collapse: collapse;
+  color: var(--text);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.audit-table th,
+.audit-table td {
+  padding: 12px 13px;
+  border-bottom: 1px solid var(--line);
+  text-align: right;
+  white-space: nowrap;
+}
+
+.audit-table thead th {
+  position: sticky;
+  top: 0;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .25px;
+}
+
+.audit-table thead th:first-child,
+.audit-table tbody th,
+.audit-table tfoot th {
+  text-align: left;
+}
+
+.audit-table tbody th {
+  font-weight: 600;
+}
+
+.audit-table tbody tr:last-child th,
+.audit-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.audit-table tfoot th,
+.audit-table tfoot td {
+  border-top: 1px solid var(--line);
+  border-bottom: 0;
+  background: color-mix(in srgb,var(--primary) 8%,var(--card));
+  font-weight: 800;
+  color: var(--text);
+}
+
+.insurance-audit-table {
+  min-width: 620px;
+}
+
+@media (min-width:768px) {
+  .report-table-wrap {
+    margin-bottom: 20px;
+  }
+}
+
+@media (max-width:767px) {
+  .report-table-wrap {
+    margin-right: 0;
+    margin-left: 0;
+  }
+
+  .audit-table {
+    font-size: 10px;
+  }
+
+  .audit-table th,
+  .audit-table td {
+    padding: 10px 11px;
+  }
+}
+
+.month-picker {
+  display: grid;
+  gap: 6px;
+  min-width: 150px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.month-picker select {
+  height: 40px;
+  padding: 0 11px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text);
+  font: 600 12px 'DM Sans',sans-serif;
+}
+
+.week-selector {
+  display: grid;
+  grid-template-columns: repeat(4,minmax(0,1fr));
+  gap: 8px;
+  margin: 0 0 12px;
+}
+
+.week-tab {
+  min-height: 42px;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.week-tab.is-active {
+  border-color: var(--primary);
+  background: linear-gradient(135deg,rgba(41,121,255,.2),rgba(41,121,255,.06));
+  color: var(--text);
+}
+
+.selected-week-label {
+  margin: 0 0 12px;
+  color: var(--muted);
+  font-size: 11px;
+  text-transform: capitalize;
+}
+
+.month-total-heading {
+  margin: 20px 0 11px;
+  font: 700 14px Manrope,sans-serif;
+  color: var(--text);
+  text-transform: capitalize;
+}
+
+.month-total-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit,minmax(155px,1fr));
+  gap: 9px;
+  margin-bottom: 18px;
+}
+
+.month-total-grid article {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding: 13px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+}
+
+.month-total-grid span {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.month-total-grid strong {
+  color: var(--text);
+  font: 700 15px Manrope,sans-serif;
+  font-variant-numeric: tabular-nums;
+}
+
+@media (max-width:767px) {
+  .month-picker {
+    width: 100%;
+  }
+
+  .week-selector {
+    gap: 5px;
+  }
+
+  .week-tab {
+    font-size: 10px;
+  }
+
+  .month-total-grid {
+    grid-template-columns: repeat(2,minmax(0,1fr));
+  }
+}
+
+.report-metrics article>span,
+.insurance-summary article>span {
+  color: var(--muted);
+  font-size: .875rem;
+}
+
+.report-metrics strong,
+.insurance-summary strong,
+.insurance-total strong,
+.insurance-split strong,
+.audit-table td:not(:first-child) {
+  font-variant-numeric: tabular-nums lining-nums;
+  text-align: right;
+}
+
+.report-metrics strong,
+.insurance-summary strong,
+.insurance-split strong {
+  color: var(--text);
+  font-weight: 700;
+  font-size: clamp(1.25rem,2vw,1.75rem);
+}
+
+.audit-table th:not(:first-child),
+.audit-table td:not(:first-child) {
+  text-align: right;
+  font-variant-numeric: tabular-nums lining-nums;
+}
+
+@media (max-width:767px) {
+  .report-metrics,
+  .insurance-summary,
+  .insurance-split {
+    grid-template-columns: minmax(0,1fr);
+  }
+
+  .report-table-wrap {
+    max-width: 100%;
+    overflow-x: auto;
+  }
+}
+
+.report-table-wrap {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: auto;
+  overscroll-behavior-inline: contain;
+  touch-action: pan-x pan-y;
+}
+
+.report-table-wrap:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 3px;
+}
+
+.audit-table {
+  font-variant-numeric: tabular-nums lining-nums;
+}
+
+.audit-table th.numeric,
+.audit-table td:not(:first-child) {
+  text-align: right;
+  font-variant-numeric: tabular-nums lining-nums;
+}
+
+.audit-table tbody td,
+.audit-table tfoot td {
+  font-variant-numeric: tabular-nums lining-nums;
+  text-align: right;
+}
+
+.audit-table tbody th:first-child,
+.audit-table tfoot th:first-child,
+.audit-table thead th:first-child {
+  text-align: left;
+}
+
+@media (max-width:767px) {
+  .report-table-wrap {
+    max-width: 100%;
+    overflow-x: auto;
+  }
+
+  .audit-table {
+    min-width: 920px;
+  }
+}
+
+/* Semanas de calendario (lunes a sábado): 4 a 6 pestañas según el mes */
+.week-selector {
+  grid-template-columns: repeat(var(--week-count, 4), minmax(0, 1fr));
+}
+
+.week-tab {
+  display: grid;
+  gap: 2px;
+  justify-items: center;
+  transition: transform .12s ease, border-color .15s ease;
+}
+
+.week-tab small {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+.week-tab:active {
+  transform: scale(.97);
+}
+
+/* Días de otro mes que completan la semana de cobro */
+.audit-table tbody tr.is-outside-month th,
+.audit-table tbody tr.is-outside-month td {
+  opacity: .5;
+}
+
+/* Tarjeta de métrica clicable: abre el listado de canceladas de la semana */
+.report-metric-button {
+  display: grid;
+  gap: 9px;
+  padding: 15px;
+  border: 1px solid var(--line);
+  border-radius: 13px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: transform .12s ease, border-color .15s ease, box-shadow .15s ease;
+}
+
+.report-metric-button > span {
+  color: var(--muted);
+  font-size: .875rem;
+}
+
+.report-metric-button > strong {
+  font: 700 19px Manrope, sans-serif;
+  font-variant-numeric: tabular-nums;
+}
+
+.report-metric-button > small {
+  color: var(--primary);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.report-metric-button:hover {
+  border-color: var(--primary);
+  box-shadow: 0 4px 14px color-mix(in srgb, var(--primary) 18%, transparent);
+}
+
+.report-metric-button:active {
+  transform: scale(.98);
+}
+
+.report-metric-button:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+@media (max-width:767px) {
+  .week-selector {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+/* ── Selectores (mes, año, ir a fecha) ── */
+.report-pickers {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 10px;
+}
+
+.report-pickers .month-picker {
+  min-width: 120px;
+}
+
+.month-picker input[type="date"] {
+  height: 40px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text);
+  font: 600 12px 'DM Sans', sans-serif;
+  color-scheme: dark;
+}
+
+:root[data-theme="light"] .month-picker input[type="date"] {
+  color-scheme: light;
+}
+
+/* ── Caja del cobro ── */
+.cashbox-card,
+.insurance-cut-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 0 0 14px;
+  padding: 16px 18px;
+  border: 1px solid color-mix(in srgb, var(--primary) 35%, var(--line));
+  border-radius: 14px;
+  background: linear-gradient(135deg, color-mix(in srgb, var(--primary) 12%, var(--card)), var(--card));
+}
+
+.cashbox-main,
+.insurance-cut-card > div {
+  display: grid;
+  gap: 4px;
+}
+
+.cashbox-main span,
+.insurance-cut-card > div > span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .05em;
+  text-transform: uppercase;
+}
+
+.cashbox-main strong {
+  font: 800 26px Manrope, sans-serif;
+  font-variant-numeric: tabular-nums;
+}
+
+.cashbox-main strong.is-negative {
+  color: var(--alert-color);
+}
+
+.cashbox-main small,
+.cashbox-side small,
+.insurance-cut-card small {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.insurance-cut-card strong {
+  font: 800 17px Manrope, sans-serif;
+}
+
+.cashbox-side {
+  display: grid;
+  justify-items: end;
+  gap: 8px;
+  max-width: 340px;
+  text-align: right;
+}
+
+.cashbox-side .secondary-button,
+.insurance-cut-card .primary-button {
+  width: auto;
+  min-height: 40px;
+  padding: 0 16px;
+  white-space: nowrap;
+}
+
+@media (max-width:767px) {
+  .cashbox-card,
+  .insurance-cut-card {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .cashbox-side {
+    justify-items: stretch;
+    max-width: none;
+    text-align: left;
+  }
+}
+
+/* ── Tabla del libro diario ── */
+.week-selector {
+  grid-template-columns: repeat(var(--week-count, 4), minmax(0, 1fr));
+}
+
+@media (max-width:767px) {
+  .week-selector {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+.week-tab {
+  display: grid;
+  gap: 2px;
+}
+
+.week-tab small {
+  font-size: 10px;
+  opacity: .8;
+}
+
+.ledger-table {
+  min-width: 1180px;
+}
+
+.ledger-table tbody th span {
+  display: block;
+  text-transform: capitalize;
+}
+
+.ledger-table tbody th small {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 500;
+}
+
+.ledger-table .editable-col {
+  color: var(--primary);
+}
+
+.ledger-table .editable-cell {
+  padding-top: 6px;
+  padding-bottom: 6px;
+}
+
+.ledger-input {
+  width: 118px;
+  height: 34px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font: 600 11.5px 'DM Sans', sans-serif;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.ledger-input:focus {
+  border-color: var(--primary);
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(41,121,255,.16);
+}
+
+.ledger-input:disabled {
+  opacity: .4;
+}
+
+.ledger-table tr.is-today th,
+.ledger-table tr.is-today td {
+  background: color-mix(in srgb, var(--primary) 7%, transparent);
+}
+
+.ledger-table tr.is-target th,
+.ledger-table tr.is-target td {
+  background: color-mix(in srgb, #F9A825 16%, transparent);
+}
+
+.ledger-table tr.is-future th,
+.ledger-table tr.is-future td {
+  opacity: .55;
+}
+
+.audit-table td.is-short,
+.report-metrics strong.is-short {
+  color: var(--alert-color);
+}
+
+.audit-table td.is-surplus,
+.report-metrics strong.is-surplus {
+  color: #F9A825;
+}
+
+.audit-table td.is-muted {
+  color: var(--muted);
+}
+
+.audit-table tfoot tr.month-total-row th,
+.audit-table tfoot tr.month-total-row td {
+  background: color-mix(in srgb, var(--success) 12%, var(--card));
+  border-top: 2px solid color-mix(in srgb, var(--success) 45%, var(--line));
+}
+
+.insurance-audit-table tr.carry-row th,
+.insurance-audit-table tr.carry-row td {
+  color: #F9A825;
+}
+
+.report-metrics small {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.selected-week-label {
+  text-transform: none;
+}
+
+.insurance-cut-card .primary-button:disabled {
+  opacity: .45;
+  box-shadow: none;
+  cursor: not-allowed;
+}
+
+.insurance-cut-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.insurance-cut-actions .secondary-button {
+  width: auto;
+  min-height: 40px;
+  padding: 0 14px;
+}
+
+.test-mode-badge {
+  padding: 4px 10px;
+  border: 1px dashed #F9A825;
+  border-radius: 999px;
+  color: #F9A825;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+
+.insurance-audit-table tr.is-cut-week th,
+.insurance-audit-table tr.is-cut-week td {
+  background: color-mix(in srgb, var(--success) 12%, transparent);
+  color: var(--success);
+  font-weight: 700;
+}
+
+.cut-badge {
+  display: inline-block;
+  margin-left: 10px;
+  padding: 2px 8px;
+  border: 1px solid color-mix(in srgb, var(--success) 50%, transparent);
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  white-space: nowrap;
+}

@@ -1,0 +1,29 @@
+/*
+ * EdgeCredit · hoja de estilos de entrada.
+ * Cada @import es un módulo autónomo: tokens → base → componentes → layouts →
+ * features → temas. El orden define la cascada; no lo cambies sin verificar.
+ */
+@import url("css/tokens.css");
+@import url("css/themes/light.css");
+@import url("css/base.css");
+@import url("css/components/brand.css");
+@import url("css/components/buttons.css");
+@import url("css/components/forms.css");
+@import url("css/components/badges.css");
+@import url("css/components/modals.css");
+@import url("css/layout/worker-shell.css");
+@import url("css/layout/admin-shell.css");
+@import url("css/features/login.css");
+@import url("css/features/worker-home.css");
+@import url("css/features/clients.css");
+@import url("css/features/client-detail.css");
+@import url("css/features/payment.css");
+@import url("css/features/daily-route.css");
+@import url("css/features/settings.css");
+@import url("css/features/admin-settlement.css");
+@import url("css/features/admin-reports.css");
+@import url("css/features/admin-pending.css");
+@import url("css/features/admin-personnel.css");
+@import url("css/features/admin-evidence.css");
+@import url("css/features/operations.css");
+@import url("css/features/admin-map.css");

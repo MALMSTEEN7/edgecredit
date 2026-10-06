@@ -1,0 +1,455 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#121212">
+  <meta name="description" content="EdgeCredit: gestión móvil de cartera y recaudos.">
+  <title>EdgeCredit | Gestión de cartera</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icon-192.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <link rel="stylesheet" id="app-styles" href="dist/styles.bundle.css?v=c60048b9b4">
+</head>
+<body class="login-active">
+  <section class="login-gateway" id="login-gateway" aria-labelledby="login-title">
+    <form class="login-card" id="login-form" method="post" action="#">
+      <a class="brand login-brand" href="#login" aria-label="EdgeCredit"><span class="brand-mark" aria-hidden="true">E</span><span>Edge<span class="brand-accent">Credit</span></span></a>
+      <p class="eyebrow">GESTIÓN DE CARTERA</p><h1 id="login-title">Bienvenido</h1><p class="login-copy">Ingresa para continuar.</p>
+      <label class="login-field" for="login-user">Usuario<input id="login-user" name="username" type="text" autocomplete="username" placeholder="Tu usuario" required></label>
+      <label class="login-field" for="login-password">Contraseña<input id="login-password" name="password" type="password" autocomplete="current-password" placeholder="Tu contraseña" required></label>
+      <p class="trusted-device-note" id="trusted-device-note" hidden><span>✓ Dispositivo recordado: no se pedirá el código de verificación.</span><button type="button" id="forget-device">Olvidar este dispositivo</button></p>
+      <p class="login-error" id="login-error" role="alert" aria-live="polite"></p>
+      <small class="login-demo-hint">Usuarios iniciales: camila, andres o valentina / Ruta#2026 · admin / Admin#2026 (cámbialos en Personal → Credenciales). En el primer ingreso de cada cuenta se configura la verificación en dos pasos.</small>
+      <button class="primary-button" type="submit" id="login-submit">Ingresar <span aria-hidden="true">→</span></button>
+      <button class="login-forgot" type="button" id="login-forgot">¿Olvidaste tu contraseña?</button>
+    </form>
+    <form class="login-card two-factor-card" id="two-factor-form" method="post" action="#" hidden novalidate>
+      <a class="brand login-brand" href="#login" aria-label="EdgeCredit"><span class="brand-mark" aria-hidden="true">E</span><span>Edge<span class="brand-accent">Credit</span></span></a>
+      <p class="eyebrow">VERIFICACIÓN EN DOS PASOS</p><h1 id="two-factor-title">Ingresa tu código</h1><p class="login-copy" id="two-factor-copy">Abre tu app de autenticación y escribe el código de 6 dígitos.</p>
+      <section class="two-factor-enroll" id="two-factor-enroll" aria-label="Configurar app de autenticación" hidden>
+        <ol class="two-factor-steps">
+          <li>Instala <b>Google Authenticator</b> o <b>Microsoft Authenticator</b> en tu celular.</li>
+          <li>Escanea este código QR (o escribe la clave manual).</li>
+          <li>Escribe el código de 6 dígitos que muestra la app.</li>
+        </ol>
+        <div class="two-factor-qr" id="two-factor-qr" role="img" aria-label="Código QR para la app de autenticación"></div>
+        <div class="two-factor-secret"><span>Clave manual</span><code id="two-factor-secret">—</code><button type="button" class="secondary-button" id="two-factor-copy-secret">Copiar</button></div>
+        <a class="two-factor-open-app" id="two-factor-open-app" href="#">Abrir directamente en la app (desde el celular)</a>
+      </section>
+      <label class="login-field" for="two-factor-code"><span id="two-factor-code-label">Código de verificación</span><input id="two-factor-code" name="code" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="9" placeholder="000000" spellcheck="false"></label>
+      <label class="two-factor-remember"><input type="checkbox" id="two-factor-remember" checked><span>Recordar este dispositivo por 30 días (no volverá a pedir el código aquí)</span></label>
+      <button type="button" class="two-factor-link" id="two-factor-recovery-toggle">¿Perdiste el celular? Usar un código de respaldo</button>
+      <p class="login-error" id="two-factor-error" role="alert" aria-live="polite"></p>
+      <div class="two-factor-actions"><button class="secondary-button" type="button" id="two-factor-cancel">Volver</button><button class="primary-button" type="submit" id="two-factor-submit">Verificar <span aria-hidden="true">→</span></button></div>
+    </form>
+    <section class="login-card two-factor-card two-factor-recovery" id="two-factor-recovery" aria-labelledby="two-factor-recovery-title" hidden>
+      <p class="eyebrow">VERIFICACIÓN ACTIVADA</p><h1 id="two-factor-recovery-title">Guarda tus códigos de respaldo</h1>
+      <p class="login-copy">Si pierdes el celular, cada código sirve una sola vez para entrar. Anótalos en un lugar seguro: no se volverán a mostrar.</p>
+      <ol class="recovery-codes" id="recovery-codes"></ol>
+      <div class="two-factor-actions"><button class="secondary-button" type="button" id="recovery-copy">Copiar códigos</button><button class="primary-button" type="button" id="recovery-continue">Ya los guardé, continuar <span aria-hidden="true">→</span></button></div>
+    </section>
+  </section>
+  <div class="app-shell" id="worker-view" hidden>
+    <header class="topbar">
+      <a class="brand" href="#inicio" aria-label="EdgeCredit, inicio"><span class="brand-mark" aria-hidden="true">E</span><span>Edge<span class="brand-accent">Credit</span></span></a>
+      <div class="topbar-actions"><span id="network-indicator" class="network-indicator" role="status" aria-label="Sin conexión" title="Sin conexión"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 8.8a15.2 15.2 0 0 1 19 0M5.7 12a10.1 10.1 0 0 1 12.6 0m-9.4 3.2a5 5 0 0 1 6.2 0M12 19h.01"/></svg></span><button class="share-location-button" id="share-location" type="button" title="Compartir GPS de este dispositivo" hidden>⌖ <span>Compartir GPS</span></button><span class="sync-status" hidden><i aria-hidden="true"></i><span>Sincronizado</span></span><button class="logout-button" id="worker-logout" type="button" aria-label="Cerrar sesión">Salir <span aria-hidden="true">↗</span></button></div>
+    </header>
+
+    <main id="main-content">
+      <section class="view is-active" id="inicio" aria-labelledby="home-title">
+        <div class="section-heading home-section-heading"><div class="worker-home-identity"><span class="avatar" aria-label="Perfil de Camila">C</span><div><p class="eyebrow">LUNES, 28 DE SEPTIEMBRE</p><h1 id="home-title">Buen día, Camila</h1></div></div><button class="primary-button add-client-button" id="add-client" type="button">Nuevo cliente <span aria-hidden="true">＋</span></button></div>
+        <div class="list-heading"><div><p class="eyebrow" id="home-list-eyebrow">RUTA DEL DÍA</p><h2>Clientes de hoy</h2></div><button type="button" class="home-route-link" data-go-view="ruta-diaria">Organizar ruta <span aria-hidden="true">→</span></button></div>
+        <p class="home-route-done" id="home-route-done" role="status" hidden>✓ Terminaste la ruta de hoy: todos los clientes ya tienen abono o visita registrada. Puedes revisarlos en «Ruta diaria».</p>
+        <p class="home-route-hint" id="home-route-hint" hidden>Aún no organizaste la ruta de hoy: se muestran todos tus clientes. Ordénalos en «Ruta diaria».</p>
+        <div class="client-list" aria-label="Clientes de la ruta diaria">
+        </div>
+        <div class="home-toggles" role="group" aria-label="Resumen de tu jornada">
+          <button type="button" class="home-toggle" id="toggle-home-cash" aria-expanded="false" aria-controls="home-cash-panel"><span class="home-toggle-icon" aria-hidden="true">▣</span><span class="home-toggle-copy"><strong>Tu caja hoy</strong><small id="home-cash-total-chip">$ 0 en caja</small></span><span class="home-toggle-chevron" aria-hidden="true">⌄</span></button>
+          <button type="button" class="home-toggle" id="toggle-home-metrics" aria-expanded="false" aria-controls="home-metrics-panel"><span class="home-toggle-icon" aria-hidden="true">▤</span><span class="home-toggle-copy"><strong>Resumen del día</strong><small>Cobros, gastos y préstamos</small></span><span class="home-toggle-chevron" aria-hidden="true">⌄</span></button>
+        </div>
+        <div class="home-panels">
+        <section class="cash-card home-panel" id="home-cash-panel" aria-labelledby="cash-title" hidden>
+          <div class="cash-card-heading"><div><p class="eyebrow">RESUMEN DE RECAUDO</p><h2 id="cash-title">Tu Caja Hoy</h2></div><span class="sync-indicator"><span></span> En línea</span></div>
+          <div class="cash-balances">
+            <div class="balance-item"><span class="balance-icon" aria-hidden="true">▣</span><div><span class="balance-label">Efectivo</span><strong>$ 0</strong></div></div>
+            <div class="balance-divider" aria-hidden="true"></div>
+            <div class="balance-item"><span class="balance-icon bank" aria-hidden="true">▤</span><div><span class="balance-label">Bancos</span><strong>$ 0</strong></div></div>
+          </div>
+          <div class="work-base"><label for="work-base-input">Base de Trabajo</label><div class="base-editor"><span>$</span><input data-money id="work-base-input" type="number" min="0" step="1" value="0" inputmode="numeric" aria-label="Base de Trabajo"><select id="work-base-account" aria-label="Cuenta donde se registra la base"><option value="cash">Efectivo</option><option value="bank">Bancos</option></select><button id="save-work-base" type="button">Actualizar</button></div></div>
+          <div class="cash-card-footer"><span>Total en caja</span><strong id="cash-total">$ 0</strong></div>
+        </section>
+        <section class="worker-daily-metrics home-panel" id="home-metrics-panel" aria-labelledby="worker-daily-metrics-title" hidden>
+          <div class="worker-daily-metrics-heading"><div><p class="eyebrow">SOLO LECTURA</p><h2 id="worker-daily-metrics-title">Resumen del día</h2></div><span id="worker-metrics-route">Ruta</span></div>
+          <div class="worker-metrics-grid">
+            <article><span>Base del día</span><strong id="worker-day-base">$ 0</strong><small class="worker-metric-sub" id="worker-day-base-insurance" hidden></small></article>
+            <article><span>Cobros</span><strong id="worker-day-collections">$ 0</strong></article>
+            <article><span>Gastos</span><strong id="worker-day-expenses">$ 0</strong></article>
+            <article class="worker-metric-other"><span>Otros gastos</span><strong id="worker-day-other-expenses">$ 0</strong><button type="button" class="worker-metric-add" id="open-worker-expense" aria-haspopup="dialog"><span aria-hidden="true">＋</span> Registrar gasto</button></article>
+            <article><span>Préstamos</span><strong id="worker-day-loans">$ 0</strong></article>
+            <article class="worker-metric-insurance"><span>Seguros del día</span><strong id="worker-day-insurance">$ 0</strong><small id="worker-day-insurance-count">Sin seguros cobrados hoy</small></article>
+            <article><span>Efectivo del día</span><strong id="worker-day-cash">$ 0</strong></article>
+          </div>
+          <p class="worker-cash-note">El efectivo restante pasa a la base del siguiente día. Los sábados se entrega el efectivo del cierre.</p>
+        </section>
+        </div>
+        <div class="ops-summary" aria-label="Resumen operativo diario"><button class="ops-summary-button" type="button" data-operation-list="cancelled"><span class="ops-button-icon" aria-hidden="true">✓</span><span class="ops-button-copy"><strong>Tarjetas Canceladas</strong><small>Ver listado completo</small></span><span class="ops-button-arrow" aria-hidden="true">→</span></button><button class="ops-summary-button" type="button" data-operation-list="entered"><span class="ops-button-icon" aria-hidden="true">▤</span><span class="ops-button-copy"><strong>Préstamos Ingresados</strong><small>Ver listado completo</small></span><span class="ops-button-arrow" aria-hidden="true">→</span></button><button class="ops-summary-button" type="button" data-operation-list="new"><span class="ops-button-icon" aria-hidden="true">＋</span><span class="ops-button-copy"><strong>Préstamos Nuevos</strong><small>Ver listado completo</small></span><span class="ops-button-arrow" aria-hidden="true">→</span></button><button class="ops-summary-button" type="button" data-operation-list="yesterday-cancelled"><span class="ops-button-icon" aria-hidden="true">↶</span><span class="ops-button-copy"><strong>Canceladas ayer</strong><small>Ver tarjetas del día anterior</small></span><span class="ops-button-arrow" aria-hidden="true">→</span></button></div>
+      </section>
+
+      <section class="view" id="ruta-diaria" aria-labelledby="daily-route-title" hidden>
+        <div class="page-heading"><p class="eyebrow">ORGANIZA TU JORNADA</p><h1 id="daily-route-title">Ruta diaria</h1><p>Agrega clientes con un toque y ordénalos según tu recorrido.</p></div>
+        <div class="route-builder-grid"><section class="route-builder-panel"><h2>Biblioteca de clientes</h2><p>Busca clientes y agrégalos a la ruta de hoy.</p><label class="search-field route-library-search"><span aria-hidden="true">⌕</span><input id="route-library-search" type="search" placeholder="Buscar en la biblioteca" aria-label="Buscar en la biblioteca de clientes"></label><div id="route-library-list" class="route-drag-list" aria-label="Biblioteca de clientes"></div></section><section class="route-builder-panel"><h2>Clientes de hoy</h2><p>Arrastra desde el asa para cambiar el orden. Los abonos se registran desde el Inicio; aquí ves el estado de cada visita.</p><div id="route-daily-list" class="route-drag-list route-daily-list" aria-label="Orden de la ruta diaria"></div></section></div>
+      </section>
+
+      <section class="view" id="directorio" aria-labelledby="directory-title" hidden>
+        <button class="admin-return-button" id="admin-directory-back" type="button">‹ <span>Volver al panel de administración</span></button>
+        <div class="page-heading"><p class="eyebrow">TU CARTERA</p><h1 id="directory-title">Directorio</h1><p>Encuentra y consulta tus clientes.</p></div>
+        <div class="directory-toolbar">
+          <label class="search-field"><span aria-hidden="true">⌕</span><input id="directory-search" type="search" placeholder="Buscar por nombre o cédula" aria-label="Buscar por nombre o cédula"></label>
+          <button class="primary-button add-client-button" id="admin-add-client" type="button" hidden>Nuevo cliente <span aria-hidden="true">＋</span></button>
+        </div>
+        <div class="directory-filters" id="directory-filters" role="radiogroup" aria-label="Filtrar cartulinas">
+          <button type="button" class="directory-filter is-active" data-directory-filter="active" role="radio" aria-checked="true">Activas <span data-filter-count="active">0</span></button>
+          <button type="button" class="directory-filter filter-good" data-directory-filter="good" role="radio" aria-checked="false"><i aria-hidden="true"></i>Buenos <span data-filter-count="good">0</span></button>
+          <button type="button" class="directory-filter filter-irregular" data-directory-filter="irregular" role="radio" aria-checked="false"><i aria-hidden="true"></i>Regulares <span data-filter-count="irregular">0</span></button>
+          <button type="button" class="directory-filter filter-bad" data-directory-filter="bad" role="radio" aria-checked="false"><i aria-hidden="true"></i>Malos <span data-filter-count="bad">0</span></button>
+          <button type="button" class="directory-filter filter-cancelled" data-directory-filter="cancelled" role="radio" aria-checked="false"><i aria-hidden="true"></i>Canceladas <span data-filter-count="cancelled">0</span></button>
+        </div>
+        <p class="directory-empty" id="directory-empty" hidden>No hay cartulinas en este filtro.</p>
+        <div class="client-list">
+        </div>
+      </section>
+
+      <section class="view" id="mapa" aria-labelledby="worker-map-title" hidden>
+        <div class="page-heading"><p class="eyebrow">TU COBRO · <span id="worker-map-route">RUTA</span></p><h1 id="worker-map-title">Mapa de clientes</h1><p>Tus clientes según su comportamiento de pago. Toca un punto para ver su ficha.</p></div>
+        <div class="client-map-host" id="worker-map-host"></div>
+      </section>
+
+      <section class="view" id="ajustes" aria-labelledby="settings-title" hidden>
+        <div class="page-heading"><p class="eyebrow">PREFERENCIAS</p><h1 id="settings-title">Ajustes</h1><p>Configura tu cuenta y dispositivo.</p></div>
+        <div class="settings-list"><div class="settings-row theme-setting"><span class="settings-icon">◐</span><span><strong>Tema Visual (Modo Claro/Oscuro)</strong><small id="theme-description">Apariencia oscura</small></span><label class="theme-switch" aria-label="Cambiar tema visual"><input id="theme-toggle" type="checkbox" role="switch"><span class="switch-track"></span></label></div><div class="settings-row"><span class="settings-icon">⇄</span><span><strong>Sincronización</strong><small>Última sincronización: hoy, 8:42 a. m.</small></span><span class="row-chevron">›</span></div></div>
+      </section>
+
+      <section class="view client-detail" id="detalle-cliente" aria-labelledby="detail-name" hidden>
+        <button class="back-button" type="button" data-back>‹ <span>Volver a clientes</span></button>
+        <div class="detail-header">
+          <div class="detail-profile"><span class="client-avatar avatar-violet" id="detail-avatar">MR</span><div><p class="eyebrow">CRÉDITO ACTIVO</p><h1 id="detail-name">Cliente</h1><span class="status status-current" id="detail-status">Al día</span><span class="payment-behavior" id="payment-behavior-indicator"><i class="behavior-dot"></i><span>Buen pagador</span></span></div></div>
+          <div class="detail-quick-actions" role="group" aria-label="Acciones de la cartulina">
+            <button class="primary-button detail-pay-button" type="button" data-open-payment>Registrar Pago <span aria-hidden="true">→</span></button>
+            <button class="secondary-button detail-action-button detail-renew-button" id="renew-client" type="button" aria-describedby="renew-hint"><span class="detail-action-label"><span aria-hidden="true">↻</span> Renovar crédito</span><small class="detail-action-sub" id="renew-pending" hidden></small></button>
+            <button class="secondary-button detail-action-button" id="extra-card-client" type="button"><span class="detail-action-label"><span aria-hidden="true">＋</span> Otra cartulina</span></button>
+            <p class="detail-actions-hint" id="renew-hint"></p>
+          </div>
+        </div>
+        <nav class="person-cards" id="person-cards" aria-label="Cartulinas de esta persona" hidden><span class="person-cards-label" id="person-cards-label">Cartulinas</span><div class="person-cards-list" id="person-cards-list"></div></nav>
+        <div class="admin-client-actions" id="admin-client-actions" hidden><button id="edit-client" type="button">Editar Cliente</button><button id="delete-client" type="button" class="danger-action">Eliminar Cliente</button></div>
+        <section class="detail-summary">
+          <div class="progress-ring" role="img" aria-label="60 por ciento pagado"><div class="progress-center"><strong>60%</strong><span>PAGADO</span><b id="detail-balance">$ 600.000</b><small>saldo restante</small><em>Abonado <span id="detail-paid-amount">$ 0</span> / <span id="detail-total-amount">$ 0</span></em></div></div>
+          <div class="detail-balance"><div class="remaining-heading"><span>Saldo restante</span><button class="interest-toggle" id="interest-toggle" type="button" aria-label="Sumar interés moratorio" aria-expanded="false" hidden>+</button></div><strong id="detail-balance-copy">$ 600.000</strong><div><span>Cuota actual</span><strong id="detail-installment">$ 75.000</strong></div></div>
+          <div class="route-metrics"><div><span>Progreso del crédito</span><strong id="route-day">Día 12 / 63 días</strong></div><div><span id="route-days-label">Días restantes para finalizar</span><strong id="route-days-left">Faltan 51 días</strong></div></div>
+        </section>
+        <section class="client-notes" aria-labelledby="client-notes-title">
+          <div class="client-notes-head"><h2 id="client-notes-title">Notas del cliente</h2><small id="client-notes-meta">Visibles para el trabajador y el administrador</small></div>
+          <textarea id="client-notes-input" rows="3" maxlength="1000" placeholder="Recordatorios o datos útiles: horario, referencias, acuerdos de pago…" aria-describedby="client-notes-meta"></textarea>
+          <div class="client-notes-actions"><span class="client-notes-status" id="client-notes-status" role="status" aria-live="polite"></span><button type="button" class="secondary-button" id="save-client-notes" disabled>Guardar nota</button></div>
+        </section>
+        <button class="disclosure-button" type="button" aria-expanded="false" aria-controls="credit-details"><span>Ver detalles del crédito</span><span class="disclosure-chevron" aria-hidden="true">⌄</span></button>
+        <div class="credit-details" id="credit-details" hidden>
+          <dl class="detail-grid"><div><dt>Cédula</dt><dd id="detail-id">1.024.567.890</dd></div><div><dt>Dirección</dt><dd id="detail-address">Cra. 12 # 34-56</dd></div><div><dt>Dirección alternativa</dt><dd id="detail-alt-address">—</dd></div><div><dt>Indicaciones del domicilio</dt><dd id="detail-address-notes">—</dd></div><div><dt>Teléfono</dt><dd id="detail-phone">300 555 0101</dd></div><div><dt>Valor total del préstamo</dt><dd id="detail-loan-total">$ 1.200.000</dd></div><div><dt>Plazo</dt><dd id="detail-term">16 semanas</dd></div><div><dt>Frecuencia de pago</dt><dd id="detail-frequency">Semanal</dd></div><div><dt>Capital / Intereses</dt><dd id="detail-breakdown">$ 1.000.000 / $ 200.000</dd></div><div><dt>Interés acordado</dt><dd id="detail-interest-rate">20%</dd></div><div><dt>Seguros cobrados</dt><dd id="detail-insurance">Tarifa general</dd></div><div class="detail-insurance-reason" id="detail-insurance-reason-row" hidden><dt>Motivo del valor de seguros</dt><dd id="detail-insurance-reason">—</dd></div><div id="detail-renewal-row" hidden><dt>Renovación</dt><dd id="detail-renewal">—</dd></div></dl>
+          <div class="client-location-links"><a class="secondary-button client-location-link" id="client-location-link" href="#" target="_blank" rel="noopener noreferrer">⌖ Ver ubicación del domicilio</a><a class="secondary-button client-location-link" id="client-alt-location-link" href="#" target="_blank" rel="noopener noreferrer" hidden>⌖ Ver dirección alternativa</a></div>
+          <details class="address-history" id="address-history"><summary><span>Direcciones anteriores</span><span class="history-count" id="address-history-count">0</span></summary><ol id="address-history-list"></ol></details>
+        </div>
+        <details class="payment-history" id="payment-history"><summary><span>Historial de abonos</span><span class="history-count" id="payment-history-count">3 recientes</span></summary><ol id="payment-history-list"></ol><button class="history-more-button" id="payment-history-toggle" type="button" hidden>Ver historial completo</button></details>
+        <details class="payment-history interest-history" id="interest-history"><summary><span>Historial de Intereses</span><span class="history-count" id="interest-history-count">0 recargos</span></summary><ol id="interest-history-list"></ol></details>
+      </section>
+    </main>
+
+    <nav class="bottom-nav" aria-label="Navegación principal">
+      <button class="nav-item is-selected" type="button" data-view="inicio" aria-current="page"><span class="nav-icon" aria-hidden="true">⌂</span><span>Inicio</span></button>
+      <button class="nav-item" id="nav-daily-route" type="button" data-view="ruta-diaria"><span class="nav-icon" aria-hidden="true">➤</span><span>Ruta diaria</span></button>
+      <button class="nav-item" id="nav-map" type="button" data-view="mapa" hidden><span class="nav-icon" aria-hidden="true">⌖</span><span>Mapa</span></button>
+      <button class="nav-item" type="button" data-view="directorio"><span class="nav-icon" aria-hidden="true">▤</span><span>Directorio</span></button>
+      <button class="nav-item" type="button" data-view="ajustes"><span class="nav-icon" aria-hidden="true">⚙</span><span>Ajustes</span></button>
+    </nav>
+  </div>
+
+  <div id="admin-view" class="admin-dashboard" hidden>
+    <aside class="admin-sidebar" aria-label="Navegación de administración">
+      <a class="brand" href="#admin" aria-label="EdgeCredit Administración"><span class="brand-mark" aria-hidden="true">E</span><span>Edge<span class="brand-accent">Credit</span></span></a>
+      <div class="admin-nav-caption">OPERACIÓN</div>
+      <label class="route-label" for="route-select">Zonas / Rutas</label>
+      <select id="route-select" class="route-select"></select>
+      <p class="route-empty-hint" id="route-empty-hint" hidden>Aún no hay rutas. Se crean al registrar un trabajador.</p>
+      <p class="route-closure-status" id="route-closure-status" role="status" aria-live="polite" hidden></p>
+      <button id="admin-global-directory" class="admin-directory-link" type="button"><span aria-hidden="true">▤</span> Directorio de Ruta</button>
+      <div class="admin-nav-caption">GESTIÓN</div>
+      <button class="admin-menu-item is-active" type="button" data-admin-section="settlement"><span aria-hidden="true">▥</span> Liquidación</button>
+      <button class="admin-menu-item" type="button" data-admin-section="map"><span aria-hidden="true">⌖</span> Mapa de clientes</button>
+      <button class="admin-menu-item" type="button" data-admin-section="pending"><span aria-hidden="true">◷</span> Pendientes <span class="pending-count" id="pending-count">0</span></button>
+      <button class="admin-menu-item" type="button" data-admin-section="receipts"><span aria-hidden="true">▧</span> Comprobantes</button>
+      <button class="admin-menu-item" type="button" data-admin-section="reports"><span aria-hidden="true">◷</span> Reportes Financieros</button>
+      <button class="admin-menu-item" type="button" data-admin-section="personnel"><span aria-hidden="true">♙</span> Gestión de Personal</button>
+      <button class="admin-menu-item" type="button" data-admin-section="settings"><span aria-hidden="true">⚙</span> Configuración</button>
+      <div class="admin-user"><span class="admin-avatar">A</span><span><strong>Administrador</strong><small>Control de cartera</small></span></div>
+    </aside>
+    <main class="admin-main">
+      <header class="admin-header"><div><p class="eyebrow" id="admin-header-date">CIERRE OPERATIVO</p><h1 id="admin-title">Panel de administración</h1></div><div class="admin-header-actions"><span class="sync-status" hidden><i aria-hidden="true"></i><span>Sincronizado</span></span><button class="logout-button" id="admin-logout" type="button">Cerrar Sesión <span aria-hidden="true">↗</span></button></div></header>
+      <section class="admin-content no-routes-notice" id="no-routes-notice" hidden>
+        <p class="eyebrow">SIN RUTAS TODAVÍA</p>
+        <h2>Registra tu primer trabajador</h2>
+        <p>Las rutas (cobros) se crean desde el perfil de cada trabajador: al agregarlo le asignas su ruta y esta aparece aquí con su liquidación, mapa, comprobantes y reportes.</p>
+        <button class="primary-button" type="button" id="no-routes-go">Ir a Gestión de Personal <span aria-hidden="true">→</span></button>
+      </section>
+      <section class="admin-content admin-section-panel" data-admin-panel="settlement" aria-labelledby="admin-title">
+        <div class="admin-section-intro"><div><h2>Liquidación diaria</h2><p>Resumen financiero independiente de la ruta seleccionada.</p></div><span class="route-date">Hoy</span></div>
+        <div class="ops-summary admin-ops-summary" aria-label="Resumen operativo diario"><button class="ops-summary-button" type="button" data-operation-list="cancelled"><span class="ops-button-icon" aria-hidden="true">✓</span><span class="ops-button-copy"><strong>Tarjetas Canceladas</strong><small>Ver listado completo</small></span><span class="ops-button-arrow" aria-hidden="true">→</span></button><button class="ops-summary-button" type="button" data-operation-list="entered"><span class="ops-button-icon" aria-hidden="true">▤</span><span class="ops-button-copy"><strong>Préstamos Ingresados</strong><small>Ver listado completo</small></span><span class="ops-button-arrow" aria-hidden="true">→</span></button><button class="ops-summary-button" type="button" data-operation-list="new"><span class="ops-button-icon" aria-hidden="true">＋</span><span class="ops-button-copy"><strong>Préstamos Nuevos</strong><small>Ver listado completo</small></span><span class="ops-button-arrow" aria-hidden="true">→</span></button><button class="ops-summary-button" type="button" data-operation-list="yesterday-cancelled"><span class="ops-button-icon" aria-hidden="true">↶</span><span class="ops-button-copy"><strong>Canceladas ayer</strong><small>Ver tarjetas del día anterior</small></span><span class="ops-button-arrow" aria-hidden="true">→</span></button></div>
+        <div class="settlement-layout" id="settlement-grid">
+          <section class="settlement-group income-group"><header><span>INGRESOS (+)</span><small>Fondos que ingresan a la ruta</small></header><div class="settlement-fields"><article class="settlement-card card-finance income-card"><h3 class="finance-label">Cobro</h3><label class="editable-money"><span aria-hidden="true">$</span><input class="finance-amount" data-money id="metric-collections" data-settlement-field="collections" type="number" min="0" step="1000" value="1250000" aria-label="Cobro"></label></article><article class="settlement-card card-finance income-card"><h3 class="finance-label">Base</h3><label class="editable-money"><span aria-hidden="true">$</span><input class="finance-amount" data-money id="metric-base" data-settlement-field="base" type="number" min="0" step="1000" value="200000" aria-label="Base"></label></article><article class="settlement-card card-finance closing-card"><h3 class="finance-label">Efectivo (Cierre)</h3><label class="editable-money"><span aria-hidden="true">$</span><input class="finance-amount" data-money id="metric-cash-delivered" data-settlement-field="cashDelivered" type="number" min="0" step="1000" value="550000" aria-label="Efectivo de cierre"></label></article></div></section>
+          <section class="settlement-group expense-group"><header><span>EGRESOS (−)</span><small>Desembolsos y gastos de ruta</small></header><div class="settlement-fields"><article class="settlement-card card-finance expense-card"><h3 class="finance-label">Préstamos</h3><label class="editable-money"><span aria-hidden="true">$</span><input class="finance-amount" data-money id="metric-loans" data-settlement-field="loans" type="number" min="0" step="1000" value="700000" aria-label="Préstamos"></label></article><article class="settlement-card card-finance expense-card"><h3 class="finance-label">Gastos</h3><label class="editable-money"><span aria-hidden="true">$</span><input class="finance-amount" data-money id="metric-expenses" data-settlement-field="expenses" type="number" min="0" step="1000" value="200000" aria-label="Gastos"></label></article><article class="settlement-card card-finance expense-card"><h3 class="finance-label">Otros Gastos</h3><label class="editable-money"><span aria-hidden="true">$</span><input class="finance-amount" data-money id="metric-other-expenses" data-settlement-field="otherExpenses" type="number" min="0" step="1000" value="0" aria-label="Otros Gastos"></label></article></div></section>
+          <article class="settlement-card card-finance difference-card" id="difference-card"><span class="finance-label">CUADRE DE CAJA</span><h3 class="finance-label">Diferencia</h3><strong class="finance-amount" id="metric-difference">$ 0</strong><small id="difference-caption">Cuadre perfecto</small></article>
+        </div>
+        <div class="admin-actions"><p id="reconciliation-formula">Cobro + Base - Préstamos - Gastos - Efectivo - Otros Gastos</p><button class="primary-button close-route-button" id="verify-close-route" type="button">Verificar y Cerrar Ruta <span aria-hidden="true">→</span></button><p class="admin-feedback" id="admin-feedback" aria-live="polite"></p></div>
+      </section>
+      <section class="admin-content admin-section-panel client-map-panel" data-admin-panel="map" aria-labelledby="client-map-title" hidden>
+        <div class="admin-section-intro"><div><p class="eyebrow">GEOLOCALIZACIÓN · <span id="client-map-route">RUTA</span></p><h2 id="client-map-title">Mapa de clientes</h2><p>Clientes del cobro seleccionado según su comportamiento de pago.</p></div><span class="route-date" id="client-map-zone">—</span></div>
+        <div class="client-map-host" id="admin-map-host">
+        <div class="client-map-layout">
+          <div class="client-map-stage">
+            <div class="client-map-canvas" id="client-map-canvas" role="region" aria-label="Mapa de clientes del cobro"></div>
+            <p class="client-map-banner" id="client-map-banner" hidden><span id="client-map-banner-text"></span><button type="button" class="map-action" id="client-map-cancel-pick">Cancelar</button></p>
+            <p class="client-map-message" id="client-map-message" hidden></p>
+          </div>
+          <aside class="client-map-side" aria-label="Filtros y clientes sin ubicación">
+            <section class="client-map-card">
+              <h3>Comportamiento de pago</h3>
+              <div class="client-map-legend" id="client-map-legend">
+                <label class="map-tier map-tier-good"><input type="checkbox" value="good" checked><i aria-hidden="true"></i><b class="map-tier-check" aria-hidden="true"></b><span>Al día</span><strong data-tier-count="good">0</strong></label>
+                <label class="map-tier map-tier-regular"><input type="checkbox" value="regular" checked><i aria-hidden="true"></i><b class="map-tier-check" aria-hidden="true"></b><span>1 atrasado</span><strong data-tier-count="regular">0</strong></label>
+                <label class="map-tier map-tier-bad"><input type="checkbox" value="bad" checked><i aria-hidden="true"></i><b class="map-tier-check" aria-hidden="true"></b><span>2+ atrasados</span><strong data-tier-count="bad">0</strong></label>
+              </div>
+              <small>Mismo criterio que la lista de clientes: pagos atrasados contados por período según la frecuencia de cada cartulina (día, semana, quincena o mes).</small>
+            </section>
+            <section class="client-map-card">
+              <div class="client-map-card-head"><h3>En el mapa <span class="pending-count" id="client-map-located-count">0</span></h3><button type="button" class="map-action" id="client-map-fit"><span aria-hidden="true">⤢</span><span class="map-action-label">Ver todo el cobro</span></button></div>
+              <button type="button" class="map-action client-map-save-zone" id="client-map-save-zone" title="Guarda el encuadre actual como zona de trabajo del cobro"><span aria-hidden="true">⌖</span><span class="map-action-label">Fijar esta vista como zona del cobro</span></button>
+              <p class="client-map-focus" id="client-map-focus" aria-live="polite"></p>
+              <div class="client-map-located" id="client-map-located"></div>
+            </section>
+            <section class="client-map-card">
+              <h3>Sin ubicación <span class="pending-count" id="client-map-missing-count">0</span></h3>
+              <div class="client-map-missing" id="client-map-missing"></div>
+              <small>La ubicación se guarda sola cuando el trabajador crea el cliente o registra un abono con GPS. También puedes ubicarlo a mano.</small>
+            </section>
+          </aside>
+        </div>
+        </div>
+      </section>
+      <section class="admin-content admin-section-panel" data-admin-panel="pending" hidden>
+        <div class="admin-section-intro"><div><p class="eyebrow">SOLICITUDES DEL EQUIPO</p><h2>Pendientes</h2><p>Excepciones de interés y seguros solicitadas al crear clientes.</p></div></div>
+        <div class="pending-list" id="pending-list" aria-live="polite"></div>
+      </section>
+      <section class="admin-content admin-section-panel" data-admin-panel="receipts" hidden>
+        <div class="admin-section-intro"><div><p class="eyebrow">AUDITORÍA VISUAL · <span id="receipts-route-name">RUTA</span></p><h2>Comprobantes</h2><p>Evidencias por día para la ruta seleccionada. Los registros sin comprobante aparecen primero y marcados.</p></div><div class="receipts-date-picker"><label for="receipts-date-input">Fecha</label><input id="receipts-date-input" type="date"><button type="button" class="secondary-button" id="receipts-today">Hoy</button></div></div>
+        <div class="route-evidence-grid">
+          <section class="expense-evidence-panel" aria-labelledby="transfer-evidence-title"><div><p class="eyebrow">ABONOS DEL DÍA</p><h3 id="transfer-evidence-title">Transferencias</h3><p class="evidence-summary" id="transfer-evidence-summary" aria-live="polite"></p></div><div id="admin-transfer-evidence-list" class="expense-evidence-list" aria-live="polite"></div></section>
+          <section class="expense-evidence-panel" aria-labelledby="expense-evidence-title"><div><p class="eyebrow">SOPORTES DE RUTA</p><h3 id="expense-evidence-title">Otros gastos</h3><p class="evidence-summary" id="expense-evidence-summary" aria-live="polite"></p></div><div id="admin-other-expense-list" class="expense-evidence-list" aria-live="polite"></div></section>
+        </div>
+      </section>
+      <section class="admin-content admin-section-panel" data-admin-panel="reports" hidden>
+        <div class="admin-section-intro"><div><p class="eyebrow">ANÁLISIS FINANCIERO · <span id="report-route-name">RUTA</span></p><h2>Reportes Financieros</h2><p>Consolidados de operación y distribución de resultados.</p></div></div>
+        <div class="report-tabs" role="tablist" aria-label="Periodo de reporte"><button class="report-tab is-active" type="button" role="tab" aria-selected="true" data-report-tab="weekly">Cierre Semanal</button><button class="report-tab" type="button" role="tab" aria-selected="false" data-report-tab="monthly">Cierre Mensual</button></div>
+        <section class="report-panel" data-report-panel="weekly">
+          <div class="report-heading">
+            <div><p class="eyebrow">CIERRE SEMANAL · <span data-report-year>2026</span></p><h3>Consolidado por semanas</h3></div>
+            <div class="report-pickers">
+              <label class="month-picker">Fecha<input type="date" id="report-goto-date"></label>
+            </div>
+          </div>
+          <div class="cashbox-card" id="cashbox-card">
+            <div class="cashbox-main"><span>Caja del cobro</span><strong id="cashbox-current">—</strong><small id="cashbox-opening">Sin monto de apertura</small></div>
+            <div class="cashbox-side"><small id="cashbox-caption">Dinero disponible para prestar. Suma el cobro y resta préstamos, gastos, otros gastos y salidas de caja. No se reinicia cada mes.</small><button class="secondary-button" id="cashbox-edit" type="button">Monto de apertura</button></div>
+          </div>
+          <div class="week-selector" id="week-selector" role="tablist" aria-label="Semanas del mes (lunes a sábado)"></div>
+          <p class="selected-week-label" id="selected-week-label"></p>
+          <div class="report-table-wrap" role="region" aria-label="Cuadre financiero semanal. Desplaza horizontalmente para ver todas las columnas." tabindex="0">
+            <table class="audit-table ledger-table"><thead><tr><th scope="col">Fecha</th><th class="numeric" scope="col">Base</th><th class="numeric" scope="col">Cobro</th><th class="numeric" scope="col">Préstamos</th><th class="numeric editable-col" scope="col">Gastos <span aria-hidden="true">✎</span></th><th class="numeric editable-col" scope="col">Otros gastos <span aria-hidden="true">✎</span></th><th class="numeric editable-col" scope="col">Salida de caja <span aria-hidden="true">✎</span></th><th class="numeric" scope="col">Efectivo</th><th class="numeric" scope="col">Descuadre</th><th class="numeric" scope="col">Caja</th></tr></thead><tbody id="weekly-audit-body"></tbody><tfoot id="weekly-audit-foot"></tfoot></table>
+          </div>
+          <div class="report-metrics"><article><span>Cobro de la semana</span><strong id="weekly-collections">$ 0</strong></article><article><span>Descuadre de la semana</span><strong id="weekly-difference">$ 0</strong><small>Se reinicia cada sábado</small></article><article><span>Sueldo trabajador</span><strong id="weekly-salary">$ 0</strong></article></div>
+          <p class="report-note" id="weekly-note">Gastos, otros gastos y salida de caja se pueden corregir directamente en la tabla. Cada fecha queda guardada en el libro diario del cobro.</p>
+        </section>
+        <section class="report-panel" data-report-panel="monthly" hidden>
+          <div class="report-heading">
+            <div><p class="eyebrow">SEGUROS · <span id="monthly-period-label">MES</span> <span id="monthly-period-year">2026</span></p><h3>Consolidado mensual de seguros</h3></div>
+            <div class="report-pickers">
+              <label class="month-picker">Fecha<input type="date" id="report-goto-date-monthly"></label>
+            </div>
+          </div>
+          <div class="insurance-cut-card" id="insurance-cut-card">
+            <div><span>Estado de los seguros</span><strong id="insurance-cut-status">Sin cuadrar</strong><small id="insurance-cut-detail"></small></div>
+            <div class="insurance-cut-actions"><span class="test-mode-badge" id="insurance-test-badge" hidden>Modo de prueba</span><button class="secondary-button" id="insurance-undo-button" type="button" hidden>Deshacer último cuadre</button><button class="primary-button" id="insurance-cut-button" type="button">Cuadrar seguros</button></div>
+          </div>
+          <div class="report-table-wrap" role="region" aria-label="Consolidado mensual de seguros. Desplaza horizontalmente para ver todas las columnas." tabindex="0"><table class="audit-table insurance-audit-table"><thead><tr><th scope="col">Semana</th><th class="numeric" scope="col">Seguros acumulados</th><th class="numeric" scope="col">Parte trabajador · 50%</th><th class="numeric" scope="col">Parte dueño · 50%</th></tr></thead><tbody id="monthly-insurance-body"></tbody><tfoot id="monthly-insurance-foot"></tfoot></table></div>
+          <div class="insurance-summary"><div class="insurance-total"><span id="insurance-summary-label">Seguros por cuadrar</span><strong id="monthly-insurance">$ 0</strong></div><div class="insurance-split"><article><span>Parte del trabajador · 50%</span><strong id="worker-insurance">$ 0</strong></article><article><span>Parte del dueño · 50%</span><strong id="owner-insurance">$ 0</strong></article></div></div>
+          <p class="report-note" id="insurance-note">Los seguros se cuadran normalmente a fin de mes. Si se cuadran antes, lo que se cobre después del cuadre pasa al mes siguiente.</p>
+        </section>
+      </section>
+      <section class="admin-content admin-section-panel" data-admin-panel="personnel" hidden>
+        <div class="admin-section-intro"><div><p class="eyebrow">ACCESO Y OPERACIÓN</p><h2>Gestión de Personal</h2><p>Administra los trabajadores activos y su ruta asignada.</p></div><button class="primary-button add-worker-button" id="add-worker" type="button">Agregar trabajador <span aria-hidden="true">+</span></button></div>
+        <form class="access-schedule-card" id="access-schedule-form" aria-labelledby="access-schedule-title">
+          <div class="access-schedule-head">
+            <div><h3 id="access-schedule-title">Horario de acceso de trabajadores</h3><p id="access-schedule-summary">Sin restricción.</p></div>
+            <label class="access-switch"><input type="checkbox" id="access-enabled"><span class="access-switch-track" aria-hidden="true"></span><span class="access-switch-text">Restringir</span></label>
+          </div>
+          <div class="access-schedule-body" id="access-schedule-body">
+            <fieldset class="access-days"><legend>Días permitidos</legend><div class="access-days-list"><label class="access-day"><input type="checkbox" name="accessDay" value="1"><span title="Lunes">L</span></label><label class="access-day"><input type="checkbox" name="accessDay" value="2"><span title="Martes">M</span></label><label class="access-day"><input type="checkbox" name="accessDay" value="3"><span title="Miércoles">X</span></label><label class="access-day"><input type="checkbox" name="accessDay" value="4"><span title="Jueves">J</span></label><label class="access-day"><input type="checkbox" name="accessDay" value="5"><span title="Viernes">V</span></label><label class="access-day"><input type="checkbox" name="accessDay" value="6"><span title="Sábado">S</span></label><label class="access-day"><input type="checkbox" name="accessDay" value="0"><span title="Domingo">D</span></label></div></fieldset>
+            <div class="access-times"><label class="custom-field">Desde<input type="time" id="access-start" required></label><label class="custom-field">Hasta<input type="time" id="access-end" required></label></div>
+          </div>
+          <div class="access-schedule-foot"><p class="access-status" id="access-status" role="status" aria-live="polite"></p><button class="primary-button" type="submit" id="save-access-schedule">Guardar horario</button></div>
+          <small class="access-note">Fuera de este horario los trabajadores no pueden ingresar, aunque tengan usuario y contraseña, y la sesión abierta se cierra sola al terminar. El administrador no tiene restricción.</small>
+        </form>
+        <div class="personnel-list" id="personnel-list"></div>
+      </section>
+      <section class="admin-content admin-section-panel" data-admin-panel="settings" hidden>
+        <div class="admin-section-intro"><div><p class="eyebrow">CUENTA Y PREFERENCIAS</p><h2>Configuración</h2><p>Apariencia del sistema y seguridad de la cuenta del administrador.</p></div></div>
+        <div class="settings-list admin-settings-list">
+          <div class="settings-row theme-setting"><span class="settings-icon" aria-hidden="true">◐</span><span><strong>Tema visual (modo claro / oscuro)</strong><small id="admin-theme-description">Apariencia oscura</small></span><label class="theme-switch" aria-label="Cambiar tema visual"><input id="admin-theme-toggle" type="checkbox" role="switch"><span class="switch-track"></span></label></div>
+          <div class="settings-row"><span class="settings-icon" aria-hidden="true">⚿</span><span><strong>Contraseña de ingreso</strong><small>Cámbiala cuando quieras; se pide la contraseña actual.</small></span><button class="secondary-button" type="button" id="admin-change-password">Cambiar</button></div>
+          <div class="settings-row"><span class="settings-icon" aria-hidden="true">⛨</span><span><strong>Clave de recuperación</strong><small id="admin-recovery-status">Sirve para entrar si olvidas la contraseña o pierdes el celular del autenticador.</small></span><button class="secondary-button" type="button" id="admin-recovery-key">Generar</button></div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div class="modal-backdrop" id="payment-modal" hidden>
+    <section class="payment-modal" role="dialog" aria-modal="true" aria-labelledby="payment-title" aria-describedby="payment-description">
+      <div class="modal-handle" aria-hidden="true"></div><button class="modal-close" type="button" aria-label="Cerrar" data-close-payment>×</button>
+      <p class="eyebrow">NUEVO RECAUDO</p><h2 id="payment-title">Registrar pago</h2><p id="payment-description" class="modal-subtitle">Pago para <strong id="payment-client-name">—</strong></p>
+      <form id="payment-form" novalidate>
+        <label class="amount-label" for="payment-amount">¿Cuánto recibiste?</label><div class="amount-input-wrap"><span>$</span><input data-money id="payment-amount" name="amount" type="number" inputmode="decimal" min="1" step="1" placeholder="0" required></div>
+        <fieldset class="payment-method"><legend>Método de pago</legend><div class="method-options"><label class="method-option"><input type="radio" name="method" value="cash" checked><span class="method-card"><span aria-hidden="true">▣</span><strong>Efectivo</strong></span></label><label class="method-option"><input type="radio" name="method" value="transfer"><span class="method-card"><span aria-hidden="true">⇄</span><strong>Transf</strong></span></label></div></fieldset>
+        <div class="voucher-field" id="voucher-field" hidden><label for="voucher-file">Fotografía del comprobante (opcional)</label><div class="file-picker-control"><input id="voucher-file" class="photo-file-input" type="file" accept="image/*" capture="environment" aria-label="Seleccionar comprobante de transferencia"><span class="file-picker-button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h3l1.5-2h7L17 7h3v12H4z"/><circle cx="12" cy="13" r="3.5"/></svg><span>Adjuntar comprobante</span></span><span class="file-picker-name" id="voucher-file-name" aria-live="polite">Ningún archivo seleccionado</span></div><small>Si no la adjuntas, el abono quedará marcado como pendiente de evidencia.</small></div>
+        <button class="primary-button submit-payment" type="submit">Confirmar pago <span aria-hidden="true">→</span></button>
+      </form>
+    </section>
+  </div>
+  <div class="modal-backdrop interest-modal-backdrop" id="interest-modal" hidden>
+    <section class="payment-modal interest-modal" role="dialog" aria-modal="true" aria-labelledby="interest-modal-title">
+      <button class="modal-close" type="button" aria-label="Cerrar" data-close-interest>×</button>
+      <p class="eyebrow">GESTIÓN DE MORA</p><h2 id="interest-modal-title">¿Cómo desea aplicar el interés moratorio?</h2>
+      <div class="interest-choice-list"><button class="interest-choice" id="apply-general-interest" type="button"><strong>Aplicar Interés General</strong><small>Aplicar la tarifa general configurada</small></button><button class="interest-choice" id="choose-specific-interest" type="button"><strong>Ingresar Monto Específico</strong><small>Definir el valor manualmente</small></button></div>
+      <form class="specific-interest-form" id="specific-interest-form" hidden><label for="specific-interest-amount">Monto de interés moratorio</label><div class="specific-interest-input"><span>$</span><input data-money id="specific-interest-amount" type="number" min="1" step="1000" inputmode="numeric" placeholder="0" required></div><button class="primary-button" type="submit">Confirmar interés <span aria-hidden="true">→</span></button></form>
+    </section>
+  </div>
+  <div class="custom-modal-backdrop" id="custom-modal" hidden>
+    <section class="custom-modal" role="dialog" aria-modal="true" aria-labelledby="custom-modal-title" aria-describedby="custom-modal-description">
+      <button class="modal-close" id="custom-modal-close" type="button" aria-label="Cerrar">×</button>
+      <p class="eyebrow" id="custom-modal-eyebrow">GESTIÓN</p><h2 id="custom-modal-title">Editar información</h2><p class="custom-modal-description" id="custom-modal-description"></p>
+      <form id="custom-modal-form"><div class="custom-modal-fields" id="custom-modal-fields"></div><p class="custom-modal-error" id="custom-modal-error" aria-live="polite"></p><div class="custom-modal-actions"><button class="secondary-button" id="custom-modal-cancel" type="button">Cancelar</button><button class="primary-button" id="custom-modal-save" type="submit">Guardar</button></div></form>
+    </section>
+  </div>
+  <div class="custom-modal-backdrop" id="new-client-modal" hidden>
+    <section class="custom-modal client-create-modal" role="dialog" aria-modal="true" aria-labelledby="new-client-title" aria-describedby="new-client-description">
+      <button class="modal-close" id="new-client-close" type="button" aria-label="Cerrar">×</button>
+      <p class="eyebrow"><span id="new-client-kind">NUEVO CRÉDITO</span> · <span id="new-client-route">RUTA</span></p><h2 id="new-client-title">Registrar cliente</h2><p class="custom-modal-description" id="new-client-description">Los valores excepcionales quedan pendientes de aprobación del administrador.</p><p class="renewal-note" id="renewal-note" hidden></p>
+      <form id="new-client-form">
+        <div class="client-create-fields">
+          <label class="custom-field">Nombre completo<input name="name" autocomplete="name" required></label>
+          <label class="custom-field">Cédula<input name="idNumber" inputmode="numeric" required></label>
+          <label class="custom-field">Celular<input name="phone" type="tel" autocomplete="tel" required></label>
+          <label class="custom-field">Dirección del domicilio<input name="address" autocomplete="street-address" required></label>
+          <div class="alt-address-block"><button type="button" class="alt-address-toggle" id="toggle-alt-address" aria-expanded="false" aria-controls="alt-address-field"><span aria-hidden="true">＋</span> Dirección alternativa</button><label class="custom-field" id="alt-address-field" hidden>Dirección alternativa (trabajo u otro lugar donde se le encuentra)<input name="altAddress" id="alt-address-input" autocomplete="off" placeholder="Ej. Local 5, Plaza de mercado"></label></div>
+          <fieldset class="route-position-field" aria-describedby="route-position-help">
+            <legend>Posición en la ruta <small>(opcional)</small></legend>
+            <p id="route-position-help">Busca un cliente del cobro para ubicar al nuevo antes o después de él. Si no eliges, queda al final.</p>
+            <label class="search-field route-position-search"><span aria-hidden="true">⌕</span><input id="route-position-search" type="search" autocomplete="off" placeholder="Buscar cliente por nombre o cédula" aria-controls="route-position-results"></label>
+            <div class="route-position-results" id="route-position-results" role="listbox" aria-label="Clientes encontrados"></div>
+            <div class="route-position-selected" id="route-position-selected" hidden>
+              <span>Junto a <strong id="route-position-name"></strong></span>
+              <div class="route-position-choice" role="radiogroup" aria-label="Ubicar al nuevo cliente">
+                <label><input type="radio" name="routePositionWhere" value="before"><span>Antes de</span></label>
+                <label><input type="radio" name="routePositionWhere" value="after" checked><span>Después de</span></label>
+              </div>
+              <button type="button" class="route-position-clear" id="route-position-clear">Quitar</button>
+            </div>
+          </fieldset>
+          
+          <div class="linked-photo" id="linked-photo" hidden><img id="linked-photo-img" alt="Foto registrada del cliente"><span id="linked-photo-text">Se usa la foto ya registrada de esta persona.</span></div>
+          <label class="custom-field client-photo-field">Foto del cliente<div class="file-picker-control"><input id="client-photo-input" class="photo-file-input" name="photo" type="file" accept="image/*" capture="environment" aria-label="Seleccionar foto del cliente" required><span class="file-picker-button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h3l1.5-2h7L17 7h3v12H4z"/><circle cx="12" cy="13" r="3.5"/></svg><span>Tomar o elegir foto</span></span><span class="file-picker-name" id="client-photo-file-name">Ningún archivo seleccionado</span></div><img id="client-photo-preview" class="client-photo-preview" alt="Vista previa de la foto del cliente" hidden></label>
+          <label class="custom-field">Monto del préstamo ($)<input data-money name="principal" type="number" min="1" step="1" inputmode="numeric" required></label>
+          <label class="custom-field">Duración acordada del crédito (días)<input name="totalDays" type="number" min="1" step="1" inputmode="numeric" placeholder="Ej. 63" required></label>
+          <label class="custom-field">Frecuencia de pago<select name="frequency" required><option value="monthly">Mensual</option><option value="biweekly">Quincenal</option><option value="weekly" selected>Semanal</option><option value="daily">Diario</option></select></label>
+          <label class="custom-field client-comment-field">Indicaciones del domicilio<textarea name="addressNotes" rows="3" placeholder="Cómo llegar: color de la casa, puntos de referencia, timbre…"></textarea></label>
+        </div>
+        <div class="default-rate-note" id="default-rate-note"><span>Interés predeterminado</span><strong>20%</strong><small>La excepción de interés requiere aprobación del administrador.</small></div>
+        <div class="client-create-fields admin-rate-fields" id="admin-rate-fields" hidden><label class="custom-field">Interés del crédito (%)<input name="adminInterestPercent" id="admin-interest-percent" type="number" min="0" max="100" step="0.1" inputmode="decimal" value="20"></label></div>
+        <label class="exception-toggle" id="interest-exception-toggle-wrap"><input type="checkbox" id="interest-exception-toggle"><span>Solicitar excepción de interés</span></label>
+        <div class="exception-fields" id="interest-exception-fields" hidden><label class="custom-field" id="interest-worker-comment-wrap">Comentario para el administrador<textarea name="interestComment" id="interest-exception-comment" rows="2" placeholder="Describe el porcentaje o acuerdo conversado con el cliente"></textarea></label><label class="custom-field" id="interest-admin-value-wrap" hidden>Porcentaje aprobado (%)<input name="interestPercent" id="interest-exception-value" type="number" min="0" max="100" step="0.1" inputmode="decimal"></label><small>El trabajador envía el acuerdo como comentario; el administrador define el porcentaje al aprobar.</small></div>
+        <section class="insurance-block" aria-labelledby="insurance-block-title">
+          <div class="insurance-general"><div><span id="insurance-block-title">Seguros</span><small>General: 10% del préstamo</small></div><strong id="insurance-general-amount">$ 0</strong></div>
+          <label class="exception-toggle"><input type="checkbox" id="insurance-custom-toggle"><span>Cobrar un valor de seguros diferente al general</span></label>
+          <div class="exception-fields" id="insurance-custom-fields" hidden><label class="custom-field">Valor de los seguros ($)<input name="insuranceAmount" data-money id="insurance-custom-amount" type="number" min="0" step="1" inputmode="numeric" placeholder="Ej. 50.000"></label><label class="custom-field">¿Por qué este valor es diferente?<textarea name="insuranceReason" id="insurance-custom-reason" rows="2" maxlength="400" placeholder="Ej. Cliente renovado, acuerdo especial, préstamo pequeño…"></textarea></label></div>
+          <small class="insurance-note">Los seguros se cobran al entregar el préstamo y se suman a la base del día.</small>
+        </section>
+        <label class="exception-toggle admin-base-exception" id="admin-no-base-impact-wrap" hidden><input type="checkbox" id="admin-no-base-impact"><span>Registrar préstamo sin afectar la base del trabajador</span></label>
+        <p class="custom-modal-error" id="new-client-error" aria-live="polite"></p>
+        <div class="custom-modal-actions"><button class="secondary-button" id="new-client-cancel" type="button">Cancelar</button><button class="primary-button" type="submit" id="new-client-submit">Crear cliente <span aria-hidden="true">→</span></button></div>
+      </form>
+    </section>
+  </div>
+  <div class="custom-modal-backdrop" id="worker-expense-modal" hidden>
+    <section class="custom-modal worker-expense-modal" role="dialog" aria-modal="true" aria-labelledby="worker-expense-title">
+      <button class="modal-close" id="close-worker-expense" type="button" aria-label="Cerrar">×</button>
+      <form class="worker-expense-form" id="worker-expense-form">
+          <div><p class="eyebrow">COMPROBANTE DE GASTO</p><h2 id="worker-expense-title">Registrar otro gasto</h2><p>Adjunta una foto del recibo; el total aparecerá en la liquidación de tu ruta. Si no tienes foto, el gasto quedará marcado "Sin comprobante" para el administrador.</p></div>
+          <label class="custom-field" for="worker-expense-amount">Monto del gasto ($)<input data-money id="worker-expense-amount" name="amount" type="number" min="1" step="1" inputmode="numeric" required></label>
+          <label class="custom-field" for="worker-expense-note">Descripción<input id="worker-expense-note" name="note" type="text" maxlength="120" placeholder="Ej. parqueadero o materiales" required></label>
+          <label class="custom-field file-field">Foto del comprobante (recomendada)<div class="file-picker-control"><input id="worker-expense-receipt" class="photo-file-input" name="receipt" type="file" accept="image/*" capture="environment" aria-label="Seleccionar foto del comprobante"><span class="file-picker-button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h3l1.5-2h7L17 7h3v12H4z"/><circle cx="12" cy="13" r="3.5"/></svg><span>Adjuntar foto</span></span><span class="file-picker-name" id="worker-expense-file-name">Ningún archivo seleccionado</span></div></label>
+          <img id="worker-expense-preview" class="client-photo-preview expense-receipt-preview" alt="Vista previa del comprobante" hidden>
+          <p class="custom-modal-error" id="worker-expense-error" aria-live="polite"></p>
+          <div class="worker-expense-actions"><button class="secondary-button" id="cancel-worker-expense" type="button">Cancelar</button><button class="primary-button" type="submit">Enviar gasto <span aria-hidden="true">→</span></button></div>
+          </form>
+    </section>
+  </div>
+  <div class="ops-list-modal-backdrop" id="operations-list-modal" hidden>
+    <section class="ops-list-modal" role="dialog" aria-modal="true" aria-labelledby="operations-list-title">
+      <button class="modal-close" type="button" aria-label="Cerrar lista" data-close-operations-list>×</button>
+      <p class="eyebrow" id="operations-list-route">RUTA</p><h2 id="operations-list-title">Préstamos</h2>
+      <label class="operations-search"><span aria-hidden="true">⌕</span><input id="operations-list-search" type="search" placeholder="Buscar cliente por nombre o cédula" autocomplete="off"></label>
+      <p class="operations-results-count" id="operations-results-count" aria-live="polite"></p>
+      <div class="operations-results" id="operations-list-results"></div>
+    </section>
+  </div>
+  <div class="image-viewer-backdrop" id="image-viewer" role="dialog" aria-modal="true" aria-labelledby="image-viewer-title" hidden>
+    <section class="image-viewer">
+      <header class="image-viewer-head">
+        <div><p class="eyebrow">EVIDENCIA</p><h2 id="image-viewer-title">Comprobante</h2><small id="image-viewer-caption"></small></div>
+        <div class="image-viewer-actions"><button type="button" class="map-action" id="image-viewer-zoom" aria-pressed="false"><span aria-hidden="true">⤢</span><span class="image-viewer-zoom-label">Ampliar</span></button><button type="button" class="modal-close image-viewer-close" id="image-viewer-close" aria-label="Cerrar">×</button></div>
+      </header>
+      <div class="image-viewer-stage"><img id="image-viewer-img" alt=""></div>
+    </section>
+  </div>
+  <div class="app-toast" id="app-toast" role="status" aria-live="polite" hidden></div>
+  <script src="config.js"></script>
+  <script>
+    // Carga la versión empaquetada con su sello de versión (lo actualiza tools/bundle.mjs):
+    // al cambiar el sello, el navegador descarga el JS/CSS nuevo en vez de usar su caché.
+    // Para desarrollar con los módulos sueltos, abre index.html?dev desde un servidor local.
+    (() => {
+      const APP_VERSION = 'c60048b9b4';
+      const dev = new URLSearchParams(location.search).has('dev') && location.protocol !== 'file:';
+      if (dev) {
+        document.getElementById('app-styles').href = 'styles.css';
+        const app = document.createElement('script');
+        app.type = 'module';
+        app.src = 'app.js';
+        document.body.append(app);
+        return;
+      }
+      const bundle = document.createElement('script');
+      bundle.src = `dist/app.bundle.js?v=${APP_VERSION}`;
+      document.body.append(bundle);
+    })();
+  </script>
+</body>
+</html>

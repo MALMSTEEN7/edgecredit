@@ -1,0 +1,30 @@
+/* components/brand · Logotipo EdgeCredit. */
+
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  color: var(--text);
+  text-decoration: none;
+  font: 800 18px Manrope,sans-serif;
+  letter-spacing: -.5px;
+}
+
+.brand-mark {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border-radius: 9px;
+  background: var(--primary);
+  color: white;
+  font-size: 17px;
+}
+
+.brand-accent {
+  color: #8EB7FF;
+}
+
+.brand {
+  font-family: var(--font-display);
+}
