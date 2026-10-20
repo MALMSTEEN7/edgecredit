@@ -3,6 +3,30 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <script>
+    // Celular con «Sitio de escritorio» activado: el navegador dibuja la página a ~980 px y todo se ve diminuto.
+    // Se fija el ancho real de la pantalla en el viewport (algunos navegadores lo respetan) y, si aun así
+    // sigue ancha, se muestra un aviso con cómo desactivarlo. Va aquí para correr antes de dibujar la página.
+    (() => {
+      const side = Math.min(screen.width, screen.height);
+      const isPhone = matchMedia('(pointer: coarse)').matches && side < 768;
+      if (!isPhone || innerWidth < side * 1.3) return;
+      document.querySelector('meta[name="viewport"]').content = `width=${side}, initial-scale=1, viewport-fit=cover`;
+      window.addEventListener('load', () => setTimeout(() => {
+        if (innerWidth < side * 1.3) return;
+        try { if (sessionStorage.getItem('desktop-mode-hint') === 'off') return; } catch { /* sin almacenamiento */ }
+        const hint = document.createElement('div');
+        hint.className = 'desktop-mode-hint';
+        hint.setAttribute('role', 'alert');
+        hint.innerHTML = '<p><strong>Estás viendo la versión de escritorio.</strong> Para que la app se ajuste a tu celular, abre el menú ⋮ del navegador y desmarca «Sitio de escritorio». Si la instalaste como app, desactívalo en Chrome → Configuración → Configuración de sitios → Sitio de escritorio.</p><button type="button" aria-label="Cerrar aviso">×</button>';
+        hint.querySelector('button').addEventListener('click', () => {
+          hint.remove();
+          try { sessionStorage.setItem('desktop-mode-hint', 'off'); } catch { /* sin almacenamiento */ }
+        });
+        document.body.append(hint);
+      }, 300));
+    })();
+  </script>
   <meta name="theme-color" content="#121212">
   <meta name="description" content="EdgeCredit: gestión móvil de cartera y recaudos.">
   <title>EdgeCredit | Gestión de cartera</title>
@@ -10,7 +34,7 @@
   <link rel="icon" href="icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="icon-192.png">
   <meta name="apple-mobile-web-app-capable" content="yes">
-  <link rel="stylesheet" id="app-styles" href="dist/styles.bundle.css?v=c60048b9b4">
+  <link rel="stylesheet" id="app-styles" href="dist/styles.bundle.css?v=4bd795a964">
 </head>
 <body class="login-active">
   <section class="login-gateway" id="login-gateway" aria-labelledby="login-title">
@@ -436,7 +460,7 @@
     // al cambiar el sello, el navegador descarga el JS/CSS nuevo en vez de usar su caché.
     // Para desarrollar con los módulos sueltos, abre index.html?dev desde un servidor local.
     (() => {
-      const APP_VERSION = 'c60048b9b4';
+      const APP_VERSION = '4bd795a964';
       const dev = new URLSearchParams(location.search).has('dev') && location.protocol !== 'file:';
       if (dev) {
         document.getElementById('app-styles').href = 'styles.css';

@@ -183,3 +183,40 @@ button {
   .sync-status span { display: none; }
   .sync-status { padding: 0 9px; }
 }
+
+/* Aviso «Sitio de escritorio» en celular (lo crea index.html). La página se dibuja a ~980 px y se
+   reduce para caber en la pantalla, por eso los tamaños van en vw: así se lee a tamaño normal. */
+.desktop-mode-hint {
+  position: fixed;
+  z-index: 1000;
+  left: 2vw;
+  right: 2vw;
+  bottom: 2vw;
+  display: flex;
+  align-items: flex-start;
+  gap: 2vw;
+  padding: 3vw 3.5vw;
+  border: 1px solid #F9A825;
+  border-radius: 3vw;
+  background: #2A2208;
+  color: #FFF3D6;
+  font-size: 3.8vw;
+  line-height: 1.4;
+  box-shadow: 0 8px 30px rgba(0,0,0,.5);
+}
+
+.desktop-mode-hint p {
+  margin: 0;
+}
+
+.desktop-mode-hint button {
+  flex: none;
+  width: 9vw;
+  height: 9vw;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(255,255,255,.12);
+  font-size: 6vw;
+  line-height: 1;
+  cursor: pointer;
+}
