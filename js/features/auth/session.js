@@ -122,7 +122,7 @@ function logout() {
   adminView.hidden = true;
   loginGateway.hidden = false;
   document.body.classList.add('login-active');
-  document.body.classList.remove('admin-mode', 'admin-client-mode', 'modal-open');
+  document.body.classList.remove('admin-mode', 'admin-client-mode', 'admin-menu-open', 'modal-open');
   document.querySelector('[data-report-tab="weekly"]').click();
   showAdminPanel('settlement');
   window.scrollTo({ top: 0, behavior: 'smooth' });

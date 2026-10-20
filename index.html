@@ -34,7 +34,7 @@
   <link rel="icon" href="icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="icon-192.png">
   <meta name="apple-mobile-web-app-capable" content="yes">
-  <link rel="stylesheet" id="app-styles" href="dist/styles.bundle.css?v=4bd795a964">
+  <link rel="stylesheet" id="app-styles" href="dist/styles.bundle.css?v=19b515885b">
 </head>
 <body class="login-active">
   <section class="login-gateway" id="login-gateway" aria-labelledby="login-title">
@@ -199,8 +199,8 @@
   </div>
 
   <div id="admin-view" class="admin-dashboard" hidden>
-    <aside class="admin-sidebar" aria-label="Navegación de administración">
-      <a class="brand" href="#admin" aria-label="EdgeCredit Administración"><span class="brand-mark" aria-hidden="true">E</span><span>Edge<span class="brand-accent">Credit</span></span></a>
+    <aside class="admin-sidebar" id="admin-sidebar" aria-label="Navegación de administración">
+      <div class="admin-sidebar-head"><a class="brand" href="#admin" aria-label="EdgeCredit Administración"><span class="brand-mark" aria-hidden="true">E</span><span>Edge<span class="brand-accent">Credit</span></span></a><button class="admin-menu-close" id="admin-menu-close" type="button" aria-label="Cerrar menú">×</button></div>
       <div class="admin-nav-caption">OPERACIÓN</div>
       <label class="route-label" for="route-select">Zonas / Rutas</label>
       <select id="route-select" class="route-select"></select>
@@ -217,7 +217,9 @@
       <button class="admin-menu-item" type="button" data-admin-section="settings"><span aria-hidden="true">⚙</span> Configuración</button>
       <div class="admin-user"><span class="admin-avatar">A</span><span><strong>Administrador</strong><small>Control de cartera</small></span></div>
     </aside>
+    <div class="admin-menu-backdrop" id="admin-menu-backdrop" hidden></div>
     <main class="admin-main">
+      <div class="admin-mobile-bar"><button class="admin-menu-toggle" id="admin-menu-toggle" type="button" aria-label="Abrir menú" aria-controls="admin-sidebar" aria-expanded="false"><span aria-hidden="true">☰</span></button><a class="brand" href="#admin" aria-label="EdgeCredit Administración"><span class="brand-mark" aria-hidden="true">E</span><span>Edge<span class="brand-accent">Credit</span></span></a></div>
       <header class="admin-header"><div><p class="eyebrow" id="admin-header-date">CIERRE OPERATIVO</p><h1 id="admin-title">Panel de administración</h1></div><div class="admin-header-actions"><span class="sync-status" hidden><i aria-hidden="true"></i><span>Sincronizado</span></span><button class="logout-button" id="admin-logout" type="button">Cerrar Sesión <span aria-hidden="true">↗</span></button></div></header>
       <section class="admin-content no-routes-notice" id="no-routes-notice" hidden>
         <p class="eyebrow">SIN RUTAS TODAVÍA</p>
@@ -460,7 +462,7 @@
     // al cambiar el sello, el navegador descarga el JS/CSS nuevo en vez de usar su caché.
     // Para desarrollar con los módulos sueltos, abre index.html?dev desde un servidor local.
     (() => {
-      const APP_VERSION = '4bd795a964';
+      const APP_VERSION = '19b515885b';
       const dev = new URLSearchParams(location.search).has('dev') && location.protocol !== 'file:';
       if (dev) {
         document.getElementById('app-styles').href = 'styles.css';

@@ -159,35 +159,91 @@
   font-size: 11px;
 }
 
+/* Celular: el menú es un panel lateral que se abre con ☰ (js/features/admin/admin-shell.js). */
+.admin-sidebar-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.admin-menu-close,
+.admin-mobile-bar,
+.admin-menu-backdrop {
+  display: none;
+}
+
 @media (max-width:767px) {
   .admin-sidebar {
-    position: relative;
-    inset: auto;
-    width: 100%;
+    z-index: 30;
+    width: min(300px,86vw);
+    gap: 10px;
+    padding: 18px 16px calc(18px + env(safe-area-inset-bottom));
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    box-shadow: 12px 0 40px rgba(0,0,0,.45);
+    transform: translateX(-105%);
+    visibility: hidden;
+    transition: transform .22s ease, visibility 0s linear .22s;
+  }
+
+  .admin-menu-open .admin-sidebar {
+    transform: none;
+    visibility: visible;
+    transition: transform .22s ease;
+  }
+
+  .admin-menu-close {
     display: grid;
-    grid-template-columns: 1fr 1fr;
+    place-items: center;
+    width: 40px;
+    min-width: 40px;
+    height: 40px;
+    min-height: 40px;
+    border: 1px solid var(--line);
+    border-radius: 11px;
+    background: transparent;
+    color: var(--muted);
+    font-size: 22px;
+    line-height: 1;
+    cursor: pointer;
+  }
+
+  .admin-menu-backdrop:not([hidden]) {
+    display: block;
+    position: fixed;
+    z-index: 29;
+    inset: 0;
+    background: rgba(0,0,0,.55);
+  }
+
+  .admin-mobile-bar {
+    display: flex;
     align-items: center;
-    gap: 8px;
-    padding: 14px 16px;
-    border-right: 0;
+    gap: 12px;
+    min-height: 60px;
     border-bottom: 1px solid var(--line);
   }
 
-  .admin-sidebar .brand {
-    grid-column: 1/-1;
+  .admin-menu-toggle {
+    display: grid;
+    place-items: center;
+    width: 44px;
+    height: 44px;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    background: var(--card);
+    color: var(--text);
+    font-size: 20px;
+    cursor: pointer;
   }
 
-  .admin-nav-caption,
-  .admin-user {
-    display: none;
-  }
-
-  .route-label {
-    margin: 0;
+  .admin-nav-caption {
+    margin-top: 14px;
   }
 
   .route-select {
-    height: 40px;
+    height: 44px;
   }
 
   .admin-main {
@@ -260,12 +316,6 @@
 }
 
 @media (max-width:767px) {
-  .admin-sidebar .admin-menu-item {
-    min-width: 0;
-    padding: 0 8px;
-    font-size: 10px;
-  }
-
   .admin-header-actions {
     width: 100%;
     justify-content: space-between;
@@ -306,16 +356,6 @@
 
 .admin-return-button {
   display: none;
-}
-
-@media (max-width:767px) {
-  .admin-directory-link {
-    grid-column: 1/-1;
-  }
-
-  .admin-user {
-    display: none;
-  }
 }
 
 .admin-main,
@@ -372,13 +412,6 @@
   border-color: color-mix(in srgb, #F9A825 45%, var(--line));
   background: color-mix(in srgb, #F9A825 10%, transparent);
   color: #F9A825;
-}
-
-@media (max-width:767px) {
-  .route-closure-status {
-    grid-column: 1 / -1;
-    margin: 0;
-  }
 }
 
 /* Sin rutas todavía: aviso en lugar de las secciones que dependen de una ruta. */

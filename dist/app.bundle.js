@@ -1851,6 +1851,14 @@ function showAdminPanel(panelName) {
   if (panelName === 'map' && routeSettlements[routeSelect.value]) renderClientMap();
 }
 
+/** Menú lateral del celular: se abre con ☰ y se cierra al elegir una sección, con × o tocando fuera. */
+function setAdminMenuOpen(open) {
+  document.body.classList.toggle('admin-menu-open', open);
+  document.querySelector('#admin-menu-backdrop').hidden = !open;
+  document.querySelector('#admin-menu-toggle').setAttribute('aria-expanded', String(open));
+  if (open) document.querySelector('#admin-menu-close').focus();
+}
+
 /** Registra los listeners del módulo. Se invoca una sola vez desde app.js. */
 function __mount_adminShellModule() {
   renderRouteDate();
@@ -1866,6 +1874,13 @@ function __mount_adminShellModule() {
   document.querySelector('#no-routes-go').addEventListener('click', () => showAdminPanel('personnel'));
   document.querySelector('#admin-directory-back').addEventListener('click', returnToAdmin);
   document.querySelectorAll('[data-admin-section]').forEach(button => button.addEventListener('click', () => showAdminPanel(button.dataset.adminSection)));
+  const closeMenu = () => setAdminMenuOpen(false);
+  document.querySelector('#admin-menu-toggle').addEventListener('click', () => setAdminMenuOpen(true));
+  document.querySelector('#admin-menu-close').addEventListener('click', closeMenu);
+  document.querySelector('#admin-menu-backdrop').addEventListener('click', closeMenu);
+  document.querySelectorAll('#admin-global-directory, [data-admin-section]').forEach(button => button.addEventListener('click', closeMenu));
+  document.addEventListener('keydown', event => { if (event.key === 'Escape' && document.body.classList.contains('admin-menu-open')) closeMenu(); });
+  window.matchMedia('(min-width:768px)').addEventListener('change', event => { if (event.matches) closeMenu(); });
 }
 
 // ── js/features/admin/client-map.js
@@ -3901,7 +3916,7 @@ function logout() {
   adminView.hidden = true;
   loginGateway.hidden = false;
   document.body.classList.add('login-active');
-  document.body.classList.remove('admin-mode', 'admin-client-mode', 'modal-open');
+  document.body.classList.remove('admin-mode', 'admin-client-mode', 'admin-menu-open', 'modal-open');
   document.querySelector('[data-report-tab="weekly"]').click();
   showAdminPanel('settlement');
   window.scrollTo({ top: 0, behavior: 'smooth' });
