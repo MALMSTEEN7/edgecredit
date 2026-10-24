@@ -9,7 +9,7 @@
 
 import { routeSelect } from '../../core/dom.js';
 import { clients, persistBusinessData, routeSettlements } from '../../core/store.js';
-import { convertLegacyExport } from '../../domain/legacy-import.js';
+import { convertLegacyExport, legacyCorrections } from '../../domain/legacy-import.js';
 import { escapeHTML, formatMoney, routeKey } from '../../shared/format.js';
 import { paymentFrequencyLabels } from '../../core/config.js';
 import { showToast } from '../../ui/toast.js';
@@ -18,11 +18,14 @@ import { appendClientCards, filterClientCards, renderClientRows } from '../clien
 
 let legacyRaw = null;
 let legacyFileName = '';
+// Nombre limpio y referencia por crédito: del archivo de correcciones y de lo que el admin escriba.
+let legacyNames = {};
 
 const legacyPreview = () => document.querySelector('#legacy-import-preview');
 
 function closeLegacyPreview() {
   legacyRaw = null;
+  legacyNames = {};
   legacyPreview().hidden = true;
   legacyPreview().innerHTML = '';
   document.querySelector('#legacy-import-file').value = '';
@@ -39,13 +42,15 @@ function renderLegacyPreview() {
   const chosen = box.querySelector('#legacy-import-route')?.value;
   const guess = routeKey(String(legacyRaw.cobro?.COB_CODIGO || ''));
   const routeId = routeSettlements[chosen] ? chosen : routeSettlements[guess] ? guess : routeSelect.value || routes[0][0];
-  const result = convertLegacyExport(legacyRaw, routeId);
+  const result = convertLegacyExport(legacyRaw, routeId, undefined, legacyNames);
   const existing = result.cards.filter(card => clients[card.clientId]);
   const fresh = result.cards.filter(card => !clients[card.clientId]);
   const warningCount = result.cards.reduce((sum, card) => sum + card.warnings.length, 0);
-  const rows = result.cards.map(({ code, clientId, client, warnings }) => `
+  const rows = result.cards.map(({ code, clientId, client, warnings, legacyName, reference }) => `
     <tr${clients[clientId] ? ' class="is-existing"' : ''}>
-      <td><strong>${escapeHTML(code)}</strong><small>${escapeHTML(client.name)}</small></td>
+      <td class="legacy-name-cell"><strong>${escapeHTML(code)}</strong>
+        <input class="legacy-name-input" type="text" data-legacy-code="${escapeHTML(code)}" value="${escapeHTML(client.name)}" aria-label="Nombre del cliente del crédito ${escapeHTML(code)}" maxlength="80">
+        ${client.name !== legacyName ? `<small>Sistema: ${escapeHTML(legacyName)}</small>` : ''}${reference ? `<small>Referencia: ${escapeHTML(reference)}</small>` : ''}</td>
       <td>${formatMoney(client.principal)}</td>
       <td>${formatMoney(client.total)}</td>
       <td>${escapeHTML(paymentFrequencyLabels[client.frequency])} · ${client.installments} × ${formatMoney(client.installment)}</td>
@@ -57,6 +62,7 @@ function renderLegacyPreview() {
   box.innerHTML = `
     <header class="legacy-import-head">
       <div><p class="eyebrow">VISTA PREVIA · ${escapeHTML(legacyFileName)}</p><h3>Cobro ${escapeHTML(result.cobro || 'sin nombre')}${result.worker ? ` · ${escapeHTML(result.worker)}` : ''}</h3></div>
+      <div class="legacy-import-tools"><button class="secondary-button" type="button" id="legacy-names-open">Cargar nombres corregidos</button><input type="file" id="legacy-names-file" accept=".json,application/json" hidden></div>
       <label class="legacy-import-route">Cargar en el cobro<select id="legacy-import-route" class="route-select">${routes.map(([id, route]) => `<option value="${escapeHTML(id)}"${id === routeId ? ' selected' : ''}>${escapeHTML(route.name || id)}</option>`).join('')}</select></label>
     </header>
     <dl class="legacy-import-totals">
@@ -67,6 +73,7 @@ function renderLegacyPreview() {
       <div><dt>Saldo pendiente</dt><dd>${formatMoney(result.totals.balance)}</dd></div>
       <div><dt>Datos por revisar</dt><dd>${warningCount}</dd></div>
     </dl>
+    <p class="legacy-import-note">Puedes corregir el nombre de cada cliente en la tabla. El nombre del sistema anterior y la referencia quedan en las notas del cliente.</p>
     <p class="legacy-import-note">Los abonos entran como efectivo y el seguro (10 %) como cobrado en el sistema anterior. Nada de esto suma a la caja ni a la liquidación de hoy.</p>
     ${rejected ? `<div class="legacy-import-error"><strong>No se importan:</strong><ul>${rejected}</ul></div>` : ''}
     <div class="legacy-import-table-wrap"><table class="legacy-import-table">
@@ -80,7 +87,34 @@ function renderLegacyPreview() {
     </div>`;
   box.hidden = false;
   box.querySelector('#legacy-import-route').addEventListener('change', renderLegacyPreview);
-  box.querySelector('#legacy-import-confirm').addEventListener('click', () => importLegacyCards(fresh, routeSettlements[routeId]?.name || routeId));
+  // Solo se guarda lo escrito (sin repintar): repintar a mitad de un clic se tragaría el clic en «Importar».
+  box.querySelectorAll('.legacy-name-input').forEach(input => input.addEventListener('input', () => {
+    const code = input.dataset.legacyCode;
+    legacyNames[code] = { ...legacyNames[code], name: input.value.trim() };
+  }));
+  const namesFile = box.querySelector('#legacy-names-file');
+  box.querySelector('#legacy-names-open').addEventListener('click', () => namesFile.click());
+  namesFile.addEventListener('change', () => readLegacyNames(namesFile.files?.[0]));
+  box.querySelector('#legacy-import-confirm').addEventListener('click', () => {
+    // Se convierte otra vez con los nombres que haya en pantalla en este momento.
+    const latest = convertLegacyExport(legacyRaw, routeId, undefined, legacyNames).cards.filter(card => !clients[card.clientId]);
+    importLegacyCards(latest, routeSettlements[routeId]?.name || routeId);
+  });
+}
+
+/** Archivo de correcciones de nombres: rellena los nombres limpios y las referencias. */
+async function readLegacyNames(file) {
+  if (!file) return;
+  try {
+    const loaded = legacyCorrections(JSON.parse((await legacyFileText(file)).replace(/^\uFEFF/, '')));
+    legacyNames = { ...legacyNames, ...loaded };
+    renderLegacyPreview();
+    const known = new Set((legacyRaw?.tarjetas || []).map(card => String(card?.TAR_CODIGO || '').trim().toUpperCase()));
+    const matched = Object.keys(loaded).filter(code => known.has(code)).length;
+    showToast(`Nombres corregidos: ${matched} de ${Object.keys(loaded).length} coinciden con este cobro.`);
+  } catch (error) {
+    showToast(error instanceof SyntaxError ? 'El archivo de nombres no es un JSON válido.' : error.message || 'No se pudo leer el archivo de nombres.');
+  }
 }
 
 function importLegacyCards(cards, routeName) {

@@ -1317,7 +1317,7 @@ function legacyPayments(card, warnings) {
 }
 
 /** Convierte una tarjeta (crédito) del sistema anterior. Devuelve { code, clientId, client, warnings } o { code, error }. */
-function convertLegacyCard(card, routeId, importedAt) {
+function convertLegacyCard(card, routeId, importedAt, correction = {}) {
   const code = legacyText(card.TAR_CODIGO);
   const person = card.cliente || {};
   const warnings = [];
@@ -1328,9 +1328,11 @@ function convertLegacyCard(card, routeId, importedAt) {
   const balance = Math.round(legacyNumber(card.TSALDO));
   const creditStartDate = legacyDate(card.TAR_FECHA);
   const frequency = LEGACY_FREQUENCY[legacyText(card.FP).toUpperCase()];
-  const name = legacyText(person.CLI_NOMBRE);
+  const legacyName = legacyText(person.CLI_NOMBRE);
+  const name = legacyText(correction.name) || legacyName;
+  const reference = legacyText(correction.reference);
   if (!code) return { code: '(sin código)', error: 'La tarjeta no tiene código.' };
-  if (!name) return { code, error: 'No se encontró el cliente de la tarjeta.' };
+  if (!legacyName) return { code, error: 'No se encontró el cliente de la tarjeta.' };
   if (!(principal > 0) || !(total > 0)) return { code, error: 'Capital o total no válidos.' };
   if (!(installment > 0) || !(totalDays > 0)) return { code, error: 'Cuota o plazo no válidos.' };
   if (!creditStartDate) return { code, error: `Fecha de inicio no válida (${legacyText(card.TAR_FECHA) || 'vacía'}).` };
@@ -1378,6 +1380,8 @@ function convertLegacyCard(card, routeId, importedAt) {
   client.progress = Math.min(100, Math.round(paidAmount / total * 100));
 
   const notes = [`Migrado del sistema anterior (crédito ${code}).`];
+  if (name !== legacyName) notes.push(`Nombre en el sistema anterior: ${legacyName}.`);
+  if (reference) notes.push(`Referencia: ${reference}.`);
   if (rating) notes.push(`Calificación anterior: ${rating}.`);
   if (clavo) notes.push('CLAVO (mora) en el sistema anterior.');
   const history = [legacyText(person.ESTADO2), legacyText(card.DATOS)].filter(Boolean).join(' · ');
@@ -1385,7 +1389,7 @@ function convertLegacyCard(card, routeId, importedAt) {
   client.notes = notes.join('\n').slice(0, NOTES_LIMIT);
   client.notesUpdatedAt = importedAt;
   client.notesUpdatedBy = 'Migración';
-  return { code, clientId: `legacy-${code.toLocaleLowerCase('es').replace(/[^a-z0-9]+/g, '-')}`, client, warnings };
+  return { code, legacyName, reference, clientId: `legacy-${code.toLocaleLowerCase('es').replace(/[^a-z0-9]+/g, '-')}`, client, warnings };
 }
 
 /**
@@ -1408,13 +1412,30 @@ function legacyCardRows(card) {
 }
 
 /**
+ * Archivo de correcciones de nombres (se prepara aparte y NO se guarda en el repositorio):
+ *   { "tipo": "edgecredit-correcciones", "cobro": "DONMATIAS",
+ *     "creditos": { "DONMATIAS22": { "nombre": "Juan Carlos Gutierrez", "referencia": "Policía" } } }
+ * Devuelve { DONMATIAS22: { name, reference } }.
+ */
+function legacyCorrections(raw) {
+  if (!raw || raw.tipo !== 'edgecredit-correcciones' || typeof raw.creditos !== 'object') {
+    throw new Error('No es un archivo de correcciones de EdgeCredit.');
+  }
+  return Object.fromEntries(Object.entries(raw.creditos).map(([code, item]) => [
+    legacyText(code).toUpperCase(), { name: legacyText(item?.nombre), reference: legacyText(item?.referencia) },
+  ]));
+}
+
+/**
  * Convierte la exportación completa de un cobro.
+ * `corrections`: { CODIGO: { name, reference } } con el nombre limpio y la referencia que
+ * el sistema anterior pegaba al nombre (oficio, ciudad, quién lo recomendó).
  * @returns {{ cobro:string, worker:string, cards:Array, rejected:Array, totals:{count,people,principal,total,balance,paid,payments} }}
  */
-function convertLegacyExport(raw, routeId, importedAt = new Date().toISOString()) {
+function convertLegacyExport(raw, routeId, importedAt = new Date().toISOString(), corrections = {}) {
   if (!raw || !Array.isArray(raw.tarjetas)) throw new Error('El archivo no es una exportación del sistema anterior (falta la lista «tarjetas»).');
   const tarjetas = raw.tarjetas.map(legacyCardRows);
-  const results = tarjetas.map(card => convertLegacyCard(card, routeId, importedAt));
+  const results = tarjetas.map(card => convertLegacyCard(card, routeId, importedAt, corrections[legacyText(card?.TAR_CODIGO).toUpperCase()]));
   const cards = results.filter(result => result.client);
   const rejected = results.filter(result => result.error);
   const totals = cards.reduce((sum, { client }) => ({
@@ -2788,11 +2809,14 @@ function __mount_evidenceModule() {
 
 let legacyRaw = null;
 let legacyFileName = '';
+// Nombre limpio y referencia por crédito: del archivo de correcciones y de lo que el admin escriba.
+let legacyNames = {};
 
 const legacyPreview = () => document.querySelector('#legacy-import-preview');
 
 function closeLegacyPreview() {
   legacyRaw = null;
+  legacyNames = {};
   legacyPreview().hidden = true;
   legacyPreview().innerHTML = '';
   document.querySelector('#legacy-import-file').value = '';
@@ -2809,13 +2833,15 @@ function renderLegacyPreview() {
   const chosen = box.querySelector('#legacy-import-route')?.value;
   const guess = routeKey(String(legacyRaw.cobro?.COB_CODIGO || ''));
   const routeId = routeSettlements[chosen] ? chosen : routeSettlements[guess] ? guess : routeSelect.value || routes[0][0];
-  const result = convertLegacyExport(legacyRaw, routeId);
+  const result = convertLegacyExport(legacyRaw, routeId, undefined, legacyNames);
   const existing = result.cards.filter(card => clients[card.clientId]);
   const fresh = result.cards.filter(card => !clients[card.clientId]);
   const warningCount = result.cards.reduce((sum, card) => sum + card.warnings.length, 0);
-  const rows = result.cards.map(({ code, clientId, client, warnings }) => `
+  const rows = result.cards.map(({ code, clientId, client, warnings, legacyName, reference }) => `
     <tr${clients[clientId] ? ' class="is-existing"' : ''}>
-      <td><strong>${escapeHTML(code)}</strong><small>${escapeHTML(client.name)}</small></td>
+      <td class="legacy-name-cell"><strong>${escapeHTML(code)}</strong>
+        <input class="legacy-name-input" type="text" data-legacy-code="${escapeHTML(code)}" value="${escapeHTML(client.name)}" aria-label="Nombre del cliente del crédito ${escapeHTML(code)}" maxlength="80">
+        ${client.name !== legacyName ? `<small>Sistema: ${escapeHTML(legacyName)}</small>` : ''}${reference ? `<small>Referencia: ${escapeHTML(reference)}</small>` : ''}</td>
       <td>${formatMoney(client.principal)}</td>
       <td>${formatMoney(client.total)}</td>
       <td>${escapeHTML(paymentFrequencyLabels[client.frequency])} · ${client.installments} × ${formatMoney(client.installment)}</td>
@@ -2827,6 +2853,7 @@ function renderLegacyPreview() {
   box.innerHTML = `
     <header class="legacy-import-head">
       <div><p class="eyebrow">VISTA PREVIA · ${escapeHTML(legacyFileName)}</p><h3>Cobro ${escapeHTML(result.cobro || 'sin nombre')}${result.worker ? ` · ${escapeHTML(result.worker)}` : ''}</h3></div>
+      <div class="legacy-import-tools"><button class="secondary-button" type="button" id="legacy-names-open">Cargar nombres corregidos</button><input type="file" id="legacy-names-file" accept=".json,application/json" hidden></div>
       <label class="legacy-import-route">Cargar en el cobro<select id="legacy-import-route" class="route-select">${routes.map(([id, route]) => `<option value="${escapeHTML(id)}"${id === routeId ? ' selected' : ''}>${escapeHTML(route.name || id)}</option>`).join('')}</select></label>
     </header>
     <dl class="legacy-import-totals">
@@ -2837,6 +2864,7 @@ function renderLegacyPreview() {
       <div><dt>Saldo pendiente</dt><dd>${formatMoney(result.totals.balance)}</dd></div>
       <div><dt>Datos por revisar</dt><dd>${warningCount}</dd></div>
     </dl>
+    <p class="legacy-import-note">Puedes corregir el nombre de cada cliente en la tabla. El nombre del sistema anterior y la referencia quedan en las notas del cliente.</p>
     <p class="legacy-import-note">Los abonos entran como efectivo y el seguro (10 %) como cobrado en el sistema anterior. Nada de esto suma a la caja ni a la liquidación de hoy.</p>
     ${rejected ? `<div class="legacy-import-error"><strong>No se importan:</strong><ul>${rejected}</ul></div>` : ''}
     <div class="legacy-import-table-wrap"><table class="legacy-import-table">
@@ -2850,7 +2878,34 @@ function renderLegacyPreview() {
     </div>`;
   box.hidden = false;
   box.querySelector('#legacy-import-route').addEventListener('change', renderLegacyPreview);
-  box.querySelector('#legacy-import-confirm').addEventListener('click', () => importLegacyCards(fresh, routeSettlements[routeId]?.name || routeId));
+  // Solo se guarda lo escrito (sin repintar): repintar a mitad de un clic se tragaría el clic en «Importar».
+  box.querySelectorAll('.legacy-name-input').forEach(input => input.addEventListener('input', () => {
+    const code = input.dataset.legacyCode;
+    legacyNames[code] = { ...legacyNames[code], name: input.value.trim() };
+  }));
+  const namesFile = box.querySelector('#legacy-names-file');
+  box.querySelector('#legacy-names-open').addEventListener('click', () => namesFile.click());
+  namesFile.addEventListener('change', () => readLegacyNames(namesFile.files?.[0]));
+  box.querySelector('#legacy-import-confirm').addEventListener('click', () => {
+    // Se convierte otra vez con los nombres que haya en pantalla en este momento.
+    const latest = convertLegacyExport(legacyRaw, routeId, undefined, legacyNames).cards.filter(card => !clients[card.clientId]);
+    importLegacyCards(latest, routeSettlements[routeId]?.name || routeId);
+  });
+}
+
+/** Archivo de correcciones de nombres: rellena los nombres limpios y las referencias. */
+async function readLegacyNames(file) {
+  if (!file) return;
+  try {
+    const loaded = legacyCorrections(JSON.parse((await legacyFileText(file)).replace(/^\uFEFF/, '')));
+    legacyNames = { ...legacyNames, ...loaded };
+    renderLegacyPreview();
+    const known = new Set((legacyRaw?.tarjetas || []).map(card => String(card?.TAR_CODIGO || '').trim().toUpperCase()));
+    const matched = Object.keys(loaded).filter(code => known.has(code)).length;
+    showToast(`Nombres corregidos: ${matched} de ${Object.keys(loaded).length} coinciden con este cobro.`);
+  } catch (error) {
+    showToast(error instanceof SyntaxError ? 'El archivo de nombres no es un JSON válido.' : error.message || 'No se pudo leer el archivo de nombres.');
+  }
 }
 
 function importLegacyCards(cards, routeName) {

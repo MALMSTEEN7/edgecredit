@@ -31,6 +31,20 @@ Antes de guardar, la vista previa muestra:
 - por cada crédito, los datos por revisar: sin teléfono, sin dirección, interés distinto de 20 %,
   abonos sin fecha, saldo que no cuadra.
 
+### Nombres
+
+El sistema anterior pega al nombre datos que no son el nombre (oficio, ciudad, «RC …» o quién lo
+recomendó). En la vista previa cada nombre se puede corregir a mano. También puedes cargar los 26 de una vez con
+**Cargar nombres corregidos**, que usa un archivo como este:
+
+```json
+{ "tipo": "edgecredit-correcciones", "cobro": "DONMATIAS",
+  "creditos": { "DONMATIAS22": { "nombre": "Juan Carlos Gutiérrez", "referencia": "Policía" } } }
+```
+
+El nombre del sistema anterior y la referencia quedan en las notas del cliente. Ese archivo también tiene
+datos personales: guárdalo solo en el PC y no lo subas a GitHub (`*-nombres.json` está en `.gitignore`).
+
 Revisa el cobro de destino y pulsa **Importar**. Si vuelves a cargar el mismo archivo, los créditos
 ya importados no se tocan: no se pierden los abonos registrados después en EdgeCredit.
 

@@ -90,7 +90,7 @@ function legacyPayments(card, warnings) {
 }
 
 /** Convierte una tarjeta (crédito) del sistema anterior. Devuelve { code, clientId, client, warnings } o { code, error }. */
-function convertLegacyCard(card, routeId, importedAt) {
+function convertLegacyCard(card, routeId, importedAt, correction = {}) {
   const code = legacyText(card.TAR_CODIGO);
   const person = card.cliente || {};
   const warnings = [];
@@ -101,9 +101,11 @@ function convertLegacyCard(card, routeId, importedAt) {
   const balance = Math.round(legacyNumber(card.TSALDO));
   const creditStartDate = legacyDate(card.TAR_FECHA);
   const frequency = LEGACY_FREQUENCY[legacyText(card.FP).toUpperCase()];
-  const name = legacyText(person.CLI_NOMBRE);
+  const legacyName = legacyText(person.CLI_NOMBRE);
+  const name = legacyText(correction.name) || legacyName;
+  const reference = legacyText(correction.reference);
   if (!code) return { code: '(sin código)', error: 'La tarjeta no tiene código.' };
-  if (!name) return { code, error: 'No se encontró el cliente de la tarjeta.' };
+  if (!legacyName) return { code, error: 'No se encontró el cliente de la tarjeta.' };
   if (!(principal > 0) || !(total > 0)) return { code, error: 'Capital o total no válidos.' };
   if (!(installment > 0) || !(totalDays > 0)) return { code, error: 'Cuota o plazo no válidos.' };
   if (!creditStartDate) return { code, error: `Fecha de inicio no válida (${legacyText(card.TAR_FECHA) || 'vacía'}).` };
@@ -151,6 +153,8 @@ function convertLegacyCard(card, routeId, importedAt) {
   client.progress = Math.min(100, Math.round(paidAmount / total * 100));
 
   const notes = [`Migrado del sistema anterior (crédito ${code}).`];
+  if (name !== legacyName) notes.push(`Nombre en el sistema anterior: ${legacyName}.`);
+  if (reference) notes.push(`Referencia: ${reference}.`);
   if (rating) notes.push(`Calificación anterior: ${rating}.`);
   if (clavo) notes.push('CLAVO (mora) en el sistema anterior.');
   const history = [legacyText(person.ESTADO2), legacyText(card.DATOS)].filter(Boolean).join(' · ');
@@ -158,7 +162,7 @@ function convertLegacyCard(card, routeId, importedAt) {
   client.notes = notes.join('\n').slice(0, NOTES_LIMIT);
   client.notesUpdatedAt = importedAt;
   client.notesUpdatedBy = 'Migración';
-  return { code, clientId: `legacy-${code.toLocaleLowerCase('es').replace(/[^a-z0-9]+/g, '-')}`, client, warnings };
+  return { code, legacyName, reference, clientId: `legacy-${code.toLocaleLowerCase('es').replace(/[^a-z0-9]+/g, '-')}`, client, warnings };
 }
 
 /**
@@ -181,13 +185,30 @@ function legacyCardRows(card) {
 }
 
 /**
+ * Archivo de correcciones de nombres (se prepara aparte y NO se guarda en el repositorio):
+ *   { "tipo": "edgecredit-correcciones", "cobro": "DONMATIAS",
+ *     "creditos": { "DONMATIAS22": { "nombre": "Juan Carlos Gutierrez", "referencia": "Policía" } } }
+ * Devuelve { DONMATIAS22: { name, reference } }.
+ */
+export function legacyCorrections(raw) {
+  if (!raw || raw.tipo !== 'edgecredit-correcciones' || typeof raw.creditos !== 'object') {
+    throw new Error('No es un archivo de correcciones de EdgeCredit.');
+  }
+  return Object.fromEntries(Object.entries(raw.creditos).map(([code, item]) => [
+    legacyText(code).toUpperCase(), { name: legacyText(item?.nombre), reference: legacyText(item?.referencia) },
+  ]));
+}
+
+/**
  * Convierte la exportación completa de un cobro.
+ * `corrections`: { CODIGO: { name, reference } } con el nombre limpio y la referencia que
+ * el sistema anterior pegaba al nombre (oficio, ciudad, quién lo recomendó).
  * @returns {{ cobro:string, worker:string, cards:Array, rejected:Array, totals:{count,people,principal,total,balance,paid,payments} }}
  */
-export function convertLegacyExport(raw, routeId, importedAt = new Date().toISOString()) {
+export function convertLegacyExport(raw, routeId, importedAt = new Date().toISOString(), corrections = {}) {
   if (!raw || !Array.isArray(raw.tarjetas)) throw new Error('El archivo no es una exportación del sistema anterior (falta la lista «tarjetas»).');
   const tarjetas = raw.tarjetas.map(legacyCardRows);
-  const results = tarjetas.map(card => convertLegacyCard(card, routeId, importedAt));
+  const results = tarjetas.map(card => convertLegacyCard(card, routeId, importedAt, corrections[legacyText(card?.TAR_CODIGO).toUpperCase()]));
   const cards = results.filter(result => result.client);
   const rejected = results.filter(result => result.error);
   const totals = cards.reduce((sum, { client }) => ({

@@ -6330,6 +6330,10 @@ button.evidence-link:active {
   font: 700 17px Manrope,sans-serif;
 }
 
+.legacy-import-tools {
+  margin-left: auto;
+}
+
 .legacy-import-route {
   display: grid;
   gap: 6px;
@@ -6434,6 +6438,26 @@ button.evidence-link:active {
   color: var(--muted);
 }
 
+.legacy-name-cell {
+  min-width: 230px;
+}
+
+.legacy-name-input {
+  width: 100%;
+  margin-top: 6px;
+  padding: 7px 9px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+}
+
+.legacy-name-input:focus {
+  border-color: var(--primary);
+  outline: none;
+}
+
 .legacy-import-table tr.is-existing td {
   opacity: .5;
 }
@@ -6470,7 +6494,9 @@ button.evidence-link:active {
     padding: 14px;
   }
 
-  .legacy-import-route {
+  .legacy-import-route,
+  .legacy-import-tools,
+  .legacy-import-tools .secondary-button {
     width: 100%;
   }
 
