@@ -50,10 +50,11 @@ function collectedTs(client, clientId) {
 /**
  * Seguros cobrados en una ruta en la fecha indicada (cartulinas entregadas ese día).
  * `sinceTs`: si el cobro ya se cerró hoy, solo cuenta lo cobrado después del cierre.
+ * Las cartulinas migradas del sistema anterior no cuentan: ese seguro se cobró allá.
  */
 export function insuranceCollectedOn(clients, routeId, dateISO, sinceTs = 0) {
   return Object.entries(clients).reduce((sum, [clientId, client]) => {
-    if (!client || client.route !== routeId || client.insuranceCollectedAt !== dateISO) return sum;
+    if (!client || client.route !== routeId || client.insuranceCollectedAt !== dateISO || client.importedFrom) return sum;
     if (sinceTs && collectedTs(client, clientId) <= sinceTs) return sum;
     return { total: sum.total + (Number(client.insuranceAmount) || 0), count: sum.count + 1 };
   }, { total: 0, count: 0 });
@@ -62,7 +63,7 @@ export function insuranceCollectedOn(clients, routeId, dateISO, sinceTs = 0) {
 /** Seguros cobrados hoy (aún sin cierre) como movimientos individuales con su hora. */
 export function liveInsuranceEntries(clients, routeId, dateISO, sinceTs = 0) {
   return Object.entries(clients)
-    .filter(([, client]) => client && client.route === routeId && client.insuranceCollectedAt === dateISO && Number(client.insuranceAmount) > 0)
+    .filter(([, client]) => client && client.route === routeId && client.insuranceCollectedAt === dateISO && Number(client.insuranceAmount) > 0 && !client.importedFrom)
     .map(([clientId, client]) => ({ date: dateISO, ts: collectedTs(client, clientId) || Date.now(), amount: Number(client.insuranceAmount) }))
     .filter(entry => !sinceTs || entry.ts > sinceTs);
 }

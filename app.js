@@ -31,6 +31,7 @@ import * as pendingModule from './js/features/admin/pending.js';
 import * as personnelModule from './js/features/admin/personnel.js';
 import * as accessHoursModule from './js/features/admin/access-hours.js';
 import * as accountSettingsModule from './js/features/admin/account-settings.js';
+import * as legacyImportModule from './js/features/admin/legacy-import.js';
 import * as clientMapModule from './js/features/admin/client-map.js';
 import * as evidenceModule from './js/features/admin/evidence.js';
 import * as operationsListModule from './js/features/operations/operations-list.js';
@@ -90,6 +91,7 @@ const MODULES = [
   personnelModule,
   accessHoursModule,
   accountSettingsModule,
+  legacyImportModule,
   clientMapModule,
   evidenceModule,
   operationsListModule,

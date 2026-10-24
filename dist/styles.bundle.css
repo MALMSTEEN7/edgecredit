@@ -6251,6 +6251,175 @@ button.evidence-link:active {
   color: var(--muted);
 }
 
+/* ── css/features/legacy-import.css */
+/* features/legacy-import · Vista previa de «Importar cartera del sistema anterior» (Configuración). */
+
+.legacy-import-preview {
+  display: grid;
+  gap: 16px;
+  margin-top: 16px;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 15px;
+  background: var(--card);
+}
+
+.legacy-import-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.legacy-import-head h3 {
+  margin: 0;
+  font: 700 17px Manrope,sans-serif;
+}
+
+.legacy-import-route {
+  display: grid;
+  gap: 6px;
+  min-width: 220px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.legacy-import-totals {
+  display: grid;
+  grid-template-columns: repeat(auto-fit,minmax(140px,1fr));
+  gap: 10px;
+  margin: 0;
+}
+
+.legacy-import-totals div {
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+}
+
+.legacy-import-totals dt {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.legacy-import-totals dd {
+  margin: 4px 0 0;
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.legacy-import-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.legacy-import-error {
+  margin: 0;
+  padding: 12px 14px;
+  border: 1px solid color-mix(in srgb, var(--alert-color) 45%, var(--line));
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--alert-color) 10%, transparent);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.legacy-import-error ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}
+
+.legacy-import-table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+
+.legacy-import-table {
+  width: 100%;
+  min-width: 760px;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.legacy-import-table th,
+.legacy-import-table td {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  vertical-align: top;
+}
+
+.legacy-import-table th {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.legacy-import-table td:not(:first-child):not(:last-child) {
+  white-space: nowrap;
+}
+
+.legacy-import-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.legacy-import-table td small {
+  display: block;
+  margin-top: 3px;
+  color: var(--muted);
+}
+
+.legacy-import-table tr.is-existing td {
+  opacity: .5;
+}
+
+.legacy-import-table .legacy-warning {
+  color: #F9A825;
+}
+
+.legacy-tag {
+  display: inline-block;
+  margin: 0 6px 4px 0;
+  padding: 2px 8px;
+  border: 1px solid var(--line);
+  border-radius: 99px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.legacy-tag.is-alert {
+  border-color: color-mix(in srgb, var(--alert-color) 50%, var(--line));
+  color: var(--alert-color);
+}
+
+.legacy-import-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+@media (max-width:767px) {
+  .legacy-import-preview {
+    padding: 14px;
+  }
+
+  .legacy-import-route {
+    width: 100%;
+  }
+
+  .legacy-import-actions > * {
+    flex: 1;
+  }
+}
+
 /* ── css/features/admin-settlement.css */
 /* features/admin-settlement · Liquidación / cuadre de caja. */
 

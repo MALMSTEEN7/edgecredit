@@ -34,7 +34,7 @@
   <link rel="icon" href="icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="icon-192.png">
   <meta name="apple-mobile-web-app-capable" content="yes">
-  <link rel="stylesheet" id="app-styles" href="dist/styles.bundle.css?v=19b515885b">
+  <link rel="stylesheet" id="app-styles" href="dist/styles.bundle.css?v=c7426e9dfc">
 </head>
 <body class="login-active">
   <section class="login-gateway" id="login-gateway" aria-labelledby="login-title">
@@ -342,7 +342,9 @@
           <div class="settings-row theme-setting"><span class="settings-icon" aria-hidden="true">◐</span><span><strong>Tema visual (modo claro / oscuro)</strong><small id="admin-theme-description">Apariencia oscura</small></span><label class="theme-switch" aria-label="Cambiar tema visual"><input id="admin-theme-toggle" type="checkbox" role="switch"><span class="switch-track"></span></label></div>
           <div class="settings-row"><span class="settings-icon" aria-hidden="true">⚿</span><span><strong>Contraseña de ingreso</strong><small>Cámbiala cuando quieras; se pide la contraseña actual.</small></span><button class="secondary-button" type="button" id="admin-change-password">Cambiar</button></div>
           <div class="settings-row"><span class="settings-icon" aria-hidden="true">⛨</span><span><strong>Clave de recuperación</strong><small id="admin-recovery-status">Sirve para entrar si olvidas la contraseña o pierdes el celular del autenticador.</small></span><button class="secondary-button" type="button" id="admin-recovery-key">Generar</button></div>
+          <div class="settings-row legacy-import-row"><span class="settings-icon" aria-hidden="true">⇪</span><span><strong>Importar cartera del sistema anterior</strong><small>Carga un cobro exportado de CREDITOS (archivo .json). Primero verás el resumen; nada se guarda sin tu confirmación.</small></span><button class="secondary-button" type="button" id="legacy-import-open">Elegir archivo</button><input type="file" id="legacy-import-file" accept=".json,application/json" hidden></div>
         </div>
+        <section class="legacy-import-preview" id="legacy-import-preview" aria-live="polite" hidden></section>
       </section>
     </main>
   </div>
@@ -462,7 +464,7 @@
     // al cambiar el sello, el navegador descarga el JS/CSS nuevo en vez de usar su caché.
     // Para desarrollar con los módulos sueltos, abre index.html?dev desde un servidor local.
     (() => {
-      const APP_VERSION = '19b515885b';
+      const APP_VERSION = 'c7426e9dfc';
       const dev = new URLSearchParams(location.search).has('dev') && location.protocol !== 'file:';
       if (dev) {
         document.getElementById('app-styles').href = 'styles.css';
