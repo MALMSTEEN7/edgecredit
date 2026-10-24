@@ -1198,6 +1198,9 @@ function liveInsuranceEntries(clients, routeId, dateISO, sinceTs = 0) {
  *   prestar). No se reinicia nunca; cada día suma el cobro y resta préstamos, gastos,
  *   otros gastos y salidas de caja.
  * - `route.insuranceCuts` registra cada «Cuadrar seguros».
+ * - Días traídos del sistema anterior (Excel): `cashAdjustment` es el ajuste de caja de ese
+ *   día (descuadre entregado de más o de menos, o un ingreso de capital) para que la caja
+ *   quede igual a la del Excel. Lo explica `adjustmentNote`. Los días de EdgeCredit no lo usan.
  */
 
 
@@ -1227,7 +1230,11 @@ function dayRecord(route, dateISO, liveInsurance = 0) {
     return { ...live, cashOut: Number(stored?.cashOut || 0), insurance: liveInsurance, closed: false, live: true };
   }
   if (!stored) return { ...Object.fromEntries(DAY_FIELDS.map(field => [field, 0])), closed: false, empty: true };
-  return { ...Object.fromEntries(DAY_FIELDS.map(field => [field, Number(stored[field] || 0)])), closed: Boolean(stored.closed), demo: Boolean(stored.demo) };
+  return {
+    ...Object.fromEntries(DAY_FIELDS.map(field => [field, Number(stored[field] || 0)])),
+    cashAdjustment: Number(stored.cashAdjustment || 0), adjustmentNote: stored.adjustmentNote || '',
+    closed: Boolean(stored.closed), demo: Boolean(stored.demo),
+  };
 }
 
 /** Descuadre del día (fórmula de la liquidación). Solo aplica a días cerrados. */
@@ -1238,7 +1245,7 @@ function ledgerDifference(record) {
 
 /** Movimiento de la caja del cobro en un día. */
 function cashBoxMovement(record) {
-  return record.collections - record.loans - record.expenses - record.otherExpenses - record.cashOut;
+  return record.collections - record.loans - record.expenses - record.otherExpenses - record.cashOut + Number(record.cashAdjustment || 0);
 }
 
 /** Caja al cierre del día indicado (incluye hoy en vivo si la fecha llega a hoy). */
@@ -4036,6 +4043,14 @@ function renderWeeklyAudit(route, monthValue) {
     const dateCell = document.createElement('th');
     dateCell.scope = 'row';
     dateCell.innerHTML = `<span>${dayFormatter.format(date)}</span><small>${fullDate.format(date)}${record.live ? ' · en curso' : ''}</small>`;
+    if (!future && record.cashAdjustment) {
+      // Día del sistema anterior: el ajuste explica por qué la caja no es solo cobro − préstamos − gastos − salida.
+      const note = document.createElement('small');
+      note.className = 'cash-adjustment-note';
+      note.textContent = `Ajuste de caja ${record.cashAdjustment > 0 ? '+' : '−'}${formatMoney(Math.abs(record.cashAdjustment))}`;
+      note.title = record.adjustmentNote || 'Ajuste de caja del sistema anterior';
+      dateCell.append(note);
+    }
     row.append(dateCell);
     COLUMNS.forEach(({ key, editable }) => {
       if (editable) row.append(editableCell(iso, key, record[key], future));

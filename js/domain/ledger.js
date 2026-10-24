@@ -10,6 +10,9 @@
  *   prestar). No se reinicia nunca; cada día suma el cobro y resta préstamos, gastos,
  *   otros gastos y salidas de caja.
  * - `route.insuranceCuts` registra cada «Cuadrar seguros».
+ * - Días traídos del sistema anterior (Excel): `cashAdjustment` es el ajuste de caja de ese
+ *   día (descuadre entregado de más o de menos, o un ingreso de capital) para que la caja
+ *   quede igual a la del Excel. Lo explica `adjustmentNote`. Los días de EdgeCredit no lo usan.
  */
 
 import { localDateISO, shiftDateISO } from '../shared/dates.js';
@@ -40,7 +43,11 @@ export function dayRecord(route, dateISO, liveInsurance = 0) {
     return { ...live, cashOut: Number(stored?.cashOut || 0), insurance: liveInsurance, closed: false, live: true };
   }
   if (!stored) return { ...Object.fromEntries(DAY_FIELDS.map(field => [field, 0])), closed: false, empty: true };
-  return { ...Object.fromEntries(DAY_FIELDS.map(field => [field, Number(stored[field] || 0)])), closed: Boolean(stored.closed), demo: Boolean(stored.demo) };
+  return {
+    ...Object.fromEntries(DAY_FIELDS.map(field => [field, Number(stored[field] || 0)])),
+    cashAdjustment: Number(stored.cashAdjustment || 0), adjustmentNote: stored.adjustmentNote || '',
+    closed: Boolean(stored.closed), demo: Boolean(stored.demo),
+  };
 }
 
 /** Descuadre del día (fórmula de la liquidación). Solo aplica a días cerrados. */
@@ -51,7 +58,7 @@ export function ledgerDifference(record) {
 
 /** Movimiento de la caja del cobro en un día. */
 export function cashBoxMovement(record) {
-  return record.collections - record.loans - record.expenses - record.otherExpenses - record.cashOut;
+  return record.collections - record.loans - record.expenses - record.otherExpenses - record.cashOut + Number(record.cashAdjustment || 0);
 }
 
 /** Caja al cierre del día indicado (incluye hoy en vivo si la fecha llega a hoy). */

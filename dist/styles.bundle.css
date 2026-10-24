@@ -8004,6 +8004,16 @@ button.evidence-link:active {
   white-space: nowrap;
 }
 
+/* Días del sistema anterior con ajuste de caja (descuadre o ingreso de capital). */
+.cash-adjustment-note {
+  display: block;
+  margin-top: 3px;
+  color: #F9A825;
+  font-size: 10px;
+  font-weight: 600;
+  cursor: help;
+}
+
 /* ── css/features/admin-pending.css */
 /* features/admin-pending · Solicitudes pendientes. */
 

@@ -237,6 +237,14 @@ function renderWeeklyAudit(route, monthValue) {
     const dateCell = document.createElement('th');
     dateCell.scope = 'row';
     dateCell.innerHTML = `<span>${dayFormatter.format(date)}</span><small>${fullDate.format(date)}${record.live ? ' · en curso' : ''}</small>`;
+    if (!future && record.cashAdjustment) {
+      // Día del sistema anterior: el ajuste explica por qué la caja no es solo cobro − préstamos − gastos − salida.
+      const note = document.createElement('small');
+      note.className = 'cash-adjustment-note';
+      note.textContent = `Ajuste de caja ${record.cashAdjustment > 0 ? '+' : '−'}${formatMoney(Math.abs(record.cashAdjustment))}`;
+      note.title = record.adjustmentNote || 'Ajuste de caja del sistema anterior';
+      dateCell.append(note);
+    }
     row.append(dateCell);
     COLUMNS.forEach(({ key, editable }) => {
       if (editable) row.append(editableCell(iso, key, record[key], future));
