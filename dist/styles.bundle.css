@@ -6381,6 +6381,12 @@ button.evidence-link:active {
   line-height: 1.5;
 }
 
+.legacy-import-error p {
+  margin: 6px 0 0;
+  color: var(--muted);
+  word-break: break-word;
+}
+
 .legacy-import-error ul {
   margin: 6px 0 0;
   padding-left: 18px;

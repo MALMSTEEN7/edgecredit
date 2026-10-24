@@ -97,16 +97,55 @@ function importLegacyCards(cards, routeName) {
   showToast(`Se importaron ${cards.length} crédito(s) al cobro ${routeName}.`);
 }
 
+/**
+ * Texto del archivo según su codificación real. El script lo escribe en UTF-8, pero si el
+ * archivo se abre y se vuelve a guardar en Windows (Bloc de notas, «>» en la consola) puede
+ * quedar en UTF-16 o en ANSI, y leído como UTF-8 deja de ser un JSON válido.
+ */
+async function legacyFileText(file) {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  const decode = (encoding, start = 0, fatal = false) => new TextDecoder(encoding, { fatal }).decode(bytes.subarray(start));
+  if (bytes[0] === 0xEF && bytes[1] === 0xBB && bytes[2] === 0xBF) return decode('utf-8', 3);
+  if (bytes[0] === 0xFF && bytes[1] === 0xFE) return decode('utf-16le', 2);
+  if (bytes[0] === 0xFE && bytes[1] === 0xFF) return decode('utf-16be', 2);
+  if (bytes.length > 1 && bytes[1] === 0 && bytes[0] !== 0) return decode('utf-16le');
+  if (bytes.length > 1 && bytes[0] === 0 && bytes[1] !== 0) return decode('utf-16be');
+  try { return decode('utf-8', 0, true); } catch { return decode('windows-1252'); }
+}
+
+/** Error de lectura en la vista previa (queda en pantalla para poder leerlo o fotografiarlo). */
+function showLegacyError(message, detail = '') {
+  legacyRaw = null;
+  const box = legacyPreview();
+  box.innerHTML = `<div class="legacy-import-error"><strong>${escapeHTML(message)}</strong>${detail ? `<p>${escapeHTML(detail)}</p>` : ''}</div><div class="legacy-import-actions"><button class="secondary-button" type="button" data-legacy-cancel>Cerrar</button></div>`;
+  box.hidden = false;
+  document.querySelector('#legacy-import-file').value = '';
+}
+
 async function readLegacyFile(file) {
   if (!file) return;
+  let text = '';
   try {
-    const text = (await file.text()).replace(/^﻿/, '');
+    text = (await legacyFileText(file)).replace(/^\uFEFF/, '').trim();
+  } catch (error) {
+    showLegacyError('No se pudo leer el archivo.', error.message || '');
+    return;
+  }
+  try {
     legacyRaw = JSON.parse(text);
+  } catch (error) {
+    const start = text.slice(0, 1);
+    const hint = !text ? 'El archivo está vacío.'
+      : start !== '{' ? `El archivo no empieza como una exportación (empieza con «${start}»). Revisa que elegiste el archivo «…-edgecredit.json» y no otro.`
+      : 'El archivo parece cortado o modificado. Vuelve a exportarlo con el script y súbelo sin abrirlo antes.';
+    showLegacyError(`«${file.name}» no es un JSON válido (${(file.size / 1024).toFixed(1)} KB).`, `${hint} Detalle técnico: ${error.message}`);
+    return;
+  }
+  try {
     legacyFileName = file.name;
     renderLegacyPreview();
   } catch (error) {
-    closeLegacyPreview();
-    showToast(error instanceof SyntaxError ? 'El archivo no es un JSON válido.' : error.message || 'No se pudo leer el archivo.');
+    showLegacyError('No se pudo preparar la vista previa.', error.message || String(error));
   }
 }
 
