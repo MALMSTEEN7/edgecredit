@@ -5,7 +5,7 @@
 import { adminFeedback, routeSelect, settlementInputs } from '../../core/dom.js';
 import { state } from '../../core/state.js';
 import { clients, persistBusinessData, routeSettlements, shared, workerForRoute } from '../../core/store.js';
-import { recordClosure } from '../../domain/ledger.js';
+import { carriedBase, recordClosure } from '../../domain/ledger.js';
 import { insuranceCollectedOn } from '../../domain/insurance.js';
 import { localDateISO } from '../../shared/dates.js';
 import { formatMoney } from '../../shared/format.js';
@@ -69,6 +69,32 @@ function resetRouteDay(route, routeId) {
     if (state.activeWorker?.id === worker.id) { state.workBaseCash = carried; state.workBaseBank = 0; state.workBaseAmount = carried; }
   }
   return { cash, carried, saturday };
+}
+
+/**
+ * Al empezar un día nuevo, la base de cada ruta (y la caja de su trabajador) toma el efectivo
+ * del último día cerrado. Solo una vez por día y solo si hoy todavía no hay movimientos, para
+ * no pisar préstamos, cobros o una base que el admin ya haya asignado. Devuelve true si cambió algo.
+ */
+export function applyCarriedBases(today = localDateISO()) {
+  let changed = false;
+  Object.entries(routeSettlements).forEach(([routeId, route]) => {
+    if (!route || route.baseCarriedOn === today || route.lastClosure?.date === today) return;
+    const started = ['collections', 'loans', 'expenses', 'otherExpenses', 'cashDelivered'].some(field => Number(route[field] || 0) !== 0);
+    if (started) return;
+    const carried = carriedBase(route, today);
+    if (!carried) return;
+    route.base = carried.amount;
+    route.baseCarriedOn = today;
+    route.baseCarriedFrom = carried.date;
+    const worker = workerForRoute(routeId);
+    if (worker) {
+      shared.workBases[worker.id] = { amount: carried.amount, cash: carried.amount, bank: 0, account: 'cash', updatedAt: new Date().toISOString() };
+      if (state.activeWorker?.id === worker.id) { state.workBaseCash = carried.amount; state.workBaseBank = 0; state.workBaseAmount = carried.amount; }
+    }
+    changed = true;
+  });
+  return changed;
 }
 
 export function renderRouteOperations(route) {

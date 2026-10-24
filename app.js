@@ -43,6 +43,7 @@ import * as syncModule from './js/core/sync.js';
 import { setRenderHook, syncRole } from './js/core/sync.js';
 import { setAfterServerLoad } from './js/features/auth/session.js';
 import { renderPersonnel } from './js/features/admin/personnel.js';
+import { applyCarriedBases } from './js/features/admin/settlement.js';
 import { renderRouteBuilder } from './js/features/daily-route/daily-route.js';
 import { filterClientCards } from './js/features/clients/directory.js';
 import { normalizeClientSchedules, pruneExpiredPaymentHistories } from './js/domain/loan-schedule.js';
@@ -122,7 +123,11 @@ function boot() {
   window.setInterval(pruneExpiredPaymentHistories, 60 * 60 * 1000);
   // Cierres de caja: se guardan los últimos 4 meses (sin servidor, en este navegador).
   if (!backendEnabled() && pruneLedgers()) persistBusinessData();
-  window.setInterval(() => { if ((!backendEnabled() || syncRole() === 'admin') && pruneLedgers()) persistBusinessData(); }, 60 * 60 * 1000);
+  if (!backendEnabled() && applyCarriedBases()) persistBusinessData();
+  window.setInterval(() => {
+    if ((!backendEnabled() || syncRole() === 'admin') && pruneLedgers()) persistBusinessData();
+    if ((!backendEnabled() || syncRole()) && applyCarriedBases()) { persistBusinessData(); updateCashTotal(); }
+  }, 60 * 60 * 1000);
   if (!backendEnabled()) pruneOrphanRoutes();
   syncRouteSelect();
   state.activeSettlement = routeSettlements[routeSelect.value] || null;
@@ -154,6 +159,8 @@ function refreshFromServer() {
   if ((state.userRole === 'admin' || syncRole() === 'admin') && pruneOrphanRoutes()) persistBusinessData();
   // Solo el admin depura el libro (una sola fuente de cambios sobre las rutas).
   if ((state.userRole === 'admin' || syncRole() === 'admin') && pruneLedgers()) persistBusinessData();
+  // Día nuevo: el efectivo del último cierre pasa a ser la base de hoy (admin o trabajador, el primero que entre).
+  if (applyCarriedBases()) persistBusinessData();
   syncRouteSelect();
   state.activeSettlement = routeSettlements[routeSelect.value] || null;
   normalizeClientNotes();

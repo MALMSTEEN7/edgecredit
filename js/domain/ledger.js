@@ -142,6 +142,26 @@ export function recordClosure(route, dateISO, values, closedTs) {
   };
 }
 
+/** Efectivo con que terminó un día cerrado: el entregado o, si no se anotó, el calculado. */
+export function closedDayCash(record) {
+  const computed = record.collections + record.base - record.loans - record.expenses - record.otherExpenses;
+  return Number(record.cashDelivered || 0) > 0 ? Number(record.cashDelivered) : Math.max(0, computed);
+}
+
+/**
+ * Base que le toca hoy a la ruta: el efectivo del último día cerrado antes de hoy (sirve
+ * también para los días traídos del Excel). Si ese día fue sábado el efectivo se entregó y
+ * la base arranca en 0, igual que al cerrar en Liquidación. Devuelve null sin cierres previos.
+ */
+export function carriedBase(route, today = localDateISO()) {
+  ensureLedger(route);
+  const last = Object.keys(route.ledger).filter(date => date < today && route.ledger[date]?.closed).sort().at(-1);
+  if (!last) return null;
+  const [year, month, day] = last.split('-').map(Number);
+  const saturday = new Date(year, month - 1, day).getDay() === 6;
+  return { date: last, amount: saturday ? 0 : closedDayCash(dayRecord(route, last)), saturday };
+}
+
 /** Corrige gastos, otros gastos o salida de caja de un día. Hoy sin cerrar: va a la ruta viva. */
 export function setDayField(route, dateISO, field, value) {
   if (!EDITABLE_FIELDS.includes(field)) return;

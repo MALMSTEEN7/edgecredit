@@ -1329,6 +1329,26 @@ function recordClosure(route, dateISO, values, closedTs) {
   };
 }
 
+/** Efectivo con que terminó un día cerrado: el entregado o, si no se anotó, el calculado. */
+function closedDayCash(record) {
+  const computed = record.collections + record.base - record.loans - record.expenses - record.otherExpenses;
+  return Number(record.cashDelivered || 0) > 0 ? Number(record.cashDelivered) : Math.max(0, computed);
+}
+
+/**
+ * Base que le toca hoy a la ruta: el efectivo del último día cerrado antes de hoy (sirve
+ * también para los días traídos del Excel). Si ese día fue sábado el efectivo se entregó y
+ * la base arranca en 0, igual que al cerrar en Liquidación. Devuelve null sin cierres previos.
+ */
+function carriedBase(route, today = localDateISO()) {
+  ensureLedger(route);
+  const last = Object.keys(route.ledger).filter(date => date < today && route.ledger[date]?.closed).sort().at(-1);
+  if (!last) return null;
+  const [year, month, day] = last.split('-').map(Number);
+  const saturday = new Date(year, month - 1, day).getDay() === 6;
+  return { date: last, amount: saturday ? 0 : closedDayCash(dayRecord(route, last)), saturday };
+}
+
 /** Corrige gastos, otros gastos o salida de caja de un día. Hoy sin cerrar: va a la ruta viva. */
 function setDayField(route, dateISO, field, value) {
   if (!EDITABLE_FIELDS.includes(field)) return;
@@ -4422,6 +4442,32 @@ function resetRouteDay(route, routeId) {
     if (state.activeWorker?.id === worker.id) { state.workBaseCash = carried; state.workBaseBank = 0; state.workBaseAmount = carried; }
   }
   return { cash, carried, saturday };
+}
+
+/**
+ * Al empezar un día nuevo, la base de cada ruta (y la caja de su trabajador) toma el efectivo
+ * del último día cerrado. Solo una vez por día y solo si hoy todavía no hay movimientos, para
+ * no pisar préstamos, cobros o una base que el admin ya haya asignado. Devuelve true si cambió algo.
+ */
+function applyCarriedBases(today = localDateISO()) {
+  let changed = false;
+  Object.entries(routeSettlements).forEach(([routeId, route]) => {
+    if (!route || route.baseCarriedOn === today || route.lastClosure?.date === today) return;
+    const started = ['collections', 'loans', 'expenses', 'otherExpenses', 'cashDelivered'].some(field => Number(route[field] || 0) !== 0);
+    if (started) return;
+    const carried = carriedBase(route, today);
+    if (!carried) return;
+    route.base = carried.amount;
+    route.baseCarriedOn = today;
+    route.baseCarriedFrom = carried.date;
+    const worker = workerForRoute(routeId);
+    if (worker) {
+      shared.workBases[worker.id] = { amount: carried.amount, cash: carried.amount, bank: 0, account: 'cash', updatedAt: new Date().toISOString() };
+      if (state.activeWorker?.id === worker.id) { state.workBaseCash = carried.amount; state.workBaseBank = 0; state.workBaseAmount = carried.amount; }
+    }
+    changed = true;
+  });
+  return changed;
 }
 
 function renderRouteOperations(route) {
@@ -9599,6 +9645,7 @@ const syncModule = { mount: __mount_syncModule };
 
 
 
+
 /**
  * Composición de módulos (equivalente a un docker-compose): cada entrada es un
  * contenedor autónomo que expone mount(). El orden importa solo para listeners
@@ -9664,7 +9711,11 @@ function boot() {
   window.setInterval(pruneExpiredPaymentHistories, 60 * 60 * 1000);
   // Cierres de caja: se guardan los últimos 4 meses (sin servidor, en este navegador).
   if (!backendEnabled() && pruneLedgers()) persistBusinessData();
-  window.setInterval(() => { if ((!backendEnabled() || syncRole() === 'admin') && pruneLedgers()) persistBusinessData(); }, 60 * 60 * 1000);
+  if (!backendEnabled() && applyCarriedBases()) persistBusinessData();
+  window.setInterval(() => {
+    if ((!backendEnabled() || syncRole() === 'admin') && pruneLedgers()) persistBusinessData();
+    if ((!backendEnabled() || syncRole()) && applyCarriedBases()) { persistBusinessData(); updateCashTotal(); }
+  }, 60 * 60 * 1000);
   if (!backendEnabled()) pruneOrphanRoutes();
   syncRouteSelect();
   state.activeSettlement = routeSettlements[routeSelect.value] || null;
@@ -9696,6 +9747,8 @@ function refreshFromServer() {
   if ((state.userRole === 'admin' || syncRole() === 'admin') && pruneOrphanRoutes()) persistBusinessData();
   // Solo el admin depura el libro (una sola fuente de cambios sobre las rutas).
   if ((state.userRole === 'admin' || syncRole() === 'admin') && pruneLedgers()) persistBusinessData();
+  // Día nuevo: el efectivo del último cierre pasa a ser la base de hoy (admin o trabajador, el primero que entre).
+  if (applyCarriedBases()) persistBusinessData();
   syncRouteSelect();
   state.activeSettlement = routeSettlements[routeSelect.value] || null;
   normalizeClientNotes();
