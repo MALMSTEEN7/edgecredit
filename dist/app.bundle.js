@@ -4252,6 +4252,7 @@ function __mount_deviceTrustModule() {
 
 
 
+
 // ── Bloqueo por intentos fallidos (por dispositivo) ──
 const LOCK_KEY = 'edgecredit-login-guard';
 
@@ -4319,6 +4320,8 @@ function logout() {
   paymentForm.reset();
   if (state.locationWatchId !== null && navigator.geolocation) navigator.geolocation.clearWatch(state.locationWatchId);
   state.locationWatchId = null;
+  shareLocationButton.classList.remove('is-sharing', 'is-searching');
+  shareLocationButton.querySelector('span').textContent = 'Compartir GPS';
   shareLocationButton.classList.remove('is-sharing');
   shareLocationButton.querySelector('span').textContent = 'Compartir GPS';
   closePayment();
@@ -4498,6 +4501,7 @@ function enterApp(account, isAdmin) {
       state.activeWorker = state.authenticatedWorker
         || personnel[0] || { id: 'worker-unassigned', name: 'Trabajador', route: '', openingAmount: 0 };
       state.workerRoute = routeKey(state.activeWorker.route);
+      resumeWorkerLocationSharing();
       loadWorkBase(state.activeWorker);
       updateCashTotal();
       document.querySelector('#nav-daily-route').hidden = false;
@@ -5220,6 +5224,11 @@ function renderPersonCards(clientId) {
 
 function __mount_clientDetailModule() {
   document.querySelector('#client-capture-location').addEventListener('click', captureClientLocation);
+  // La ubicación llegó tarde (reintento tras crear la cartulina): se actualiza la ficha abierta.
+  document.addEventListener('edgecredit:client-location', event => {
+    const client = clients[event.detail?.clientId];
+    if (client && state.activeClient === event.detail.clientId) { renderLocationLink(client); renderLocationPending(client); }
+  });
   onClientRenewed(clientId => openClient(clientId));
   document.querySelector('#person-cards-list').addEventListener('click', event => {
     const chip = event.target.closest('[data-person-card]');
@@ -6045,6 +6054,26 @@ function addNewClient(values, photoData = '', insurance, gps = null) {
   return clientId;
 }
 
+/**
+ * Sin datos móviles el GPS igual funciona, pero la primera ubicación puede tardar más que
+ * los 10 s de espera. Si no alcanzó, se sigue intentando una vez más (hasta 45 s) mientras
+ * el trabajador está en el domicilio; la cartulina ya quedó guardada y se envía al servidor
+ * cuando vuelva la conexión, con la ubicación si llegó a tiempo.
+ */
+const RETRY_LOCATION_MS = 45000;
+async function retryCreationLocation(clientId) {
+  const startedAt = Date.now();
+  const { location } = await locateDevice({ timeout: RETRY_LOCATION_MS });
+  const client = clients[clientId];
+  if (!location || !client || hasCoordinates(client.location)) return;
+  client.location = { ...location, source: 'alta', capturedAfterSeconds: Math.round((Date.now() - startedAt) / 1000) + 10 };
+  delete client.locationPending;
+  delete client.locationFailure;
+  persistBusinessData();
+  document.dispatchEvent(new CustomEvent('edgecredit:client-location', { detail: { clientId } }));
+  showToast(`Ubicación de ${client.name} guardada${isApproximateLocation(client.location) ? `, pero es aproximada (± ${client.location.accuracy} m)` : ` (± ${client.location.accuracy} m)`}.`);
+}
+
 // El detalle del cliente se registra aquí para abrir la cartulina nueva tras renovar
 // (evita una importación circular new-client ↔ client-detail).
 let onRenewed = null;
@@ -6123,6 +6152,7 @@ function __mount_newClientModule() {
       }
       const createdId = addNewClient(values, photoData, insurance, gps);
       if (sourceId && createdId && state.activeClient === sourceId) onRenewed?.(createdId);
+      if (createdId && gps && !gps.location && (gps.reason === 'timeout' || gps.reason === 'unavailable')) retryCreationLocation(createdId);
     } catch (error) { newClientError.textContent = error.message || 'No se pudo procesar la foto.'; }
     finally {
       creatingClient = false;
@@ -6494,12 +6524,18 @@ function __mount_operationsListModule() {
 
 
 
+/** Comprobante elegido: captura de la galería («Subir captura») o foto («Tomar foto»). */
+function chosenVoucher() {
+  return voucherFile.files?.[0] || document.querySelector('#voucher-camera').files?.[0] || null;
+}
+
 function openPayment() {
   if (state.currentView !== 'detalle-cliente') return;
   modal.hidden = false;
   document.body.classList.add('modal-open');
   amountInput.value = '';
   voucherFile.value = '';
+  document.querySelector('#voucher-camera').value = '';
   document.querySelector('#voucher-file-name').textContent = 'Ningún archivo seleccionado';
   document.querySelector('input[name="method"][value="cash"]').checked = true;
   updatePaymentMethod();
@@ -6515,7 +6551,6 @@ function updatePaymentMethod() {
   const isTransfer = document.querySelector('input[name="method"]:checked')?.value === 'transfer';
   voucherField.hidden = !isTransfer;
   voucherFile.required = false;
-  if (isTransfer) voucherFile.focus();
 }
 
 /** Registra los listeners del módulo. Se invoca una sola vez desde app.js. */
@@ -6546,14 +6581,14 @@ function __mount_paymentModule() {
     const paidDate = localDateISO();
     const cycleIndex = paymentCycleIndex(client, paidDate);
     let receiptData = '';
-    try { receiptData = paymentMethod === 'transfer' ? await compressClientPhoto(voucherFile.files?.[0]) : ''; }
+    try { receiptData = paymentMethod === 'transfer' ? await compressClientPhoto(chosenVoucher()) : ''; }
     catch (error) { showToast(error.message || 'No se pudo procesar el comprobante.'); return; }
     client.payments.unshift({
       date: paidDate,
       amount,
       method: paymentMethod,
       cycleIndex,
-      receiptName: paymentMethod === 'transfer' ? voucherFile.files[0]?.name || '' : '',
+      receiptName: paymentMethod === 'transfer' ? chosenVoucher()?.name || '' : '',
       receiptData
     });
     const payment = client.payments[0];
@@ -6598,7 +6633,7 @@ function __mount_paymentModule() {
       client.visitHistory = client.visitHistory.filter(item => item.date !== paidDate);
       client.visitHistory.push({ date: paidDate, outcome: 'paid' });
     }
-    const missingTransferEvidence = paymentMethod === 'transfer' && !voucherFile.files?.length;
+    const missingTransferEvidence = paymentMethod === 'transfer' && !chosenVoucher();
     updateCashTotal(); // caja del día (efectivo/bancos) y resumen del día
     persistBusinessData();
     closePayment();
@@ -6612,7 +6647,14 @@ function __mount_paymentModule() {
     if (returnHome) showView('inicio');
     showToast(missingTransferEvidence ? `Abono de ${formatMoney(amount)} registrado para ${client.name}. Falta adjuntar la evidencia.` : `Abono de ${formatMoney(amount)} registrado para ${client.name}.`);
   });
+  const voucherCamera = document.querySelector('#voucher-camera');
+  // Las dos formas son excluyentes: la última que se usó es el comprobante.
+  voucherCamera.addEventListener('change', () => {
+    if (voucherCamera.files?.length) voucherFile.value = '';
+    document.querySelector('#voucher-file-name').textContent = voucherCamera.files?.[0] ? `Foto tomada: ${voucherCamera.files[0].name}` : 'Ningún archivo seleccionado';
+  });
   voucherFile.addEventListener('change', () => {
+    if (voucherFile.files?.length) voucherCamera.value = '';
     document.querySelector('#voucher-file-name').textContent = voucherFile.files?.[0]?.name || 'Ningún archivo seleccionado';
   });
 }
@@ -6974,20 +7016,35 @@ function showWorkerLocation(worker, location, source) {
   });
 }
 
-function startWorkerLocationSharing() {
-  if (!navigator.geolocation) {
-    showToast('Este dispositivo no ofrece geolocalización del navegador.');
-    return;
-  }
-  if (state.locationWatchId !== null) {
-    navigator.geolocation.clearWatch(state.locationWatchId);
-    state.locationWatchId = null;
-    shareLocationButton.classList.remove('is-sharing');
-    shareLocationButton.querySelector('span').textContent = 'Compartir GPS';
-    showToast('Se detuvo el envío de ubicación.');
-    return;
-  }
-  shareLocationButton.querySelector('span').textContent = 'Solicitando GPS…';
+// El trabajador decide una sola vez: si activa «Compartir GPS» queda activado en este
+// celular (también al recargar o volver a entrar) hasta que él mismo lo apague.
+const gpsShareKey = () => `edgecredit-gps-share-${state.activeWorker?.id || 'trabajador'}`;
+
+function gpsSharePreference() {
+  try { return localStorage.getItem(gpsShareKey()); } catch { return null; }
+}
+
+function setGpsSharePreference(value) {
+  try { localStorage.setItem(gpsShareKey(), value); } catch { /* preferencia opcional */ }
+}
+
+function setShareButton(mode) {
+  shareLocationButton.classList.toggle('is-sharing', mode === 'active');
+  shareLocationButton.classList.toggle('is-searching', mode === 'searching');
+  const label = { active: 'GPS activo', searching: 'Buscando GPS…', off: 'Compartir GPS' }[mode];
+  shareLocationButton.querySelector('span').textContent = label;
+  shareLocationButton.title = label; // en el celular solo se ve el ícono
+}
+
+function stopWatch() {
+  if (state.locationWatchId !== null && navigator.geolocation) navigator.geolocation.clearWatch(state.locationWatchId);
+  state.locationWatchId = null;
+  setShareButton('off');
+}
+
+function startWatch() {
+  if (!navigator.geolocation || state.locationWatchId !== null) return;
+  setShareButton('searching');
   state.locationWatchId = navigator.geolocation.watchPosition(position => {
     const location = {
       latitude: position.coords.latitude,
@@ -6995,8 +7052,7 @@ function startWorkerLocationSharing() {
       accuracy: position.coords.accuracy,
       updated_at: new Date(position.timestamp || Date.now()).toISOString()
     };
-    shareLocationButton.classList.add('is-sharing');
-    shareLocationButton.querySelector('span').textContent = 'GPS activo';
+    setShareButton('active');
     // Se guarda como máximo cada 15 s para no saturar la sincronización.
     if (Date.now() - state.lastLocationWrite > 15000) {
       state.lastLocationWrite = Date.now();
@@ -7004,17 +7060,60 @@ function startWorkerLocationSharing() {
       persistBusinessData();
     }
   }, error => {
-    navigator.geolocation.clearWatch(state.locationWatchId);
-    state.locationWatchId = null;
-    shareLocationButton.classList.remove('is-sharing');
-    shareLocationButton.querySelector('span').textContent = 'Compartir GPS';
-    showToast(error.code === error.PERMISSION_DENIED ? 'Activa el permiso de ubicación para compartir el GPS.' : 'No se pudo obtener la ubicación del dispositivo.');
-  }, { enableHighAccuracy: true, maximumAge: 5000, timeout: 15000 });
+    if (error.code === error.PERMISSION_DENIED) {
+      stopWatch();
+      showToast('El permiso de ubicación está negado. Actívalo en los ajustes del navegador (candado junto a la dirección) para compartir el GPS.');
+      return;
+    }
+    // Sin señal o tarda en responder: no se apaga, se sigue buscando.
+    setShareButton('searching');
+  }, { enableHighAccuracy: true, maximumAge: 5000, timeout: 30000 });
+}
+
+function toggleWorkerLocationSharing() {
+  if (!navigator.geolocation) {
+    showToast('Este dispositivo no ofrece geolocalización del navegador.');
+    return;
+  }
+  if (state.locationWatchId === null) {
+    setGpsSharePreference('on');
+    startWatch();
+    return;
+  }
+  openCustomModal({
+    title: '¿Dejar de compartir el GPS?',
+    description: 'El administrador dejará de ver tu ubicación en el mapa hasta que lo vuelvas a activar.',
+    submitLabel: 'Dejar de compartir',
+    onSubmit: () => {
+      setGpsSharePreference('off');
+      stopWatch();
+      showToast('Se detuvo el envío de ubicación.');
+    }
+  });
+}
+
+/**
+ * Al entrar el trabajador: si ya lo había activado (o el permiso ya está concedido y nunca
+ * lo apagó), el GPS vuelve a compartirse solo, sin preguntar otra vez.
+ */
+async function resumeWorkerLocationSharing() {
+  if (!navigator.geolocation || state.userRole !== 'worker') return;
+  const preference = gpsSharePreference();
+  if (preference === 'off') { stopWatch(); return; }
+  let granted = preference === 'on';
+  if (!granted) {
+    try { granted = (await navigator.permissions?.query({ name: 'geolocation' }))?.state === 'granted'; } catch { /* sin Permissions API */ }
+  }
+  if (granted) { setGpsSharePreference('on'); startWatch(); } else setShareButton('off');
 }
 
 /** Registra los listeners del módulo. Se invoca una sola vez desde app.js. */
 function __mount_locationModule() {
-  shareLocationButton.addEventListener('click', startWorkerLocationSharing);
+  shareLocationButton.addEventListener('click', toggleWorkerLocationSharing);
+  // El celular pausa el GPS con la app en segundo plano: al volver se reanuda si está activado.
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && state.userRole === 'worker' && !shareLocationButton.hidden && gpsSharePreference() === 'on') startWatch();
+  });
 }
 
 // ── js/shared/crypto.js
@@ -7489,8 +7588,9 @@ function __mount_imageViewerModule() {
  * Los campos que se crean después (modales, tablas) se preparan solos.
  *
  * Con `data-money-thousands` (abonos, gastos y seguros que escribe el trabajador en la
- * calle) un número menor que 1.000 se entiende en miles: 20 → 20.000, «20,5» o «20.5» →
- * 20.500. Debajo del campo se ve el valor real («= $ 20.000») y `value` devuelve ese valor.
+ * calle) TODO lo que se escribe está en miles: 20 → 20.000, «20,5» o «20.5» → 20.500,
+ * 1.000 → 1.000.000, 10.000 → 10.000.000. Debajo del campo se ve el valor real
+ * («= $ 20.000») y `value` devuelve ese valor en pesos.
  */
 
 
@@ -7504,20 +7604,35 @@ const onlyDigits = text => {
 const withDots = digits => (digits && digits !== '-' ? Number(digits).toLocaleString('es-CO', { maximumFractionDigits: 0 }) : digits);
 
 /**
- * Monto escrito «en miles» → pesos (o null si no hay número).
- * «20» → 20000 · «20,5» / «20.5» → 20500 · «1.500» / «1500» → 1500 · «1.000.000» → 1000000.
- * Con un solo separador y hasta 3 cifras después, «20.500» da 20.500 leído de las dos
- * formas (20,5 mil o 20 mil 500), así que no hay ambigüedad con los puntos de miles.
+ * Monto escrito en miles → pesos (o null si no hay número).
+ * La coma siempre es decimal; el punto es decimal solo si lo siguen 1 o 2 cifras al final
+ * («20.5»); si no, separa miles («1.000»). Se admiten hasta 3 decimales (= pesos exactos).
+ *   «20» → 20.000 · «20,5» / «20.5» → 20.500 · «1.000» → 1.000.000 · «10.000» → 10.000.000
+ *   «1.000,5» → 1.000.500 · «0,75» → 750
  */
 function parseThousandsAmount(text) {
   const raw = String(text ?? '').replace(/[\s$]/g, '');
-  if (!raw) return null;
-  const decimal = raw.match(/^(\d{1,3})[.,](\d{1,3})$/);
-  if (decimal) return Math.round(Number(`${decimal[1]}.${decimal[2]}`) * 1000);
-  const digits = raw.replace(/\D/g, '');
-  if (!digits) return null;
-  const amount = Number(digits);
-  return amount < 1000 ? amount * 1000 : amount;
+  let whole = raw;
+  let fraction = '';
+  const comma = raw.lastIndexOf(',');
+  if (comma >= 0) { whole = raw.slice(0, comma); fraction = raw.slice(comma + 1); }
+  else {
+    const dotDecimal = raw.match(/^(.*)\.(\d{1,2})$/);
+    if (dotDecimal) [, whole, fraction] = dotDecimal;
+  }
+  const wholeDigits = whole.replace(/\D/g, '');
+  const fractionDigits = fraction.replace(/\D/g, '').slice(0, 3);
+  if (!wholeDigits && !fractionDigits) return null;
+  return Number(wholeDigits || 0) * 1000 + Math.round(Number(`0.${fractionDigits || 0}`) * 1000);
+}
+
+/** Pesos → como se escriben en miles: 20000 → «20», 20500 → «20,5», 1000000 → «1.000». */
+function thousandsText(pesos) {
+  const amount = Math.round(Number(pesos));
+  if (!Number.isFinite(amount) || String(pesos ?? '').trim() === '') return '';
+  const whole = withDots(String(Math.trunc(amount / 1000)));
+  const rest = Math.abs(amount % 1000);
+  return rest ? `${whole},${String(rest).padStart(3, '0').replace(/0+$/, '')}` : whole;
 }
 
 function applyMinValidity(input) {
@@ -7543,35 +7658,81 @@ function thousandsHint(input) {
 function updateThousandsHint(input) {
   const amount = parseThousandsAmount(nativeValue.get.call(input));
   const hint = thousandsHint(input);
-  hint.textContent = amount === null ? 'En miles: 20 = $ 20.000 · 20,5 = $ 20.500' : `= ${formatMoney(amount)}`;
+  hint.textContent = amount === null ? 'En miles: 20 = $ 20.000 · 20,5 = $ 20.500 · 1.000 = $ 1.000.000' : `= ${formatMoney(amount)}`;
   hint.classList.toggle('has-amount', amount !== null);
 }
 
-/** Campo en miles: se escribe libre (cifras y una coma o punto) y se lee en pesos. */
+/**
+ * Texto del campo en miles con la convención colombiana: puntos de miles y coma decimal
+ * (hasta 3 decimales). «10000» → «10.000», «20,5» → «20,5».
+ */
+function thousandsDisplay(text) {
+  const [whole, ...rest] = text.replace(/[^\d,]/g, '').split(',');
+  const wholeDigits = whole.replace(/^0+(?=\d)/, '');
+  if (!rest.length) return withDots(wholeDigits);
+  return `${withDots(wholeDigits) || '0'},${rest.join('').slice(0, 3)}`;
+}
+
+/**
+ * Campo en miles: se escribe en miles y se lee en pesos.
+ *  - Si solo se escriben cifras, la app pone los puntos de miles («10000» → «10.000») y los
+ *    rehace al borrar («10.000» ⌫ → «1.000»).
+ *  - Un punto que escribe el trabajador se respeta y se lee con la regla de
+ *    parseThousandsAmount: «20.5» = 20,5 mil y «1.000» = mil (mil miles).
+ *  - La coma siempre es decimal.
+ *  - Un monto pegado con «$» ya está en pesos y se toma tal cual.
+ */
 function enhanceThousandsInput(input) {
-  const current = onlyDigits(nativeValue.get.call(input).split(/[.,](?=\d{1,2}$)/)[0]);
+  const current = nativeValue.get.call(input);
   if (input.min !== '' && input.dataset.moneyMin === undefined) input.dataset.moneyMin = input.min;
   input.type = 'text';
   input.inputMode = 'decimal';
   input.autocomplete = 'off';
   input.removeAttribute('min');
   input.removeAttribute('step');
+  input._typedDot = false; // ¿el trabajador escribió un punto? (si no, los puntos son de la app)
   Object.defineProperty(input, 'value', {
     configurable: true,
     get() { const amount = parseThousandsAmount(nativeValue.get.call(this)); return amount === null ? '' : String(amount); },
     set(value) {
-      // El código asigna pesos (p. ej. el seguro general): se muestran con puntos, que se leen igual.
-      nativeValue.set.call(this, withDots(onlyDigits(String(value ?? '').split(/[.,](?=\d{1,2}$)/)[0])));
+      // El código asigna pesos (p. ej. el seguro general): se muestran en miles (50000 → «50»).
+      this._typedDot = false;
+      nativeValue.set.call(this, thousandsText(value));
       updateThousandsHint(this);
       applyMinValidity(this);
     },
   });
-  nativeValue.set.call(input, withDots(current));
+  nativeValue.set.call(input, current ? thousandsText(onlyDigits(current)) : '');
   updateThousandsHint(input);
-  input.addEventListener('input', () => {
+  input.addEventListener('input', event => {
     const text = nativeValue.get.call(input);
-    const clean = text.replace(/[^\d.,]/g, '');
-    if (clean !== text) nativeValue.set.call(input, clean);
+    const caret = input.selectionStart ?? text.length;
+    let display;
+    let position;
+    if (['insertFromPaste', 'insertFromDrop', 'insertReplacementText'].includes(event.inputType)) {
+      const pesos = text.includes('$') ? Number(onlyDigits(text.split(/,(?=\d{1,2}$)/)[0])) : parseThousandsAmount(text);
+      input._typedDot = false;
+      display = pesos === null || !Number.isFinite(pesos) || text.trim() === '' ? '' : thousandsText(pesos);
+      position = display.length;
+    } else {
+      if (event.data === '.') input._typedDot = true;
+      let clean = text.replace(/[^\d.,]/g, '');
+      const firstComma = clean.indexOf(',');
+      if (firstComma >= 0) clean = clean.slice(0, firstComma + 1) + clean.slice(firstComma + 1).replace(/,/g, '');
+      if (!clean.includes('.')) input._typedDot = false;
+      display = input._typedDot ? clean : thousandsDisplay(clean);
+      const digitsBefore = onlyDigits(text.slice(0, caret)).length;
+      const afterComma = text.slice(0, caret).includes(',');
+      position = 0;
+      for (let seen = 0; position < display.length && seen < digitsBefore; position += 1) if (/\d/.test(display[position])) seen += 1;
+      const comma = display.indexOf(',');
+      if (afterComma && comma >= 0 && position <= comma) position = comma + 1;
+      if (event.data === '.' && input._typedDot) position = caret;
+    }
+    if (display !== text) {
+      nativeValue.set.call(input, display);
+      try { input.setSelectionRange(position, position); } catch { /* algunos tipos no admiten selección */ }
+    }
     updateThousandsHint(input);
     applyMinValidity(input);
   });

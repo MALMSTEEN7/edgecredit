@@ -34,7 +34,7 @@
   <link rel="icon" href="icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="icon-192.png">
   <meta name="apple-mobile-web-app-capable" content="yes">
-  <link rel="stylesheet" id="app-styles" href="dist/styles.bundle.css?v=466389abd1">
+  <link rel="stylesheet" id="app-styles" href="dist/styles.bundle.css?v=1785c51f24">
 </head>
 <body class="login-active">
   <section class="login-gateway" id="login-gateway" aria-labelledby="login-title">
@@ -357,7 +357,7 @@
       <form id="payment-form" novalidate>
         <label class="amount-label" for="payment-amount">¿Cuánto recibiste?</label><div class="amount-input-wrap"><span>$</span><input data-money data-money-thousands id="payment-amount" name="amount" type="number" inputmode="decimal" min="1" step="1" placeholder="0" required></div>
         <fieldset class="payment-method"><legend>Método de pago</legend><div class="method-options"><label class="method-option"><input type="radio" name="method" value="cash" checked><span class="method-card"><span aria-hidden="true">▣</span><strong>Efectivo</strong></span></label><label class="method-option"><input type="radio" name="method" value="transfer"><span class="method-card"><span aria-hidden="true">⇄</span><strong>Transf</strong></span></label></div></fieldset>
-        <div class="voucher-field" id="voucher-field" hidden><label for="voucher-file">Fotografía del comprobante (opcional)</label><div class="file-picker-control"><input id="voucher-file" class="photo-file-input" type="file" accept="image/*" capture="environment" aria-label="Seleccionar comprobante de transferencia"><span class="file-picker-button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h3l1.5-2h7L17 7h3v12H4z"/><circle cx="12" cy="13" r="3.5"/></svg><span>Adjuntar comprobante</span></span><span class="file-picker-name" id="voucher-file-name" aria-live="polite">Ningún archivo seleccionado</span></div><small>Si no la adjuntas, el abono quedará marcado como pendiente de evidencia.</small></div>
+        <div class="voucher-field" id="voucher-field" hidden><span class="voucher-label" id="voucher-label">Comprobante de la transferencia (opcional)</span><div class="voucher-sources" role="group" aria-labelledby="voucher-label"><label class="file-picker-control voucher-source"><input id="voucher-file" class="photo-file-input" type="file" accept="image/*" aria-label="Subir captura o imagen del comprobante desde la galería"><span class="file-picker-button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v14H4z"/><path d="m4 16 4.5-4.5 3.5 3.5 2.5-2.5L20 18"/><circle cx="15.5" cy="9" r="1.5"/></svg><span>Subir captura</span></span></label><label class="file-picker-control voucher-source"><input id="voucher-camera" class="photo-file-input" type="file" accept="image/*" capture="environment" aria-label="Tomar foto del comprobante con la cámara"><span class="file-picker-button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h3l1.5-2h7L17 7h3v12H4z"/><circle cx="12" cy="13" r="3.5"/></svg><span>Tomar foto</span></span></label></div><span class="file-picker-name voucher-file-name" id="voucher-file-name" aria-live="polite">Ningún archivo seleccionado</span><small>Si no la adjuntas, el abono quedará marcado como pendiente de evidencia.</small></div>
         <button class="primary-button submit-payment" type="submit">Confirmar pago <span aria-hidden="true">→</span></button>
       </form>
     </section>
@@ -465,7 +465,7 @@
     // al cambiar el sello, el navegador descarga el JS/CSS nuevo en vez de usar su caché.
     // Para desarrollar con los módulos sueltos, abre index.html?dev desde un servidor local.
     (() => {
-      const APP_VERSION = '466389abd1';
+      const APP_VERSION = '1785c51f24';
       const dev = new URLSearchParams(location.search).has('dev') && location.protocol !== 'file:';
       if (dev) {
         document.getElementById('app-styles').href = 'styles.css';

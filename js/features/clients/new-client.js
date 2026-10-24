@@ -358,6 +358,26 @@ function addNewClient(values, photoData = '', insurance, gps = null) {
   return clientId;
 }
 
+/**
+ * Sin datos móviles el GPS igual funciona, pero la primera ubicación puede tardar más que
+ * los 10 s de espera. Si no alcanzó, se sigue intentando una vez más (hasta 45 s) mientras
+ * el trabajador está en el domicilio; la cartulina ya quedó guardada y se envía al servidor
+ * cuando vuelva la conexión, con la ubicación si llegó a tiempo.
+ */
+const RETRY_LOCATION_MS = 45000;
+async function retryCreationLocation(clientId) {
+  const startedAt = Date.now();
+  const { location } = await locateDevice({ timeout: RETRY_LOCATION_MS });
+  const client = clients[clientId];
+  if (!location || !client || hasCoordinates(client.location)) return;
+  client.location = { ...location, source: 'alta', capturedAfterSeconds: Math.round((Date.now() - startedAt) / 1000) + 10 };
+  delete client.locationPending;
+  delete client.locationFailure;
+  persistBusinessData();
+  document.dispatchEvent(new CustomEvent('edgecredit:client-location', { detail: { clientId } }));
+  showToast(`Ubicación de ${client.name} guardada${isApproximateLocation(client.location) ? `, pero es aproximada (± ${client.location.accuracy} m)` : ` (± ${client.location.accuracy} m)`}.`);
+}
+
 // El detalle del cliente se registra aquí para abrir la cartulina nueva tras renovar
 // (evita una importación circular new-client ↔ client-detail).
 let onRenewed = null;
@@ -436,6 +456,7 @@ export function mount() {
       }
       const createdId = addNewClient(values, photoData, insurance, gps);
       if (sourceId && createdId && state.activeClient === sourceId) onRenewed?.(createdId);
+      if (createdId && gps && !gps.location && (gps.reason === 'timeout' || gps.reason === 'unavailable')) retryCreationLocation(createdId);
     } catch (error) { newClientError.textContent = error.message || 'No se pudo procesar la foto.'; }
     finally {
       creatingClient = false;

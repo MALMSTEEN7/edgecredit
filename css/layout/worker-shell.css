@@ -530,6 +530,21 @@
   color: var(--success-color);
 }
 
+.share-location-button.is-searching {
+  border-color: rgba(249,168,37,.45);
+  color: #F9A825;
+}
+
+@media (prefers-reduced-motion:no-preference) {
+  .share-location-button.is-searching {
+    animation: gps-searching 1.6s ease-in-out infinite;
+  }
+}
+
+@keyframes gps-searching {
+  50% { opacity: .55; }
+}
+
 .share-location-button[hidden] {
   display: none!important;
 }

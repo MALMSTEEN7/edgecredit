@@ -31,6 +31,7 @@ import { routeKey } from '../../shared/format.js';
 import { closeCustomModal } from '../../ui/custom-modal.js';
 import { showView } from '../../ui/navigation.js';
 import { collapseHomePanels } from '../worker/home.js';
+import { resumeWorkerLocationSharing } from '../worker/location.js';
 
 // ── Bloqueo por intentos fallidos (por dispositivo) ──
 const LOCK_KEY = 'edgecredit-login-guard';
@@ -99,6 +100,8 @@ function logout() {
   paymentForm.reset();
   if (state.locationWatchId !== null && navigator.geolocation) navigator.geolocation.clearWatch(state.locationWatchId);
   state.locationWatchId = null;
+  shareLocationButton.classList.remove('is-sharing', 'is-searching');
+  shareLocationButton.querySelector('span').textContent = 'Compartir GPS';
   shareLocationButton.classList.remove('is-sharing');
   shareLocationButton.querySelector('span').textContent = 'Compartir GPS';
   closePayment();
@@ -278,6 +281,7 @@ function enterApp(account, isAdmin) {
       state.activeWorker = state.authenticatedWorker
         || personnel[0] || { id: 'worker-unassigned', name: 'Trabajador', route: '', openingAmount: 0 };
       state.workerRoute = routeKey(state.activeWorker.route);
+      resumeWorkerLocationSharing();
       loadWorkBase(state.activeWorker);
       updateCashTotal();
       document.querySelector('#nav-daily-route').hidden = false;

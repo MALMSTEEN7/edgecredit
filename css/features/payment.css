@@ -211,3 +211,50 @@
 .gps-confirmation[data-tone="off"] {
   color: #F9A825;
 }
+
+/* Comprobante: «Subir captura» (galería) o «Tomar foto» (cámara). */
+.voucher-label {
+  display: block;
+  margin-bottom: 8px;
+  color: #BDBDBD;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.voucher-sources {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+/* Cada opción es un solo botón: la etiqueta entera abre la galería o la cámara. */
+.voucher-sources .voucher-source {
+  min-height: 50px;
+  justify-content: center;
+  padding: 0;
+  border-color: color-mix(in srgb, var(--primary) 45%, var(--line));
+  background: linear-gradient(135deg, color-mix(in srgb, var(--primary) 18%, var(--card)), var(--card));
+  cursor: pointer;
+}
+
+.voucher-sources .voucher-source .file-picker-button {
+  min-width: 0;
+  border: 0;
+  background: none;
+}
+
+.voucher-sources .voucher-source span {
+  color: var(--text);
+}
+
+.voucher-sources .voucher-source:active {
+  transform: scale(.98);
+}
+
+.voucher-file-name {
+  display: block;
+  margin-top: 7px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

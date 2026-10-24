@@ -18,12 +18,18 @@ import { showToast } from '../../ui/toast.js';
 import { showView } from '../../ui/navigation.js';
 import { closeVisit } from '../daily-route/daily-route.js';
 
+/** Comprobante elegido: captura de la galería («Subir captura») o foto («Tomar foto»). */
+function chosenVoucher() {
+  return voucherFile.files?.[0] || document.querySelector('#voucher-camera').files?.[0] || null;
+}
+
 export function openPayment() {
   if (state.currentView !== 'detalle-cliente') return;
   modal.hidden = false;
   document.body.classList.add('modal-open');
   amountInput.value = '';
   voucherFile.value = '';
+  document.querySelector('#voucher-camera').value = '';
   document.querySelector('#voucher-file-name').textContent = 'Ningún archivo seleccionado';
   document.querySelector('input[name="method"][value="cash"]').checked = true;
   updatePaymentMethod();
@@ -39,7 +45,6 @@ function updatePaymentMethod() {
   const isTransfer = document.querySelector('input[name="method"]:checked')?.value === 'transfer';
   voucherField.hidden = !isTransfer;
   voucherFile.required = false;
-  if (isTransfer) voucherFile.focus();
 }
 
 /** Registra los listeners del módulo. Se invoca una sola vez desde app.js. */
@@ -70,14 +75,14 @@ export function mount() {
     const paidDate = localDateISO();
     const cycleIndex = paymentCycleIndex(client, paidDate);
     let receiptData = '';
-    try { receiptData = paymentMethod === 'transfer' ? await compressClientPhoto(voucherFile.files?.[0]) : ''; }
+    try { receiptData = paymentMethod === 'transfer' ? await compressClientPhoto(chosenVoucher()) : ''; }
     catch (error) { showToast(error.message || 'No se pudo procesar el comprobante.'); return; }
     client.payments.unshift({
       date: paidDate,
       amount,
       method: paymentMethod,
       cycleIndex,
-      receiptName: paymentMethod === 'transfer' ? voucherFile.files[0]?.name || '' : '',
+      receiptName: paymentMethod === 'transfer' ? chosenVoucher()?.name || '' : '',
       receiptData
     });
     const payment = client.payments[0];
@@ -122,7 +127,7 @@ export function mount() {
       client.visitHistory = client.visitHistory.filter(item => item.date !== paidDate);
       client.visitHistory.push({ date: paidDate, outcome: 'paid' });
     }
-    const missingTransferEvidence = paymentMethod === 'transfer' && !voucherFile.files?.length;
+    const missingTransferEvidence = paymentMethod === 'transfer' && !chosenVoucher();
     updateCashTotal(); // caja del día (efectivo/bancos) y resumen del día
     persistBusinessData();
     closePayment();
@@ -136,7 +141,14 @@ export function mount() {
     if (returnHome) showView('inicio');
     showToast(missingTransferEvidence ? `Abono de ${formatMoney(amount)} registrado para ${client.name}. Falta adjuntar la evidencia.` : `Abono de ${formatMoney(amount)} registrado para ${client.name}.`);
   });
+  const voucherCamera = document.querySelector('#voucher-camera');
+  // Las dos formas son excluyentes: la última que se usó es el comprobante.
+  voucherCamera.addEventListener('change', () => {
+    if (voucherCamera.files?.length) voucherFile.value = '';
+    document.querySelector('#voucher-file-name').textContent = voucherCamera.files?.[0] ? `Foto tomada: ${voucherCamera.files[0].name}` : 'Ningún archivo seleccionado';
+  });
   voucherFile.addEventListener('change', () => {
+    if (voucherFile.files?.length) voucherCamera.value = '';
     document.querySelector('#voucher-file-name').textContent = voucherFile.files?.[0]?.name || 'Ningún archivo seleccionado';
   });
 }

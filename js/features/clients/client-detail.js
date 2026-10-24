@@ -438,6 +438,11 @@ function renderPersonCards(clientId) {
 
 export function mount() {
   document.querySelector('#client-capture-location').addEventListener('click', captureClientLocation);
+  // La ubicación llegó tarde (reintento tras crear la cartulina): se actualiza la ficha abierta.
+  document.addEventListener('edgecredit:client-location', event => {
+    const client = clients[event.detail?.clientId];
+    if (client && state.activeClient === event.detail.clientId) { renderLocationLink(client); renderLocationPending(client); }
+  });
   onClientRenewed(clientId => openClient(clientId));
   document.querySelector('#person-cards-list').addEventListener('click', event => {
     const chip = event.target.closest('[data-person-card]');
