@@ -1196,7 +1196,10 @@ function liveInsuranceEntries(clients, routeId, dateISO, sinceTs = 0) {
  * - El día de hoy, mientras no se cierre, se lee de los valores vivos de la ruta.
  * - `route.cashBox` es la CAJA del cobro: el monto de apertura (dinero disponible para
  *   prestar). No se reinicia nunca; cada día suma el cobro y resta préstamos, gastos,
- *   otros gastos y salidas de caja.
+ *   otros gastos y salidas de caja. No se edita desde la app: un cobro sin apertura empieza
+ *   en $0 con su primer cierre.
+ * - Solo se guardan los cierres de los últimos LEDGER_MONTHS_KEPT meses (pruneOldLedger):
+ *   lo que movieron los días borrados queda sumado en la apertura, así la caja no cambia.
  * - `route.insuranceCuts` registra cada «Cuadrar seguros».
  * - Días traídos del sistema anterior (Excel): `cashAdjustment` es el ajuste de caja de ese
  *   día (descuadre entregado de más o de menos, o un ingreso de capital) para que la caja
@@ -1252,16 +1255,45 @@ function cashBoxMovement(record) {
 function cashBoxAt(route, dateISO, liveInsurance = 0) {
   ensureLedger(route);
   const { opening, openingDate } = route.cashBox;
-  if (!openingDate || dateISO < openingDate) return null;
+  if (openingDate && dateISO < openingDate) return null; // sin apertura: desde el primer cierre, en $0
   const today = localDateISO();
   let total = Number(opening || 0);
   Object.keys(route.ledger).forEach(date => {
-    if (date < openingDate || date > dateISO) return;
+    if ((openingDate && date < openingDate) || date > dateISO) return;
     if (date === today && !closedToday(route)) return; // hoy se suma en vivo abajo
     total += cashBoxMovement(dayRecord(route, date));
   });
-  if (today >= openingDate && today <= dateISO && !closedToday(route)) total += cashBoxMovement(dayRecord(route, today, liveInsurance));
+  if ((!openingDate || today >= openingDate) && today <= dateISO && !closedToday(route)) total += cashBoxMovement(dayRecord(route, today, liveInsurance));
   return total;
+}
+
+const LEDGER_MONTHS_KEPT = 4;
+
+/** Primer día que se conserva: el mismo día de hace 4 meses (24-oct → 24-jun). */
+function ledgerCutoff(today = localDateISO()) {
+  const [year, month, day] = today.split('-').map(Number);
+  const lastDay = new Date(year, month - 1 - LEDGER_MONTHS_KEPT + 1, 0).getDate();
+  return localDateISO(new Date(year, month - 1 - LEDGER_MONTHS_KEPT, Math.min(day, lastDay)));
+}
+
+/**
+ * Borra los cierres de más de 4 meses. Lo que movieron esos días pasa a la apertura y la
+ * apertura se corre a la fecha de corte: la caja de hoy (y la de los días que quedan) no
+ * cambia. Devuelve true si borró algo.
+ */
+function pruneOldLedger(route, today = localDateISO()) {
+  ensureLedger(route);
+  const cutoff = ledgerCutoff(today);
+  const old = Object.keys(route.ledger).filter(date => date < cutoff).sort();
+  if (!old.length) return false;
+  const { openingDate } = route.cashBox;
+  if (!openingDate || openingDate < cutoff) {
+    const opening = old.filter(date => !openingDate || date >= openingDate)
+      .reduce((total, date) => total + cashBoxMovement(dayRecord(route, date)), Number(openingDate ? route.cashBox.opening || 0 : 0));
+    route.cashBox = { ...route.cashBox, opening, openingDate: cutoff, prunedBefore: cutoff };
+  }
+  old.forEach(date => { delete route.ledger[date]; });
+  return true;
 }
 
 /** Guarda el día al cerrar el cobro (antes de reiniciar los valores vivos). */
@@ -3928,27 +3960,10 @@ function renderCashBox(route) {
   const current = cashBoxAt(route, localDateISO(), liveInsurance(routeId, route).total);
   rq('#cashbox-current').textContent = current === null ? '—' : formatMoney(current);
   rq('#cashbox-current').classList.toggle('is-negative', Number(current) < 0);
-  rq('#cashbox-opening').textContent = openingDate
-    ? `Apertura: ${formatMoney(opening)} desde el ${new Date(`${openingDate}T12:00:00`).toLocaleDateString('es-CO')}`
-    : 'Define el monto de apertura para empezar a llevar la caja.';
-}
-
-function editCashBox(route) {
-  openCustomModal({
-    title: 'Monto de apertura de la caja',
-    description: `Dinero disponible para prestar en el cobro ${route.name}. Desde esa fecha la caja suma el cobro y resta préstamos, gastos, otros gastos y salidas de caja.`,
-    fields: [
-      { name: 'opening', label: 'Monto de apertura ($)', type: 'number', min: 0, step: 1, value: route.cashBox.opening || '', required: true },
-      { name: 'openingDate', label: 'Fecha de apertura', type: 'date', value: route.cashBox.openingDate || localDateISO(), required: true },
-    ],
-    submitLabel: 'Guardar apertura',
-    onSubmit: values => {
-      route.cashBox = { opening: Math.max(0, Math.round(Number(values.opening) || 0)), openingDate: values.openingDate };
-      persistBusinessData();
-      renderRouteReports(route);
-      showToast(`Caja de ${route.name}: apertura de ${formatMoney(route.cashBox.opening)} guardada.`);
-    },
-  });
+  const since = openingDate ? new Date(`${openingDate}T12:00:00`).toLocaleDateString('es-CO') : '';
+  rq('#cashbox-opening').textContent = !openingDate ? 'Empezó en $ 0 con el primer cierre del cobro.'
+    : route.cashBox.prunedBefore === openingDate ? `Viene de ${formatMoney(opening)} el ${since} (se guardan los cierres de los últimos ${LEDGER_MONTHS_KEPT} meses).`
+    : `Apertura: ${formatMoney(opening)} desde el ${since}`;
 }
 
 // ── Cierre semanal ──
@@ -4266,7 +4281,6 @@ function __mount_reportsModule() {
     const label = COLUMNS.find(column => column.key === input.dataset.field).label;
     showToast(`${label} del ${new Date(`${input.dataset.date}T12:00:00`).toLocaleDateString('es-CO')} actualizado: ${formatMoney(Number(input.value) || 0)}.`);
   });
-  rq('#cashbox-edit').addEventListener('click', () => editCashBox(state.activeSettlement));
   rq('#insurance-cut-button').addEventListener('click', () => cutInsuranceNow(state.activeSettlement));
   rq('#insurance-undo-button').addEventListener('click', () => undoInsuranceCut(state.activeSettlement));
   document.querySelectorAll('[data-report-tab]').forEach(button => button.addEventListener('click', () => {
@@ -9590,6 +9604,9 @@ function boot() {
   pruneExpiredPaymentHistories();
   persistBusinessData();
   window.setInterval(pruneExpiredPaymentHistories, 60 * 60 * 1000);
+  // Cierres de caja: se guardan los últimos 4 meses (sin servidor, en este navegador).
+  if (!backendEnabled() && pruneLedgers()) persistBusinessData();
+  window.setInterval(() => { if ((!backendEnabled() || syncRole() === 'admin') && pruneLedgers()) persistBusinessData(); }, 60 * 60 * 1000);
   if (!backendEnabled()) pruneOrphanRoutes();
   syncRouteSelect();
   state.activeSettlement = routeSettlements[routeSelect.value] || null;
@@ -9608,12 +9625,19 @@ function boot() {
   updateNetworkStatus();
 }
 
+/** Borra los cierres de caja de más de 4 meses en todos los cobros. ¿Borró algo? */
+function pruneLedgers() {
+  return Object.values(routeSettlements).map(route => pruneOldLedger(route)).some(Boolean);
+}
+
 /** Repinta todo tras cargar o recibir datos del servidor. */
 function refreshFromServer() {
   personnel.forEach(worker => { if (worker.route) ensureRoute(worker.route); });
   Object.values(routeSettlements).forEach(ensureLedger);
   // El admin quita las rutas sin trabajador ni clientes (la sincronización las borra del servidor).
   if ((state.userRole === 'admin' || syncRole() === 'admin') && pruneOrphanRoutes()) persistBusinessData();
+  // Solo el admin depura el libro (una sola fuente de cambios sobre las rutas).
+  if ((state.userRole === 'admin' || syncRole() === 'admin') && pruneLedgers()) persistBusinessData();
   syncRouteSelect();
   state.activeSettlement = routeSettlements[routeSelect.value] || null;
   normalizeClientNotes();

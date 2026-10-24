@@ -34,7 +34,7 @@
   <link rel="icon" href="icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="icon-192.png">
   <meta name="apple-mobile-web-app-capable" content="yes">
-  <link rel="stylesheet" id="app-styles" href="dist/styles.bundle.css?v=5c98d702bc">
+  <link rel="stylesheet" id="app-styles" href="dist/styles.bundle.css?v=bc03dc15d5">
 </head>
 <body class="login-active">
   <section class="login-gateway" id="login-gateway" aria-labelledby="login-title">
@@ -302,7 +302,7 @@
           </div>
           <div class="cashbox-card" id="cashbox-card">
             <div class="cashbox-main"><span>Caja del cobro</span><strong id="cashbox-current">—</strong><small id="cashbox-opening">Sin monto de apertura</small></div>
-            <div class="cashbox-side"><small id="cashbox-caption">Dinero disponible para prestar. Suma el cobro y resta préstamos, gastos, otros gastos y salidas de caja. No se reinicia cada mes.</small><button class="secondary-button" id="cashbox-edit" type="button">Monto de apertura</button></div>
+            <div class="cashbox-side"><small id="cashbox-caption">Dinero disponible para prestar. Se calcula sola con cada cierre: suma el cobro y resta préstamos, gastos, otros gastos y salidas de caja. No se puede modificar.</small></div>
           </div>
           <div class="week-selector" id="week-selector" role="tablist" aria-label="Semanas del mes (lunes a sábado)"></div>
           <p class="selected-week-label" id="selected-week-label"></p>
@@ -472,7 +472,7 @@
     // al cambiar el sello, el navegador descarga el JS/CSS nuevo en vez de usar su caché.
     // Para desarrollar con los módulos sueltos, abre index.html?dev desde un servidor local.
     (() => {
-      const APP_VERSION = '5c98d702bc';
+      const APP_VERSION = 'bc03dc15d5';
       const dev = new URLSearchParams(location.search).has('dev') && location.protocol !== 'file:';
       if (dev) {
         document.getElementById('app-styles').href = 'styles.css';

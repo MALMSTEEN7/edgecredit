@@ -47,7 +47,7 @@ import { renderRouteBuilder } from './js/features/daily-route/daily-route.js';
 import { filterClientCards } from './js/features/clients/directory.js';
 import { normalizeClientSchedules, pruneExpiredPaymentHistories } from './js/domain/loan-schedule.js';
 import { normalizeCancelledCards } from './js/domain/accounting.js';
-import { ensureLedger } from './js/domain/ledger.js';
+import { ensureLedger, pruneOldLedger } from './js/domain/ledger.js';
 import { renderAdminRoute, syncRouteSelect } from './js/features/admin/admin-shell.js';
 import { renderPendingRequests } from './js/features/admin/pending.js';
 import { appendClientCards, renderClientRows } from './js/features/clients/directory.js';
@@ -120,6 +120,9 @@ function boot() {
   pruneExpiredPaymentHistories();
   persistBusinessData();
   window.setInterval(pruneExpiredPaymentHistories, 60 * 60 * 1000);
+  // Cierres de caja: se guardan los últimos 4 meses (sin servidor, en este navegador).
+  if (!backendEnabled() && pruneLedgers()) persistBusinessData();
+  window.setInterval(() => { if ((!backendEnabled() || syncRole() === 'admin') && pruneLedgers()) persistBusinessData(); }, 60 * 60 * 1000);
   if (!backendEnabled()) pruneOrphanRoutes();
   syncRouteSelect();
   state.activeSettlement = routeSettlements[routeSelect.value] || null;
@@ -138,12 +141,19 @@ function boot() {
   updateNetworkStatus();
 }
 
+/** Borra los cierres de caja de más de 4 meses en todos los cobros. ¿Borró algo? */
+function pruneLedgers() {
+  return Object.values(routeSettlements).map(route => pruneOldLedger(route)).some(Boolean);
+}
+
 /** Repinta todo tras cargar o recibir datos del servidor. */
 function refreshFromServer() {
   personnel.forEach(worker => { if (worker.route) ensureRoute(worker.route); });
   Object.values(routeSettlements).forEach(ensureLedger);
   // El admin quita las rutas sin trabajador ni clientes (la sincronización las borra del servidor).
   if ((state.userRole === 'admin' || syncRole() === 'admin') && pruneOrphanRoutes()) persistBusinessData();
+  // Solo el admin depura el libro (una sola fuente de cambios sobre las rutas).
+  if ((state.userRole === 'admin' || syncRole() === 'admin') && pruneLedgers()) persistBusinessData();
   syncRouteSelect();
   state.activeSettlement = routeSettlements[routeSelect.value] || null;
   normalizeClientNotes();

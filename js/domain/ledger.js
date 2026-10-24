@@ -8,7 +8,10 @@
  * - El día de hoy, mientras no se cierre, se lee de los valores vivos de la ruta.
  * - `route.cashBox` es la CAJA del cobro: el monto de apertura (dinero disponible para
  *   prestar). No se reinicia nunca; cada día suma el cobro y resta préstamos, gastos,
- *   otros gastos y salidas de caja.
+ *   otros gastos y salidas de caja. No se edita desde la app: un cobro sin apertura empieza
+ *   en $0 con su primer cierre.
+ * - Solo se guardan los cierres de los últimos LEDGER_MONTHS_KEPT meses (pruneOldLedger):
+ *   lo que movieron los días borrados queda sumado en la apertura, así la caja no cambia.
  * - `route.insuranceCuts` registra cada «Cuadrar seguros».
  * - Días traídos del sistema anterior (Excel): `cashAdjustment` es el ajuste de caja de ese
  *   día (descuadre entregado de más o de menos, o un ingreso de capital) para que la caja
@@ -65,16 +68,45 @@ export function cashBoxMovement(record) {
 export function cashBoxAt(route, dateISO, liveInsurance = 0) {
   ensureLedger(route);
   const { opening, openingDate } = route.cashBox;
-  if (!openingDate || dateISO < openingDate) return null;
+  if (openingDate && dateISO < openingDate) return null; // sin apertura: desde el primer cierre, en $0
   const today = localDateISO();
   let total = Number(opening || 0);
   Object.keys(route.ledger).forEach(date => {
-    if (date < openingDate || date > dateISO) return;
+    if ((openingDate && date < openingDate) || date > dateISO) return;
     if (date === today && !closedToday(route)) return; // hoy se suma en vivo abajo
     total += cashBoxMovement(dayRecord(route, date));
   });
-  if (today >= openingDate && today <= dateISO && !closedToday(route)) total += cashBoxMovement(dayRecord(route, today, liveInsurance));
+  if ((!openingDate || today >= openingDate) && today <= dateISO && !closedToday(route)) total += cashBoxMovement(dayRecord(route, today, liveInsurance));
   return total;
+}
+
+export const LEDGER_MONTHS_KEPT = 4;
+
+/** Primer día que se conserva: el mismo día de hace 4 meses (24-oct → 24-jun). */
+export function ledgerCutoff(today = localDateISO()) {
+  const [year, month, day] = today.split('-').map(Number);
+  const lastDay = new Date(year, month - 1 - LEDGER_MONTHS_KEPT + 1, 0).getDate();
+  return localDateISO(new Date(year, month - 1 - LEDGER_MONTHS_KEPT, Math.min(day, lastDay)));
+}
+
+/**
+ * Borra los cierres de más de 4 meses. Lo que movieron esos días pasa a la apertura y la
+ * apertura se corre a la fecha de corte: la caja de hoy (y la de los días que quedan) no
+ * cambia. Devuelve true si borró algo.
+ */
+export function pruneOldLedger(route, today = localDateISO()) {
+  ensureLedger(route);
+  const cutoff = ledgerCutoff(today);
+  const old = Object.keys(route.ledger).filter(date => date < cutoff).sort();
+  if (!old.length) return false;
+  const { openingDate } = route.cashBox;
+  if (!openingDate || openingDate < cutoff) {
+    const opening = old.filter(date => !openingDate || date >= openingDate)
+      .reduce((total, date) => total + cashBoxMovement(dayRecord(route, date)), Number(openingDate ? route.cashBox.opening || 0 : 0));
+    route.cashBox = { ...route.cashBox, opening, openingDate: cutoff, prunedBefore: cutoff };
+  }
+  old.forEach(date => { delete route.ledger[date]; });
+  return true;
 }
 
 /** Guarda el día al cerrar el cobro (antes de reiniciar los valores vivos). */

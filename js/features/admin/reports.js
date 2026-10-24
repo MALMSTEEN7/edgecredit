@@ -12,7 +12,7 @@ import { routeSelect } from '../../core/dom.js';
 import { state } from '../../core/state.js';
 import { clients, persistBusinessData } from '../../core/store.js';
 import { liveInsuranceEntries, insuranceCollectedOn } from '../../domain/insurance.js';
-import { cashBoxAt, cutInsurance, dayRecord, ensureLedger, insuranceDueAt, insuranceEntries, insurancePeriod, ledgerDifference, setDayField, undoLastInsuranceCut } from '../../domain/ledger.js';
+import { LEDGER_MONTHS_KEPT, cashBoxAt, cutInsurance, dayRecord, ensureLedger, insuranceDueAt, insuranceEntries, insurancePeriod, ledgerDifference, setDayField, undoLastInsuranceCut } from '../../domain/ledger.js';
 import { INSURANCE_CUT_TEST_MODE } from '../../core/config.js';
 import { localDateISO } from '../../shared/dates.js';
 import { formatMoney } from '../../shared/format.js';
@@ -122,27 +122,10 @@ function renderCashBox(route) {
   const current = cashBoxAt(route, localDateISO(), liveInsurance(routeId, route).total);
   rq('#cashbox-current').textContent = current === null ? '—' : formatMoney(current);
   rq('#cashbox-current').classList.toggle('is-negative', Number(current) < 0);
-  rq('#cashbox-opening').textContent = openingDate
-    ? `Apertura: ${formatMoney(opening)} desde el ${new Date(`${openingDate}T12:00:00`).toLocaleDateString('es-CO')}`
-    : 'Define el monto de apertura para empezar a llevar la caja.';
-}
-
-function editCashBox(route) {
-  openCustomModal({
-    title: 'Monto de apertura de la caja',
-    description: `Dinero disponible para prestar en el cobro ${route.name}. Desde esa fecha la caja suma el cobro y resta préstamos, gastos, otros gastos y salidas de caja.`,
-    fields: [
-      { name: 'opening', label: 'Monto de apertura ($)', type: 'number', min: 0, step: 1, value: route.cashBox.opening || '', required: true },
-      { name: 'openingDate', label: 'Fecha de apertura', type: 'date', value: route.cashBox.openingDate || localDateISO(), required: true },
-    ],
-    submitLabel: 'Guardar apertura',
-    onSubmit: values => {
-      route.cashBox = { opening: Math.max(0, Math.round(Number(values.opening) || 0)), openingDate: values.openingDate };
-      persistBusinessData();
-      renderRouteReports(route);
-      showToast(`Caja de ${route.name}: apertura de ${formatMoney(route.cashBox.opening)} guardada.`);
-    },
-  });
+  const since = openingDate ? new Date(`${openingDate}T12:00:00`).toLocaleDateString('es-CO') : '';
+  rq('#cashbox-opening').textContent = !openingDate ? 'Empezó en $ 0 con el primer cierre del cobro.'
+    : route.cashBox.prunedBefore === openingDate ? `Viene de ${formatMoney(opening)} el ${since} (se guardan los cierres de los últimos ${LEDGER_MONTHS_KEPT} meses).`
+    : `Apertura: ${formatMoney(opening)} desde el ${since}`;
 }
 
 // ── Cierre semanal ──
@@ -460,7 +443,6 @@ export function mount() {
     const label = COLUMNS.find(column => column.key === input.dataset.field).label;
     showToast(`${label} del ${new Date(`${input.dataset.date}T12:00:00`).toLocaleDateString('es-CO')} actualizado: ${formatMoney(Number(input.value) || 0)}.`);
   });
-  rq('#cashbox-edit').addEventListener('click', () => editCashBox(state.activeSettlement));
   rq('#insurance-cut-button').addEventListener('click', () => cutInsuranceNow(state.activeSettlement));
   rq('#insurance-undo-button').addEventListener('click', () => undoInsuranceCut(state.activeSettlement));
   document.querySelectorAll('[data-report-tab]').forEach(button => button.addEventListener('click', () => {
