@@ -56,7 +56,8 @@ try {
       }
       $filas += [pscustomobject]$objeto
     }
-    return ,$filas
+    # Sin la coma: quien llama ya envuelve en @(); con ella la lista quedaba dentro de otra lista.
+    return $filas
   }
 
   $cobroFila = @(Leer 'SELECT * FROM COBRO WHERE COB_CODIGO = ?' @{ cobro = $Cobro })
@@ -85,7 +86,7 @@ try {
     cobro = $cobroFila[0]
     tarjetas = $salidaTarjetas
   }
-  $json = $resultado | ConvertTo-Json -Depth 6
+  $json = $resultado | ConvertTo-Json -Depth 10
   [IO.File]::WriteAllText($Salida, $json, (New-Object Text.UTF8Encoding($false)))
 
   $sinCliente = @($salidaTarjetas | Where-Object { -not $_.cliente }).Count

@@ -1389,12 +1389,32 @@ function convertLegacyCard(card, routeId, importedAt) {
 }
 
 /**
+ * La primera versión del script de exportación dejaba cada lista dentro de otra lista
+ * ([[…]]) y, en lo más profundo, PowerShell convertía los abonos en texto («@{DES_ABONO=…}»).
+ * Se aceptan las listas anidadas; el texto no, porque ya no se pueden leer los valores.
+ */
+function legacyRow(value) {
+  const rows = (Array.isArray(value) ? value.flat(Infinity) : [value]).filter(item => item != null);
+  if (rows.some(item => typeof item === 'string' && item.startsWith('@{'))) {
+    throw new Error('El archivo se generó con la versión anterior del script y le faltan datos. Descarga de nuevo exportar-cobro.ps1 y vuelve a exportar.');
+  }
+  return rows.find(item => typeof item === 'object') || null;
+}
+
+function legacyCardRows(card) {
+  const abonos = (Array.isArray(card?.abonos) ? card.abonos.flat(Infinity) : [card?.abonos]).filter(item => item != null);
+  if (abonos.some(item => typeof item !== 'object')) legacyRow(abonos);
+  return { ...card, cliente: legacyRow(card?.cliente), abonos: abonos.filter(item => typeof item === 'object') };
+}
+
+/**
  * Convierte la exportación completa de un cobro.
  * @returns {{ cobro:string, worker:string, cards:Array, rejected:Array, totals:{count,people,principal,total,balance,paid,payments} }}
  */
 function convertLegacyExport(raw, routeId, importedAt = new Date().toISOString()) {
   if (!raw || !Array.isArray(raw.tarjetas)) throw new Error('El archivo no es una exportación del sistema anterior (falta la lista «tarjetas»).');
-  const results = raw.tarjetas.map(card => convertLegacyCard(card, routeId, importedAt));
+  const tarjetas = raw.tarjetas.map(legacyCardRows);
+  const results = tarjetas.map(card => convertLegacyCard(card, routeId, importedAt));
   const cards = results.filter(result => result.client);
   const rejected = results.filter(result => result.error);
   const totals = cards.reduce((sum, { client }) => ({
@@ -1406,7 +1426,8 @@ function convertLegacyExport(raw, routeId, importedAt = new Date().toISOString()
     payments: sum.payments + client.payments.length,
   }), { count: 0, principal: 0, total: 0, balance: 0, paid: 0, payments: 0 });
   totals.people = new Set(cards.map(({ client }) => personKey(client.id) || client.name)).size;
-  return { cobro: legacyText(raw.cobro?.COB_CODIGO), worker: legacyText(raw.cobro?.COB_NOMBRE), cards, rejected, totals };
+  const cobro = legacyRow(raw.cobro) || {};
+  return { cobro: legacyText(cobro.COB_CODIGO), worker: legacyText(cobro.COB_NOMBRE), cards, rejected, totals };
 }
 
 // ── js/domain/loan-schedule.js
