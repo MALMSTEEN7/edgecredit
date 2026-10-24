@@ -530,6 +530,11 @@
   color: var(--success-color);
 }
 
+.share-location-button.is-denied {
+  border-color: color-mix(in srgb, var(--alert-color) 55%, var(--line));
+  color: #FF7043;
+}
+
 .share-location-button.is-searching {
   border-color: rgba(249,168,37,.45);
   color: #F9A825;

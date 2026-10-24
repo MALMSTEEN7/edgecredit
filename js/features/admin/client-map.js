@@ -10,6 +10,8 @@ import { state } from '../../core/state.js';
 import { COLOMBIA_BOUNDS, findDepartment } from '../../core/geo-colombia.js';
 import { CARTO_API_KEY } from '../../core/map-config.js';
 import { clients, persistBusinessData, routeSettlements, workerForRoute } from '../../core/store.js';
+import { loadTrack, subscribeTrack, trackDistance } from '../../core/tracks.js';
+import { localDateISO } from '../../shared/dates.js';
 import { paymentBehavior } from '../../domain/loan-schedule.js';
 import { openOperationsClient } from '../operations/operations-list.js';
 import { formatMoney } from '../../shared/format.js';
@@ -51,6 +53,13 @@ let shownAltClientId = null;    // cliente cuya dirección alternativa se está 
 let pendingFit = null;
 let focusedClientId = null;     // cliente resaltado en la lista "En el mapa"          // encuadre pendiente hasta que el contenedor tenga tamaño
 const markersById = new Map();  // clientId -> marcador, para "ir a" desde la lista
+// Recorrido del trabajador del cobro (solo admin): puntos del día elegido y escucha en vivo.
+let trackLayer = null;
+let trackPoints = [];
+let trackKey = '';
+let trackWorker = null;
+let stopTrackFeed = () => {};
+const LIVE_MINUTES = 5;         // última señal más reciente que esto = «en vivo»
 const MIN_SPAN = 0.012;         // ~1,3 km: perímetro mínimo alrededor de los clientes
 const FOCUS_ZOOM = 17;          // zoom al seleccionar un cliente puntual
 const visibleTiers = new Set(['good', 'regular', 'bad']);
@@ -288,6 +297,9 @@ function focusLocation(location, afterMove) {
 function ensureMap(L) {
   if (map) return;
   map = L.map('client-map-canvas', { zoomControl: true, attributionControl: true, minZoom: 5, maxBounds: L.latLngBounds(COLOMBIA_BOUNDS).pad(0.6) });
+  // El recorrido va en su propio plano, debajo de los clientes (los puntos siguen clicables).
+  map.createPane('trackPane').style.zIndex = 350;
+  trackLayer = L.layerGroup().addTo(map);
   markerLayer = L.layerGroup().addTo(map);
   setupBasemaps(L);
   // Si el mapa se creó o encuadró con el panel oculto, recalcula al hacerse visible.
@@ -469,11 +481,91 @@ export async function renderClientMap({ refit = true } = {}) {
     markersById.set(id, marker);
   });
 
+  renderWorkerTrack(L, routeId, worker);
+
   // Leaflet necesita medir el contenedor una vez visible.
   requestAnimationFrame(() => {
     if (canvasHasSize()) map.invalidateSize();
     if (refit || lastFitKey !== routeId) fitView(L, { routeId, entries, worker, department });
   });
+}
+
+const trackTime = iso => new Date(iso).toLocaleTimeString('es-CO', { hour: 'numeric', minute: '2-digit' });
+
+function clearTrack() {
+  stopTrackFeed();
+  stopTrackFeed = () => {};
+  trackKey = '';
+  trackPoints = [];
+  trackLayer?.clearLayers();
+}
+
+/** Carga el recorrido del día (y escucha los puntos nuevos si es hoy) del trabajador del cobro. */
+async function renderWorkerTrack(L, routeId, worker) {
+  const card = $('#worker-track-card');
+  card.hidden = isWorkerMap();
+  if (isWorkerMap()) { clearTrack(); return; }
+  const dateInput = $('#worker-track-date');
+  dateInput.max = localDateISO();
+  if (!dateInput.value) dateInput.value = localDateISO();
+  trackWorker = worker;
+  if (!worker) { clearTrack(); $('#worker-track-status').textContent = 'Este cobro no tiene trabajador asignado.'; $('#worker-track-stats').innerHTML = ''; return; }
+  if (!$('#worker-track-toggle').checked) { clearTrack(); $('#worker-track-status').textContent = 'Recorrido oculto.'; $('#worker-track-stats').innerHTML = ''; return; }
+  const day = dateInput.value;
+  const key = `${worker.id}|${day}`;
+  if (key !== trackKey) {
+    clearTrack();
+    trackKey = key;
+    $('#worker-track-status').textContent = 'Cargando recorrido…';
+    try { trackPoints = await loadTrack(worker.id, day); }
+    catch { trackPoints = []; if (trackKey === key) $('#worker-track-status').textContent = 'No se pudo cargar el recorrido. Revisa la conexión.'; }
+    if (trackKey !== key) return; // cambiaron de cobro o de día mientras cargaba
+    if (day === localDateISO()) {
+      stopTrackFeed = subscribeTrack(worker.id, point => {
+        if (trackKey !== key) return;
+        trackPoints.push(point);
+        drawTrack(L);
+      });
+    }
+  }
+  drawTrack(L);
+}
+
+function drawTrack(L) {
+  if (!trackLayer) return;
+  trackLayer.clearLayers();
+  const worker = trackWorker;
+  const points = trackPoints;
+  const stats = $('#worker-track-stats');
+  if (!worker) return;
+  if (!points.length) {
+    const today = $('#worker-track-date').value === localDateISO();
+    $('#worker-track-status').textContent = today ? `${worker.name} todavía no envía puntos hoy. Aparecerá aquí apenas abra la app con GPS.` : `${worker.name} no tiene recorrido ese día.`;
+    stats.innerHTML = '';
+    return;
+  }
+  const latlngs = points.map(point => [point.latitude, point.longitude]);
+  L.polyline(latlngs, { pane: 'trackPane', color: '#2979FF', weight: 4, opacity: 0.85, lineJoin: 'round' }).addTo(trackLayer);
+  L.circleMarker(latlngs[0], { pane: 'trackPane', radius: 5, weight: 2, color: '#FFFFFF', fillColor: '#9CA3AF', fillOpacity: 1 })
+    .bindTooltip(`Inicio · ${trackTime(points[0].recordedAt)}`).addTo(trackLayer);
+  const last = points[points.length - 1];
+  const minutesAgo = (Date.now() - new Date(last.recordedAt)) / 60000;
+  const live = $('#worker-track-date').value === localDateISO() && minutesAgo <= LIVE_MINUTES;
+  L.marker(latlngs[latlngs.length - 1], {
+    icon: L.divIcon({ className: `worker-live-marker${live ? ' is-live' : ''}`, html: '<span></span>', iconSize: [22, 22], iconAnchor: [11, 11] }),
+    zIndexOffset: 1000, keyboard: false,
+  }).bindTooltip(`${worker.name} · ${trackTime(last.recordedAt)}${last.accuracy ? ` · ± ${Math.round(last.accuracy)} m` : ''}`, { direction: 'top', offset: [0, -10] }).addTo(trackLayer);
+  const meters = points.slice(1).reduce((sum, point, index) => sum + trackDistance(points[index], point), 0);
+  $('#worker-track-status').textContent = live
+    ? `En vivo · última señal hace ${Math.max(0, Math.round(minutesAgo))} min`
+    : `Última señal: ${trackTime(last.recordedAt)}${$('#worker-track-date').value === localDateISO() ? ` (hace ${Math.round(minutesAgo)} min)` : ''}`;
+  $('#worker-track-status').classList.toggle('is-live', live);
+  stats.innerHTML = [
+    ['Recorrido', meters >= 1000 ? `${(meters / 1000).toFixed(1).replace('.', ',')} km` : `${Math.round(meters)} m`],
+    ['Primera señal', trackTime(points[0].recordedAt)],
+    ['Última señal', trackTime(last.recordedAt)],
+    ['Puntos', String(points.length)],
+  ].map(([label, value]) => `<div><dt>${label}</dt><dd>${value}</dd></div>`).join('');
 }
 
 function startPick(clientId, kind = 'main') {
@@ -553,6 +645,17 @@ export function mount() {
     flashDone($('#client-map-save-zone'), 'Zona guardada');
     showToast(`Zona del cobro ${route.name} guardada. El mapa abrirá aquí mientras no tenga clientes ubicados.`);
   });
+  $('#worker-track-toggle').addEventListener('change', () => renderClientMap({ refit: false }));
+  $('#worker-track-date').addEventListener('change', () => renderClientMap({ refit: false }));
+  $('#worker-track-focus').addEventListener('click', () => {
+    const last = trackPoints[trackPoints.length - 1];
+    if (!map || !last) { showToast('Todavía no hay recorrido para mostrar.'); return; }
+    map.flyTo([last.latitude, last.longitude], FOCUS_ZOOM, { duration: 0.6 });
+  });
+  // «hace N min» y el estado en vivo se recalculan solos mientras el mapa está abierto.
+  window.setInterval(() => {
+    if (window.L && trackPoints.length && state.activeAdminPanel === 'map') drawTrack(window.L);
+  }, 30000);
   document.addEventListener('keydown', event => {
     if (event.key === 'Escape' && pickClientId && (state.activeAdminPanel === 'map' || state.currentView === 'mapa')) endPick();
   });

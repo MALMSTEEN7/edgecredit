@@ -34,7 +34,7 @@
   <link rel="icon" href="icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="icon-192.png">
   <meta name="apple-mobile-web-app-capable" content="yes">
-  <link rel="stylesheet" id="app-styles" href="dist/styles.bundle.css?v=1785c51f24">
+  <link rel="stylesheet" id="app-styles" href="dist/styles.bundle.css?v=8e291b5b85">
 </head>
 <body class="login-active">
   <section class="login-gateway" id="login-gateway" aria-labelledby="login-title">
@@ -78,7 +78,7 @@
   <div class="app-shell" id="worker-view" hidden>
     <header class="topbar">
       <a class="brand" href="#inicio" aria-label="EdgeCredit, inicio"><span class="brand-mark" aria-hidden="true">E</span><span>Edge<span class="brand-accent">Credit</span></span></a>
-      <div class="topbar-actions"><span id="network-indicator" class="network-indicator" role="status" aria-label="Sin conexión" title="Sin conexión"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 8.8a15.2 15.2 0 0 1 19 0M5.7 12a10.1 10.1 0 0 1 12.6 0m-9.4 3.2a5 5 0 0 1 6.2 0M12 19h.01"/></svg></span><button class="share-location-button" id="share-location" type="button" title="Compartir GPS de este dispositivo" hidden>⌖ <span>Compartir GPS</span></button><span class="sync-status" hidden><i aria-hidden="true"></i><span>Sincronizado</span></span><button class="logout-button" id="worker-logout" type="button" aria-label="Cerrar sesión">Salir <span aria-hidden="true">↗</span></button></div>
+      <div class="topbar-actions"><span id="network-indicator" class="network-indicator" role="status" aria-label="Sin conexión" title="Sin conexión"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 8.8a15.2 15.2 0 0 1 19 0M5.7 12a10.1 10.1 0 0 1 12.6 0m-9.4 3.2a5 5 0 0 1 6.2 0M12 19h.01"/></svg></span><button class="share-location-button" id="share-location" type="button" title="Estado del GPS" aria-label="Estado del GPS" hidden>⌖ <span>GPS</span></button><span class="sync-status" hidden><i aria-hidden="true"></i><span>Sincronizado</span></span><button class="logout-button" id="worker-logout" type="button" aria-label="Cerrar sesión">Salir <span aria-hidden="true">↗</span></button></div>
     </header>
 
     <main id="main-content">
@@ -248,6 +248,13 @@
             <p class="client-map-message" id="client-map-message" hidden></p>
           </div>
           <aside class="client-map-side" aria-label="Filtros y clientes sin ubicación">
+            <section class="client-map-card worker-track-card" id="worker-track-card" hidden>
+              <div class="client-map-card-head"><h3>Recorrido del trabajador</h3><label class="worker-track-toggle"><input type="checkbox" id="worker-track-toggle" checked> Mostrar</label></div>
+              <p class="worker-track-status" id="worker-track-status" aria-live="polite">—</p>
+              <div class="worker-track-controls"><label class="worker-track-day">Día<input type="date" id="worker-track-date"></label><button type="button" class="map-action" id="worker-track-focus"><span aria-hidden="true">⌖</span><span class="map-action-label">Ver trabajador</span></button></div>
+              <dl class="worker-track-stats" id="worker-track-stats"></dl>
+              <small>Se mueve en vivo mientras el trabajador tiene la app abierta en el celular.</small>
+            </section>
             <section class="client-map-card">
               <h3>Comportamiento de pago</h3>
               <div class="client-map-legend" id="client-map-legend">
@@ -465,7 +472,7 @@
     // al cambiar el sello, el navegador descarga el JS/CSS nuevo en vez de usar su caché.
     // Para desarrollar con los módulos sueltos, abre index.html?dev desde un servidor local.
     (() => {
-      const APP_VERSION = '1785c51f24';
+      const APP_VERSION = '8e291b5b85';
       const dev = new URLSearchParams(location.search).has('dev') && location.protocol !== 'file:';
       if (dev) {
         document.getElementById('app-styles').href = 'styles.css';

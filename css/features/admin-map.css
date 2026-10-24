@@ -563,3 +563,118 @@
 .client-map-popup a.client-map-directions {
   color: var(--text);
 }
+
+/* Recorrido del trabajador: tarjeta del panel lateral y marcador en vivo. */
+.worker-track-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.worker-track-status {
+  margin: 4px 0 10px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.worker-track-status.is-live {
+  color: var(--success);
+  font-weight: 700;
+}
+
+.worker-track-status.is-live::before {
+  content: "";
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 6px;
+  border-radius: 50%;
+  background: var(--success);
+  vertical-align: 1px;
+}
+
+.worker-track-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+.worker-track-day {
+  display: grid;
+  flex: 1 1 130px;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.worker-track-day input {
+  min-height: 38px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  color-scheme: inherit;
+}
+
+.worker-track-stats {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin: 12px 0 8px;
+}
+
+.worker-track-stats:empty {
+  display: none;
+}
+
+.worker-track-stats div {
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+}
+
+.worker-track-stats dt {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.worker-track-stats dd {
+  margin: 2px 0 0;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.worker-live-marker span {
+  display: block;
+  width: 22px;
+  height: 22px;
+  border: 3px solid #FFFFFF;
+  border-radius: 50%;
+  background: #2979FF;
+  box-shadow: 0 2px 8px rgba(0,0,0,.45);
+}
+
+.worker-live-marker:not(.is-live) span {
+  background: #6B7280;
+}
+
+@media (prefers-reduced-motion:no-preference) {
+  .worker-live-marker.is-live span {
+    animation: worker-live-pulse 1.8s ease-out infinite;
+  }
+}
+
+@keyframes worker-live-pulse {
+  0% { box-shadow: 0 0 0 0 rgba(41,121,255,.55), 0 2px 8px rgba(0,0,0,.45); }
+  100% { box-shadow: 0 0 0 16px rgba(41,121,255,0), 0 2px 8px rgba(0,0,0,.45); }
+}

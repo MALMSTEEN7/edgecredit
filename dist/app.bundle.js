@@ -804,6 +804,160 @@ function __mount_syncModule() {
   window.addEventListener('offline', updateSyncBadge);
 }
 
+// ── js/core/tracks.js
+/**
+ * core/tracks · Recorrido GPS de los trabajadores (seguimiento continuo).
+ *
+ * - El celular del trabajador agrega puntos con `recordTrackPoint`. Con servidor van a la
+ *   tabla `worker_positions` (supabase/schema.sql); si no hay internet quedan en una cola
+ *   del navegador y se envían al volver la conexión. Sin servidor (modo local) se guardan
+ *   en este navegador.
+ * - El admin lee el recorrido de un día con `loadTrack` y recibe los puntos nuevos al
+ *   instante con `subscribeTrack`.
+ */
+
+
+
+const LOCAL_TRACKS_KEY = 'edgecredit-tracks';
+const LOCAL_DAYS_KEPT = 7;
+const OUTBOX_LIMIT = 5000;           // ~2 días de puntos sin conexión; después se descartan los más viejos
+const RETENTION_DAYS = 90;           // el admin borra lo más antiguo al consultar
+const trackOutboxKey = workerId => `edgecredit-track-outbox-${workerId}`;
+const localListeners = new Set();
+let flushingTrack = false;
+let trackFlushTimer = null;
+let pruned = false;
+
+function readJSON(key, fallback) {
+  try { return JSON.parse(localStorage.getItem(key) || 'null') ?? fallback; } catch { return fallback; }
+}
+
+function writeJSON(key, value) {
+  try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* almacenamiento lleno o bloqueado */ }
+}
+
+/** Punto como lo usa la app: { latitude, longitude, accuracy, speed, recordedAt }. */
+const pointFromRow = row => ({
+  latitude: Number(row.latitude), longitude: Number(row.longitude),
+  accuracy: row.accuracy == null ? null : Number(row.accuracy),
+  speed: row.speed == null ? null : Number(row.speed),
+  recordedAt: row.recorded_at || row.recordedAt,
+});
+
+function dayBounds(dateISO) {
+  const [year, month, day] = dateISO.split('-').map(Number);
+  return { from: new Date(year, month - 1, day).toISOString(), to: new Date(year, month - 1, day + 1).toISOString() };
+}
+
+// ── Modo local ──
+
+function saveLocalPoint(workerId, point) {
+  const all = readJSON(LOCAL_TRACKS_KEY, {});
+  const day = localDateISO(new Date(point.recordedAt));
+  all[workerId] ||= {};
+  (all[workerId][day] ||= []).push(point);
+  Object.keys(all[workerId]).sort().slice(0, -LOCAL_DAYS_KEPT).forEach(key => delete all[workerId][key]);
+  writeJSON(LOCAL_TRACKS_KEY, all);
+  localListeners.forEach(listener => listener(workerId, point));
+}
+
+// ── Servidor ──
+
+async function flushTrackOutbox(workerId) {
+  if (flushingTrack || !navigator.onLine) return;
+  const queue = readJSON(trackOutboxKey(workerId), []);
+  if (!queue.length) return;
+  flushingTrack = true;
+  try {
+    const db = await backend();
+    const batch = queue.slice(0, 200);
+    const { error } = await db.from('worker_positions').insert(batch);
+    if (error) throw error;
+    writeJSON(trackOutboxKey(workerId), readJSON(trackOutboxKey(workerId), []).slice(batch.length));
+    if (queue.length > batch.length) scheduleTrackFlush(workerId, 200);
+  } catch {
+    scheduleTrackFlush(workerId, 30000); // sin conexión o servidor sin la tabla: se reintenta
+  } finally {
+    flushingTrack = false;
+  }
+}
+
+function scheduleTrackFlush(workerId, delay = 1000) {
+  window.clearTimeout(trackFlushTimer);
+  trackFlushTimer = window.setTimeout(() => flushTrackOutbox(workerId), delay);
+}
+
+/** Agrega un punto del recorrido del trabajador. */
+function recordTrackPoint(workerId, routeId, point) {
+  if (!workerId) return;
+  if (!backendEnabled()) { saveLocalPoint(workerId, point); return; }
+  const queue = readJSON(trackOutboxKey(workerId), []);
+  queue.push({
+    route_id: routeId || null, latitude: point.latitude, longitude: point.longitude,
+    accuracy: point.accuracy, speed: point.speed, recorded_at: point.recordedAt,
+  });
+  writeJSON(trackOutboxKey(workerId), queue.slice(-OUTBOX_LIMIT));
+  scheduleTrackFlush(workerId);
+}
+
+/** Envía lo que quedó en cola al volver internet (lo llama el módulo de ubicación). */
+function resumeTrackUpload(workerId) {
+  if (backendEnabled() && workerId) scheduleTrackFlush(workerId, 500);
+}
+
+/** Recorrido de un trabajador en un día (yyyy-mm-dd), en orden de hora. */
+async function loadTrack(workerId, dateISO) {
+  if (!workerId) return [];
+  if (!backendEnabled()) return [...(readJSON(LOCAL_TRACKS_KEY, {})[workerId]?.[dateISO] || [])];
+  const db = await backend();
+  if (!pruned) {
+    pruned = true;
+    const limit = new Date(Date.now() - RETENTION_DAYS * 86400000).toISOString();
+    db.from('worker_positions').delete().lt('recorded_at', limit).then(() => {}, () => {});
+  }
+  const { from, to } = dayBounds(dateISO);
+  const { data, error } = await db.from('worker_positions')
+    .select('latitude, longitude, accuracy, speed, recorded_at')
+    .eq('worker_id', workerId).gte('recorded_at', from).lt('recorded_at', to)
+    .order('recorded_at', { ascending: true }).limit(5000);
+  if (error) throw error;
+  return (data || []).map(pointFromRow);
+}
+
+/** Puntos nuevos del trabajador en tiempo real. Devuelve la función para dejar de escuchar. */
+function subscribeTrack(workerId, onPoint) {
+  if (!workerId) return () => {};
+  if (!backendEnabled()) {
+    const listener = (id, point) => { if (id === workerId) onPoint(point); };
+    const storage = event => {
+      if (event.key !== LOCAL_TRACKS_KEY) return;
+      const day = readJSON(LOCAL_TRACKS_KEY, {})[workerId]?.[localDateISO()] || [];
+      if (day.length) onPoint(day[day.length - 1]);
+    };
+    localListeners.add(listener);
+    window.addEventListener('storage', storage); // otra pestaña = otro «celular» en las pruebas
+    return () => { localListeners.delete(listener); window.removeEventListener('storage', storage); };
+  }
+  let channel = null;
+  let stopped = false;
+  backend().then(db => {
+    if (stopped) return;
+    channel = db.channel(`track-${workerId}-${Date.now()}`)
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'worker_positions', filter: `worker_id=eq.${workerId}` }, payload => onPoint(pointFromRow(payload.new)))
+      .subscribe();
+  }, () => {});
+  return () => { stopped = true; channel?.unsubscribe?.(); };
+}
+
+/** Distancia en metros entre dos puntos (fórmula del haversine). */
+function trackDistance(a, b) {
+  const rad = value => value * Math.PI / 180;
+  const dLat = rad(b.latitude - a.latitude);
+  const dLng = rad(b.longitude - a.longitude);
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(rad(a.latitude)) * Math.cos(rad(b.latitude)) * Math.sin(dLng / 2) ** 2;
+  return 2 * 6371000 * Math.asin(Math.sqrt(h));
+}
+
 // ── js/domain/access-schedule.js
 /**
  * domain/access-schedule · Horario en el que los trabajadores pueden usar el sistema.
@@ -2128,6 +2282,8 @@ function __mount_adminShellModule() {
 
 
 
+
+
 const LEAFLET_CSS = 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css';
 const LEAFLET_JS = 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js';
 const CARTO_ATTRIBUTION = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>';
@@ -2163,6 +2319,13 @@ let shownAltClientId = null;    // cliente cuya dirección alternativa se está 
 let pendingFit = null;
 let focusedClientId = null;     // cliente resaltado en la lista "En el mapa"          // encuadre pendiente hasta que el contenedor tenga tamaño
 const markersById = new Map();  // clientId -> marcador, para "ir a" desde la lista
+// Recorrido del trabajador del cobro (solo admin): puntos del día elegido y escucha en vivo.
+let trackLayer = null;
+let trackPoints = [];
+let trackKey = '';
+let trackWorker = null;
+let stopTrackFeed = () => {};
+const LIVE_MINUTES = 5;         // última señal más reciente que esto = «en vivo»
 const MIN_SPAN = 0.012;         // ~1,3 km: perímetro mínimo alrededor de los clientes
 const FOCUS_ZOOM = 17;          // zoom al seleccionar un cliente puntual
 const visibleTiers = new Set(['good', 'regular', 'bad']);
@@ -2400,6 +2563,9 @@ function focusLocation(location, afterMove) {
 function ensureMap(L) {
   if (map) return;
   map = L.map('client-map-canvas', { zoomControl: true, attributionControl: true, minZoom: 5, maxBounds: L.latLngBounds(COLOMBIA_BOUNDS).pad(0.6) });
+  // El recorrido va en su propio plano, debajo de los clientes (los puntos siguen clicables).
+  map.createPane('trackPane').style.zIndex = 350;
+  trackLayer = L.layerGroup().addTo(map);
   markerLayer = L.layerGroup().addTo(map);
   setupBasemaps(L);
   // Si el mapa se creó o encuadró con el panel oculto, recalcula al hacerse visible.
@@ -2581,11 +2747,91 @@ async function renderClientMap({ refit = true } = {}) {
     markersById.set(id, marker);
   });
 
+  renderWorkerTrack(L, routeId, worker);
+
   // Leaflet necesita medir el contenedor una vez visible.
   requestAnimationFrame(() => {
     if (canvasHasSize()) map.invalidateSize();
     if (refit || lastFitKey !== routeId) fitView(L, { routeId, entries, worker, department });
   });
+}
+
+const trackTime = iso => new Date(iso).toLocaleTimeString('es-CO', { hour: 'numeric', minute: '2-digit' });
+
+function clearTrack() {
+  stopTrackFeed();
+  stopTrackFeed = () => {};
+  trackKey = '';
+  trackPoints = [];
+  trackLayer?.clearLayers();
+}
+
+/** Carga el recorrido del día (y escucha los puntos nuevos si es hoy) del trabajador del cobro. */
+async function renderWorkerTrack(L, routeId, worker) {
+  const card = $('#worker-track-card');
+  card.hidden = isWorkerMap();
+  if (isWorkerMap()) { clearTrack(); return; }
+  const dateInput = $('#worker-track-date');
+  dateInput.max = localDateISO();
+  if (!dateInput.value) dateInput.value = localDateISO();
+  trackWorker = worker;
+  if (!worker) { clearTrack(); $('#worker-track-status').textContent = 'Este cobro no tiene trabajador asignado.'; $('#worker-track-stats').innerHTML = ''; return; }
+  if (!$('#worker-track-toggle').checked) { clearTrack(); $('#worker-track-status').textContent = 'Recorrido oculto.'; $('#worker-track-stats').innerHTML = ''; return; }
+  const day = dateInput.value;
+  const key = `${worker.id}|${day}`;
+  if (key !== trackKey) {
+    clearTrack();
+    trackKey = key;
+    $('#worker-track-status').textContent = 'Cargando recorrido…';
+    try { trackPoints = await loadTrack(worker.id, day); }
+    catch { trackPoints = []; if (trackKey === key) $('#worker-track-status').textContent = 'No se pudo cargar el recorrido. Revisa la conexión.'; }
+    if (trackKey !== key) return; // cambiaron de cobro o de día mientras cargaba
+    if (day === localDateISO()) {
+      stopTrackFeed = subscribeTrack(worker.id, point => {
+        if (trackKey !== key) return;
+        trackPoints.push(point);
+        drawTrack(L);
+      });
+    }
+  }
+  drawTrack(L);
+}
+
+function drawTrack(L) {
+  if (!trackLayer) return;
+  trackLayer.clearLayers();
+  const worker = trackWorker;
+  const points = trackPoints;
+  const stats = $('#worker-track-stats');
+  if (!worker) return;
+  if (!points.length) {
+    const today = $('#worker-track-date').value === localDateISO();
+    $('#worker-track-status').textContent = today ? `${worker.name} todavía no envía puntos hoy. Aparecerá aquí apenas abra la app con GPS.` : `${worker.name} no tiene recorrido ese día.`;
+    stats.innerHTML = '';
+    return;
+  }
+  const latlngs = points.map(point => [point.latitude, point.longitude]);
+  L.polyline(latlngs, { pane: 'trackPane', color: '#2979FF', weight: 4, opacity: 0.85, lineJoin: 'round' }).addTo(trackLayer);
+  L.circleMarker(latlngs[0], { pane: 'trackPane', radius: 5, weight: 2, color: '#FFFFFF', fillColor: '#9CA3AF', fillOpacity: 1 })
+    .bindTooltip(`Inicio · ${trackTime(points[0].recordedAt)}`).addTo(trackLayer);
+  const last = points[points.length - 1];
+  const minutesAgo = (Date.now() - new Date(last.recordedAt)) / 60000;
+  const live = $('#worker-track-date').value === localDateISO() && minutesAgo <= LIVE_MINUTES;
+  L.marker(latlngs[latlngs.length - 1], {
+    icon: L.divIcon({ className: `worker-live-marker${live ? ' is-live' : ''}`, html: '<span></span>', iconSize: [22, 22], iconAnchor: [11, 11] }),
+    zIndexOffset: 1000, keyboard: false,
+  }).bindTooltip(`${worker.name} · ${trackTime(last.recordedAt)}${last.accuracy ? ` · ± ${Math.round(last.accuracy)} m` : ''}`, { direction: 'top', offset: [0, -10] }).addTo(trackLayer);
+  const meters = points.slice(1).reduce((sum, point, index) => sum + trackDistance(points[index], point), 0);
+  $('#worker-track-status').textContent = live
+    ? `En vivo · última señal hace ${Math.max(0, Math.round(minutesAgo))} min`
+    : `Última señal: ${trackTime(last.recordedAt)}${$('#worker-track-date').value === localDateISO() ? ` (hace ${Math.round(minutesAgo)} min)` : ''}`;
+  $('#worker-track-status').classList.toggle('is-live', live);
+  stats.innerHTML = [
+    ['Recorrido', meters >= 1000 ? `${(meters / 1000).toFixed(1).replace('.', ',')} km` : `${Math.round(meters)} m`],
+    ['Primera señal', trackTime(points[0].recordedAt)],
+    ['Última señal', trackTime(last.recordedAt)],
+    ['Puntos', String(points.length)],
+  ].map(([label, value]) => `<div><dt>${label}</dt><dd>${value}</dd></div>`).join('');
 }
 
 function startPick(clientId, kind = 'main') {
@@ -2665,6 +2911,17 @@ function __mount_clientMapModule() {
     flashDone($('#client-map-save-zone'), 'Zona guardada');
     showToast(`Zona del cobro ${route.name} guardada. El mapa abrirá aquí mientras no tenga clientes ubicados.`);
   });
+  $('#worker-track-toggle').addEventListener('change', () => renderClientMap({ refit: false }));
+  $('#worker-track-date').addEventListener('change', () => renderClientMap({ refit: false }));
+  $('#worker-track-focus').addEventListener('click', () => {
+    const last = trackPoints[trackPoints.length - 1];
+    if (!map || !last) { showToast('Todavía no hay recorrido para mostrar.'); return; }
+    map.flyTo([last.latitude, last.longitude], FOCUS_ZOOM, { duration: 0.6 });
+  });
+  // «hace N min» y el estado en vivo se recalculan solos mientras el mapa está abierto.
+  window.setInterval(() => {
+    if (window.L && trackPoints.length && state.activeAdminPanel === 'map') drawTrack(window.L);
+  }, 30000);
   document.addEventListener('keydown', event => {
     if (event.key === 'Escape' && pickClientId && (state.activeAdminPanel === 'map' || state.currentView === 'mapa')) endPick();
   });
@@ -6990,6 +7247,7 @@ function __mount_homeModule() {
 
 
 
+
 /** Última ubicación enviada por el trabajador (llega por la sincronización con el servidor). */
 function fetchWorkerLocation(worker) {
   const location = shared.workerLocations[worker.id];
@@ -7016,35 +7274,48 @@ function showWorkerLocation(worker, location, source) {
   });
 }
 
-// El trabajador decide una sola vez: si activa «Compartir GPS» queda activado en este
-// celular (también al recargar o volver a entrar) hasta que él mismo lo apague.
-const gpsShareKey = () => `edgecredit-gps-share-${state.activeWorker?.id || 'trabajador'}`;
+// Celular de la empresa: el GPS está SIEMPRE activo mientras el trabajador usa la app; no
+// se puede apagar. El botón de la barra es solo un testigo del estado de la señal.
+// Cada posición actualiza la «última ubicación» y, cada cierto movimiento, agrega un punto
+// al recorrido del día (core/tracks.js) que el admin ve en el mapa.
+const TRACK_MIN_SECONDS = 20;        // como máximo un punto cada 20 s…
+const TRACK_MIN_METERS = 15;         // …si se movió al menos 15 m
+const TRACK_IDLE_SECONDS = 120;      // quieto: un punto cada 2 min (para saber que sigue ahí)
+const TRACK_MAX_ACCURACY = 100;      // posiciones peores que 100 m no entran al recorrido
+let gpsStatus = 'off';
+let lastTrackPoint = null;
 
-function gpsSharePreference() {
-  try { return localStorage.getItem(gpsShareKey()); } catch { return null; }
-}
+const GPS_STATUS = {
+  active: { label: 'GPS activo', detail: 'Tu ubicación se está enviando al administrador.' },
+  searching: { label: 'Buscando GPS…', detail: 'El celular está buscando señal de GPS. Sal a cielo abierto si tarda; se envía sola apenas la encuentre.' },
+  denied: { label: 'GPS sin permiso', detail: 'El permiso de ubicación está bloqueado. Toca el candado junto a la dirección de la página → Permisos → Ubicación → Permitir, y recarga la página.' },
+  unsupported: { label: 'Sin GPS', detail: 'Este navegador no da la ubicación. Usa Chrome en el celular de la empresa.' },
+  off: { label: 'GPS', detail: '' },
+};
 
-function setGpsSharePreference(value) {
-  try { localStorage.setItem(gpsShareKey(), value); } catch { /* preferencia opcional */ }
-}
-
-function setShareButton(mode) {
+function setGpsStatus(mode) {
+  gpsStatus = mode;
   shareLocationButton.classList.toggle('is-sharing', mode === 'active');
   shareLocationButton.classList.toggle('is-searching', mode === 'searching');
-  const label = { active: 'GPS activo', searching: 'Buscando GPS…', off: 'Compartir GPS' }[mode];
+  shareLocationButton.classList.toggle('is-denied', mode === 'denied' || mode === 'unsupported');
+  const { label } = GPS_STATUS[mode];
   shareLocationButton.querySelector('span').textContent = label;
   shareLocationButton.title = label; // en el celular solo se ve el ícono
+  shareLocationButton.setAttribute('aria-label', `Estado del GPS: ${label}`);
 }
 
-function stopWatch() {
-  if (state.locationWatchId !== null && navigator.geolocation) navigator.geolocation.clearWatch(state.locationWatchId);
-  state.locationWatchId = null;
-  setShareButton('off');
+function shouldRecord(point) {
+  if (!(point.accuracy <= TRACK_MAX_ACCURACY)) return false;
+  if (!lastTrackPoint) return true;
+  const seconds = (new Date(point.recordedAt) - new Date(lastTrackPoint.recordedAt)) / 1000;
+  if (seconds < TRACK_MIN_SECONDS) return false;
+  return seconds >= TRACK_IDLE_SECONDS || trackDistance(lastTrackPoint, point) >= TRACK_MIN_METERS;
 }
 
 function startWatch() {
-  if (!navigator.geolocation || state.locationWatchId !== null) return;
-  setShareButton('searching');
+  if (!navigator.geolocation) { setGpsStatus('unsupported'); return; }
+  if (state.locationWatchId !== null) return;
+  setGpsStatus('searching');
   state.locationWatchId = navigator.geolocation.watchPosition(position => {
     const location = {
       latitude: position.coords.latitude,
@@ -7052,8 +7323,16 @@ function startWatch() {
       accuracy: position.coords.accuracy,
       updated_at: new Date(position.timestamp || Date.now()).toISOString()
     };
-    setShareButton('active');
-    // Se guarda como máximo cada 15 s para no saturar la sincronización.
+    setGpsStatus('active');
+    const point = {
+      latitude: location.latitude, longitude: location.longitude, accuracy: Math.round(location.accuracy),
+      speed: Number.isFinite(position.coords.speed) ? position.coords.speed : null, recordedAt: location.updated_at,
+    };
+    if (shouldRecord(point)) {
+      lastTrackPoint = point;
+      recordTrackPoint(state.activeWorker?.id, state.workerRoute, point);
+    }
+    // La última ubicación se guarda como máximo cada 15 s para no saturar la sincronización.
     if (Date.now() - state.lastLocationWrite > 15000) {
       state.lastLocationWrite = Date.now();
       shared.workerLocations[state.activeWorker.id] = location;
@@ -7061,59 +7340,49 @@ function startWatch() {
     }
   }, error => {
     if (error.code === error.PERMISSION_DENIED) {
-      stopWatch();
-      showToast('El permiso de ubicación está negado. Actívalo en los ajustes del navegador (candado junto a la dirección) para compartir el GPS.');
+      // Sin permiso no hay nada que vigilar; se avisa y se vuelve a intentar al regresar a la app.
+      navigator.geolocation.clearWatch(state.locationWatchId);
+      state.locationWatchId = null;
+      setGpsStatus('denied');
+      showToast('Activa el permiso de ubicación: el celular de la empresa debe compartir el GPS siempre.');
       return;
     }
-    // Sin señal o tarda en responder: no se apaga, se sigue buscando.
-    setShareButton('searching');
+    // Sin señal o tarda en responder: se sigue buscando.
+    setGpsStatus('searching');
   }, { enableHighAccuracy: true, maximumAge: 5000, timeout: 30000 });
 }
 
-function toggleWorkerLocationSharing() {
-  if (!navigator.geolocation) {
-    showToast('Este dispositivo no ofrece geolocalización del navegador.');
-    return;
-  }
-  if (state.locationWatchId === null) {
-    setGpsSharePreference('on');
-    startWatch();
-    return;
-  }
+/** Al tocar el testigo: solo informa el estado (el GPS no se puede apagar). */
+function showGpsStatus() {
+  if (gpsStatus === 'denied') { startWatch(); } // por si ya dieron el permiso
+  const { label, detail } = GPS_STATUS[gpsStatus];
+  const last = lastTrackPoint ? new Date(lastTrackPoint.recordedAt).toLocaleTimeString('es-CO', { hour: 'numeric', minute: '2-digit' }) : null;
   openCustomModal({
-    title: '¿Dejar de compartir el GPS?',
-    description: 'El administrador dejará de ver tu ubicación en el mapa hasta que lo vuelvas a activar.',
-    submitLabel: 'Dejar de compartir',
-    onSubmit: () => {
-      setGpsSharePreference('off');
-      stopWatch();
-      showToast('Se detuvo el envío de ubicación.');
-    }
+    title: label,
+    description: `${detail}${last ? ` Último punto del recorrido: ${last}.` : ''} El GPS de este celular de la empresa permanece activo mientras uses la app.`,
+    submitLabel: 'Entendido',
+    onSubmit: () => {}
   });
 }
 
-/**
- * Al entrar el trabajador: si ya lo había activado (o el permiso ya está concedido y nunca
- * lo apagó), el GPS vuelve a compartirse solo, sin preguntar otra vez.
- */
-async function resumeWorkerLocationSharing() {
-  if (!navigator.geolocation || state.userRole !== 'worker') return;
-  const preference = gpsSharePreference();
-  if (preference === 'off') { stopWatch(); return; }
-  let granted = preference === 'on';
-  if (!granted) {
-    try { granted = (await navigator.permissions?.query({ name: 'geolocation' }))?.state === 'granted'; } catch { /* sin Permissions API */ }
-  }
-  if (granted) { setGpsSharePreference('on'); startWatch(); } else setShareButton('off');
+/** Al entrar el trabajador el GPS se activa solo (el permiso se pide una única vez). */
+function resumeWorkerLocationSharing() {
+  if (state.userRole !== 'worker') return;
+  lastTrackPoint = null;
+  startWatch();
+  resumeTrackUpload(state.activeWorker?.id);
 }
 
 /** Registra los listeners del módulo. Se invoca una sola vez desde app.js. */
 function __mount_locationModule() {
-  shareLocationButton.addEventListener('click', toggleWorkerLocationSharing);
-  // El celular pausa el GPS con la app en segundo plano: al volver se reanuda si está activado.
+  shareLocationButton.addEventListener('click', showGpsStatus);
+  // El celular pausa el GPS con la app en segundo plano: al volver se reanuda solo.
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible' && state.userRole === 'worker' && !shareLocationButton.hidden && gpsSharePreference() === 'on') startWatch();
+    if (document.visibilityState !== 'visible' || state.userRole !== 'worker' || shareLocationButton.hidden) return;
+    startWatch();
+    resumeTrackUpload(state.activeWorker?.id);
   });
+  window.addEventListener('online', () => { if (state.userRole === 'worker') resumeTrackUpload(state.activeWorker?.id); });
 }
 
 // ── js/shared/crypto.js
