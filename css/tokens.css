@@ -28,6 +28,10 @@
   --green: var(--success);
   --red: var(--alert);
 
+  /* Barras de desplazamiento (css/components/scrollbars.css) */
+  --scroll-thumb: rgba(255,255,255,.14);
+  --scroll-thumb-hover: color-mix(in srgb, var(--primary) 75%, transparent);
+
   /* Forma, tipografía y espaciado */
   --radius: 18px;
   --font-sans: system-ui, -apple-system, "Segoe UI", sans-serif;
@@ -59,6 +63,7 @@
   --avatar-text: #1F2937;
   --success: #008A3B;
   --alert: #A52E0A;
+  --scroll-thumb: rgba(17,24,39,.18);
   color: var(--text);
   background: var(--outer);
 }
