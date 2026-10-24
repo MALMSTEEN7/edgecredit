@@ -510,58 +510,68 @@
   }
 }
 
-.share-location-button {
+/* Testigo del GPS (features/worker/location.js): solo muestra el estado, no se puede tocar. */
+.gps-indicator {
   min-height: 38px;
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 0 10px;
-  border: 1px solid var(--line);
-  border-radius: 11px;
-  background: var(--card);
+  padding: 0 4px;
   color: var(--muted);
   font-size: 11px;
-  font-weight: 600;
-  cursor: pointer;
+  font-weight: 700;
+  letter-spacing: .3px;
+  white-space: nowrap;
+  cursor: default;
+  user-select: none;
+  pointer-events: none;
 }
 
-.share-location-button.is-sharing {
-  border-color: rgba(0,200,83,.4);
+.gps-indicator::before {
+  content: "";
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 22%, transparent);
+}
+
+.gps-indicator-short {
+  display: none;
+}
+
+.gps-indicator.is-active {
   color: var(--success-color);
 }
 
-.share-location-button.is-denied {
-  border-color: color-mix(in srgb, var(--alert-color) 55%, var(--line));
+.gps-indicator.is-denied {
   color: #FF7043;
 }
 
-.share-location-button.is-searching {
-  border-color: rgba(249,168,37,.45);
+.gps-indicator.is-searching {
   color: #F9A825;
 }
 
 @media (prefers-reduced-motion:no-preference) {
-  .share-location-button.is-searching {
+  .gps-indicator.is-searching::before {
     animation: gps-searching 1.6s ease-in-out infinite;
   }
 }
 
 @keyframes gps-searching {
-  50% { opacity: .55; }
+  50% { opacity: .3; }
 }
 
-.share-location-button[hidden] {
+.gps-indicator[hidden] {
   display: none!important;
 }
 
 @media (max-width:420px) {
-  .share-location-button {
-    width: 38px;
-    justify-content: center;
-    padding: 0;
+  .gps-indicator-short {
+    display: inline;
   }
 
-  .share-location-button span {
+  .gps-indicator .gps-indicator-label {
     position: absolute;
     width: 1px;
     height: 1px;

@@ -34,7 +34,8 @@ export const customModalForm = document.querySelector('#custom-modal-form');
 export const customModalFields = document.querySelector('#custom-modal-fields');
 export const customModalError = document.querySelector('#custom-modal-error');
 export const appToast = document.querySelector('#app-toast');
-export const shareLocationButton = document.querySelector('#share-location');
+/** Testigo del GPS del trabajador (solo indica el estado; no es un botón). */
+export const gpsIndicator = document.querySelector('#gps-indicator');
 export const newClientModal = document.querySelector('#new-client-modal');
 export const newClientForm = document.querySelector('#new-client-form');
 export const newClientError = document.querySelector('#new-client-error');

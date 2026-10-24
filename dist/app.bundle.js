@@ -138,7 +138,8 @@ const customModalForm = document.querySelector('#custom-modal-form');
 const customModalFields = document.querySelector('#custom-modal-fields');
 const customModalError = document.querySelector('#custom-modal-error');
 const appToast = document.querySelector('#app-toast');
-const shareLocationButton = document.querySelector('#share-location');
+/** Testigo del GPS del trabajador (solo indica el estado; no es un botón). */
+const gpsIndicator = document.querySelector('#gps-indicator');
 const newClientModal = document.querySelector('#new-client-modal');
 const newClientForm = document.querySelector('#new-client-form');
 const newClientError = document.querySelector('#new-client-error');
@@ -2201,7 +2202,7 @@ function enterAdminDirectory() {
   document.querySelector('#admin-add-client').hidden = false;
   document.querySelector('#nav-daily-route').hidden = true;
   document.querySelector('#nav-map').hidden = true;
-  shareLocationButton.hidden = true;
+  gpsIndicator.hidden = true;
   showView('directorio');
 }
 
@@ -4577,10 +4578,8 @@ function logout() {
   paymentForm.reset();
   if (state.locationWatchId !== null && navigator.geolocation) navigator.geolocation.clearWatch(state.locationWatchId);
   state.locationWatchId = null;
-  shareLocationButton.classList.remove('is-sharing', 'is-searching');
-  shareLocationButton.querySelector('span').textContent = 'Compartir GPS';
-  shareLocationButton.classList.remove('is-sharing');
-  shareLocationButton.querySelector('span').textContent = 'Compartir GPS';
+  gpsIndicator.classList.remove('is-active', 'is-searching', 'is-denied');
+  gpsIndicator.querySelector('.gps-indicator-label').textContent = 'GPS';
   closePayment();
   if (!customModal.hidden) closeCustomModal();
   if (!newClientModal.hidden) closeNewClientModal();
@@ -4745,7 +4744,7 @@ function enterApp(account, isAdmin) {
       document.querySelector('#admin-add-client').hidden = true;
       document.querySelector('#nav-daily-route').hidden = true;
       document.querySelector('#nav-map').hidden = true;
-      shareLocationButton.hidden = true;
+      gpsIndicator.hidden = true;
       syncRouteSelect();
       renderAdminRoute(routeSelect.value);
       showAdminPanel(defaultAdminPanel());
@@ -4754,7 +4753,7 @@ function enterApp(account, isAdmin) {
     document.querySelector('#admin-add-client').hidden = false; // también el trabajador crea clientes desde el directorio
     document.querySelector('#nav-daily-route').hidden = false;
     document.querySelector('#nav-map').hidden = false;
-      shareLocationButton.hidden = false;
+      gpsIndicator.hidden = false;
       state.activeWorker = state.authenticatedWorker
         || personnel[0] || { id: 'worker-unassigned', name: 'Trabajador', route: '', openingAmount: 0 };
       state.workerRoute = routeKey(state.activeWorker.route);
@@ -7275,14 +7274,13 @@ function showWorkerLocation(worker, location, source) {
 }
 
 // Celular de la empresa: el GPS está SIEMPRE activo mientras el trabajador usa la app; no
-// se puede apagar. El botón de la barra es solo un testigo del estado de la señal.
+// se puede apagar. En la barra hay solo un testigo del estado (no es un botón: no se toca).
 // Cada posición actualiza la «última ubicación» y, cada cierto movimiento, agrega un punto
 // al recorrido del día (core/tracks.js) que el admin ve en el mapa.
 const TRACK_MIN_SECONDS = 20;        // como máximo un punto cada 20 s…
 const TRACK_MIN_METERS = 15;         // …si se movió al menos 15 m
 const TRACK_IDLE_SECONDS = 120;      // quieto: un punto cada 2 min (para saber que sigue ahí)
 const TRACK_MAX_ACCURACY = 100;      // posiciones peores que 100 m no entran al recorrido
-let gpsStatus = 'off';
 let lastTrackPoint = null;
 
 const GPS_STATUS = {
@@ -7294,14 +7292,13 @@ const GPS_STATUS = {
 };
 
 function setGpsStatus(mode) {
-  gpsStatus = mode;
-  shareLocationButton.classList.toggle('is-sharing', mode === 'active');
-  shareLocationButton.classList.toggle('is-searching', mode === 'searching');
-  shareLocationButton.classList.toggle('is-denied', mode === 'denied' || mode === 'unsupported');
-  const { label } = GPS_STATUS[mode];
-  shareLocationButton.querySelector('span').textContent = label;
-  shareLocationButton.title = label; // en el celular solo se ve el ícono
-  shareLocationButton.setAttribute('aria-label', `Estado del GPS: ${label}`);
+  gpsIndicator.classList.toggle('is-active', mode === 'active');
+  gpsIndicator.classList.toggle('is-searching', mode === 'searching');
+  gpsIndicator.classList.toggle('is-denied', mode === 'denied' || mode === 'unsupported');
+  const { label, detail } = GPS_STATUS[mode];
+  gpsIndicator.querySelector('.gps-indicator-label').textContent = label;
+  gpsIndicator.title = detail ? `${label}. ${detail}` : label; // en el celular solo se ve el ícono
+  gpsIndicator.setAttribute('aria-label', `Estado del GPS: ${label}`);
 }
 
 function shouldRecord(point) {
@@ -7352,19 +7349,6 @@ function startWatch() {
   }, { enableHighAccuracy: true, maximumAge: 5000, timeout: 30000 });
 }
 
-/** Al tocar el testigo: solo informa el estado (el GPS no se puede apagar). */
-function showGpsStatus() {
-  if (gpsStatus === 'denied') { startWatch(); } // por si ya dieron el permiso
-  const { label, detail } = GPS_STATUS[gpsStatus];
-  const last = lastTrackPoint ? new Date(lastTrackPoint.recordedAt).toLocaleTimeString('es-CO', { hour: 'numeric', minute: '2-digit' }) : null;
-  openCustomModal({
-    title: label,
-    description: `${detail}${last ? ` Último punto del recorrido: ${last}.` : ''} El GPS de este celular de la empresa permanece activo mientras uses la app.`,
-    submitLabel: 'Entendido',
-    onSubmit: () => {}
-  });
-}
-
 /** Al entrar el trabajador el GPS se activa solo (el permiso se pide una única vez). */
 function resumeWorkerLocationSharing() {
   if (state.userRole !== 'worker') return;
@@ -7375,10 +7359,9 @@ function resumeWorkerLocationSharing() {
 
 /** Registra los listeners del módulo. Se invoca una sola vez desde app.js. */
 function __mount_locationModule() {
-  shareLocationButton.addEventListener('click', showGpsStatus);
   // El celular pausa el GPS con la app en segundo plano: al volver se reanuda solo.
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState !== 'visible' || state.userRole !== 'worker' || shareLocationButton.hidden) return;
+    if (document.visibilityState !== 'visible' || state.userRole !== 'worker' || gpsIndicator.hidden) return;
     startWatch();
     resumeTrackUpload(state.activeWorker?.id);
   });

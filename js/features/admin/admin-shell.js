@@ -3,7 +3,7 @@
  * y modo "directorio de ruta".
  */
 
-import { adminView, operationsModal, routeSelect, shareLocationButton, workerView } from '../../core/dom.js';
+import { adminView, operationsModal, routeSelect, gpsIndicator, workerView } from '../../core/dom.js';
 import { state } from '../../core/state.js';
 import { routeSettlements } from '../../core/store.js';
 import { renderClientMap } from './client-map.js';
@@ -104,7 +104,7 @@ export function enterAdminDirectory() {
   document.querySelector('#admin-add-client').hidden = false;
   document.querySelector('#nav-daily-route').hidden = true;
   document.querySelector('#nav-map').hidden = true;
-  shareLocationButton.hidden = true;
+  gpsIndicator.hidden = true;
   showView('directorio');
 }
 

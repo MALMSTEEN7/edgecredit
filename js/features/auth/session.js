@@ -6,7 +6,7 @@
  */
 
 import { localAdminPasswordHash } from '../admin/account-settings.js';
-import { adminView, customModal, interestModal, loginError, loginGateway, newClientModal, paymentForm, routeSelect, shareLocationButton, workerView } from '../../core/dom.js';
+import { adminView, customModal, interestModal, loginError, loginGateway, newClientModal, paymentForm, routeSelect, gpsIndicator, workerView } from '../../core/dom.js';
 import { state } from '../../core/state.js';
 import { clients, pendingRequests, persistBusinessData, personnel, routeSettlements, security } from '../../core/store.js';
 import { backend, backendEnabled, backendErrorMessage, usernameToEmail } from '../../core/backend.js';
@@ -100,10 +100,8 @@ function logout() {
   paymentForm.reset();
   if (state.locationWatchId !== null && navigator.geolocation) navigator.geolocation.clearWatch(state.locationWatchId);
   state.locationWatchId = null;
-  shareLocationButton.classList.remove('is-sharing', 'is-searching');
-  shareLocationButton.querySelector('span').textContent = 'Compartir GPS';
-  shareLocationButton.classList.remove('is-sharing');
-  shareLocationButton.querySelector('span').textContent = 'Compartir GPS';
+  gpsIndicator.classList.remove('is-active', 'is-searching', 'is-denied');
+  gpsIndicator.querySelector('.gps-indicator-label').textContent = 'GPS';
   closePayment();
   if (!customModal.hidden) closeCustomModal();
   if (!newClientModal.hidden) closeNewClientModal();
@@ -268,7 +266,7 @@ function enterApp(account, isAdmin) {
       document.querySelector('#admin-add-client').hidden = true;
       document.querySelector('#nav-daily-route').hidden = true;
       document.querySelector('#nav-map').hidden = true;
-      shareLocationButton.hidden = true;
+      gpsIndicator.hidden = true;
       syncRouteSelect();
       renderAdminRoute(routeSelect.value);
       showAdminPanel(defaultAdminPanel());
@@ -277,7 +275,7 @@ function enterApp(account, isAdmin) {
     document.querySelector('#admin-add-client').hidden = false; // también el trabajador crea clientes desde el directorio
     document.querySelector('#nav-daily-route').hidden = false;
     document.querySelector('#nav-map').hidden = false;
-      shareLocationButton.hidden = false;
+      gpsIndicator.hidden = false;
       state.activeWorker = state.authenticatedWorker
         || personnel[0] || { id: 'worker-unassigned', name: 'Trabajador', route: '', openingAmount: 0 };
       state.workerRoute = routeKey(state.activeWorker.route);
