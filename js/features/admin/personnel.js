@@ -204,7 +204,7 @@ function handlePersonnelAction(action, index) {
         { name: 'city', label: 'Ciudad / municipio', value: worker.city || '', placeholder: 'Ej. Cúcuta', required: true },
         { name: 'motorcycle', label: 'Modelo de la moto', value: worker.motorcycle || '', required: true },
         { name: 'plate', label: 'Placa', value: worker.plate || '', required: true },
-        { name: 'openingAmount', label: 'Monto de apertura del cobro ($)', type: 'number', min: 0, step: 1000, value: worker.openingAmount || 0, required: true },
+        { name: 'openingAmount', label: 'Monto de apertura del cobro ($) · solo cuenta al abrir el cobro; cambiarlo aquí no mueve la base ni la caja', type: 'number', min: 0, step: 1000, value: worker.openingAmount || 0, required: true, money: true },
         { name: 'soatExpiry', label: 'Vencimiento del SOAT', type: 'date', value: worker.soatExpiry || '', required: true },
         { name: 'technicalExpiry', label: 'Vencimiento técnico-mecánica', type: 'date', value: worker.technicalExpiry || '', required: true }
       ],
@@ -217,10 +217,9 @@ function handlePersonnelAction(action, index) {
         worker.name = values.name.trim(); worker.route = routeSettlements[routeId].name; worker.motorcycle = values.motorcycle.trim();
         worker.plate = values.plate.trim().toUpperCase(); worker.openingAmount = Number(values.openingAmount);
         worker.soatExpiry = values.soatExpiry; worker.technicalExpiry = values.technicalExpiry;
-        if (routeSettlements[routeKey(worker.route)]) {
-          routeSettlements[routeKey(worker.route)].base = worker.openingAmount;
-          if (routeSelect.value === routeKey(worker.route)) renderAdminRoute(routeSelect.value);
-        }
+        // El monto de apertura solo vale al abrir un cobro nuevo: editar al trabajador no
+        // toca la base del día ni la caja de un cobro que ya está andando.
+        if (routeSelect.value === routeKey(worker.route)) renderAdminRoute(routeSelect.value);
         refreshRoutesAfterStaffChange();
         persistBusinessData();
         renderPersonnel();
@@ -348,7 +347,7 @@ export function mount() {
         }
         personnel.push(worker);
         if (routeSettlements[routeId]) {
-          routeSettlements[routeId].base = worker.openingAmount;
+          if (opensRoute) routeSettlements[routeId].base = worker.openingAmount;
           if (opensRoute && worker.openingAmount > 0) {
             addCashEntry(routeSettlements[routeId], worker.openingAmount, { note: `Apertura del cobro (${worker.name})` });
             showToast(`Cobro ${routeSettlements[routeId].name} abierto: ${formatMoney(worker.openingAmount)} entraron a la caja.`);
