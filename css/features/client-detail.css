@@ -1054,3 +1054,47 @@ button.evidence-link:active {
 .person-card-chip.is-cancelled small {
   color: var(--success);
 }
+
+/* Aviso de cartulina sin ubicación GPS (o con ubicación aproximada) y botón para tomarla. */
+.client-location-pending {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 14px;
+  margin: 14px 0;
+  padding: 13px 14px;
+  border: 1px solid color-mix(in srgb, #F9A825 45%, var(--line));
+  border-radius: 14px;
+  background: color-mix(in srgb, #F9A825 9%, var(--card));
+}
+
+.client-location-pending[hidden] {
+  display: none;
+}
+
+.client-location-pending-copy {
+  display: grid;
+  flex: 1 1 200px;
+  gap: 3px;
+}
+
+.client-location-pending strong {
+  color: #F9A825;
+  font-size: 13px;
+}
+
+.client-location-pending small {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.client-location-pending .secondary-button {
+  white-space: nowrap;
+}
+
+.client-location-pending .secondary-button[aria-busy="true"] {
+  opacity: .7;
+  cursor: progress;
+}

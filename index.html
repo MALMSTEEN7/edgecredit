@@ -34,7 +34,7 @@
   <link rel="icon" href="icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="icon-192.png">
   <meta name="apple-mobile-web-app-capable" content="yes">
-  <link rel="stylesheet" id="app-styles" href="dist/styles.bundle.css?v=0f317d4e87">
+  <link rel="stylesheet" id="app-styles" href="dist/styles.bundle.css?v=466389abd1">
 </head>
 <body class="login-active">
   <section class="login-gateway" id="login-gateway" aria-labelledby="login-title">
@@ -178,6 +178,7 @@
           <textarea id="client-notes-input" rows="3" maxlength="1000" placeholder="Recordatorios o datos útiles: horario, referencias, acuerdos de pago…" aria-describedby="client-notes-meta"></textarea>
           <div class="client-notes-actions"><span class="client-notes-status" id="client-notes-status" role="status" aria-live="polite"></span><button type="button" class="secondary-button" id="save-client-notes" disabled>Guardar nota</button></div>
         </section>
+        <div class="client-location-pending" id="client-location-pending" role="status" hidden><span class="client-location-pending-copy"><strong id="client-location-pending-title">Sin ubicación GPS</strong><small id="client-location-pending-text">Tómala cuando estés en el domicilio del cliente.</small></span><button class="secondary-button" type="button" id="client-capture-location"><span aria-hidden="true">⌖</span> Tomar ubicación ahora</button></div>
         <button class="disclosure-button" type="button" aria-expanded="false" aria-controls="credit-details"><span>Ver detalles del crédito</span><span class="disclosure-chevron" aria-hidden="true">⌄</span></button>
         <div class="credit-details" id="credit-details" hidden>
           <dl class="detail-grid"><div><dt>Cédula</dt><dd id="detail-id">1.024.567.890</dd></div><div><dt>Dirección</dt><dd id="detail-address">Cra. 12 # 34-56</dd></div><div><dt>Dirección alternativa</dt><dd id="detail-alt-address">—</dd></div><div><dt>Indicaciones del domicilio</dt><dd id="detail-address-notes">—</dd></div><div><dt>Teléfono</dt><dd id="detail-phone">300 555 0101</dd></div><div><dt>Valor total del préstamo</dt><dd id="detail-loan-total">$ 1.200.000</dd></div><div><dt>Plazo</dt><dd id="detail-term">16 semanas</dd></div><div><dt>Frecuencia de pago</dt><dd id="detail-frequency">Semanal</dd></div><div><dt>Capital / Intereses</dt><dd id="detail-breakdown">$ 1.000.000 / $ 200.000</dd></div><div><dt>Interés acordado</dt><dd id="detail-interest-rate">20%</dd></div><div><dt>Seguros cobrados</dt><dd id="detail-insurance">Tarifa general</dd></div><div class="detail-insurance-reason" id="detail-insurance-reason-row" hidden><dt>Motivo del valor de seguros</dt><dd id="detail-insurance-reason">—</dd></div><div id="detail-renewal-row" hidden><dt>Renovación</dt><dd id="detail-renewal">—</dd></div></dl>
@@ -354,7 +355,7 @@
       <div class="modal-handle" aria-hidden="true"></div><button class="modal-close" type="button" aria-label="Cerrar" data-close-payment>×</button>
       <p class="eyebrow">NUEVO RECAUDO</p><h2 id="payment-title">Registrar pago</h2><p id="payment-description" class="modal-subtitle">Pago para <strong id="payment-client-name">—</strong></p>
       <form id="payment-form" novalidate>
-        <label class="amount-label" for="payment-amount">¿Cuánto recibiste?</label><div class="amount-input-wrap"><span>$</span><input data-money id="payment-amount" name="amount" type="number" inputmode="decimal" min="1" step="1" placeholder="0" required></div>
+        <label class="amount-label" for="payment-amount">¿Cuánto recibiste?</label><div class="amount-input-wrap"><span>$</span><input data-money data-money-thousands id="payment-amount" name="amount" type="number" inputmode="decimal" min="1" step="1" placeholder="0" required></div>
         <fieldset class="payment-method"><legend>Método de pago</legend><div class="method-options"><label class="method-option"><input type="radio" name="method" value="cash" checked><span class="method-card"><span aria-hidden="true">▣</span><strong>Efectivo</strong></span></label><label class="method-option"><input type="radio" name="method" value="transfer"><span class="method-card"><span aria-hidden="true">⇄</span><strong>Transf</strong></span></label></div></fieldset>
         <div class="voucher-field" id="voucher-field" hidden><label for="voucher-file">Fotografía del comprobante (opcional)</label><div class="file-picker-control"><input id="voucher-file" class="photo-file-input" type="file" accept="image/*" capture="environment" aria-label="Seleccionar comprobante de transferencia"><span class="file-picker-button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h3l1.5-2h7L17 7h3v12H4z"/><circle cx="12" cy="13" r="3.5"/></svg><span>Adjuntar comprobante</span></span><span class="file-picker-name" id="voucher-file-name" aria-live="polite">Ningún archivo seleccionado</span></div><small>Si no la adjuntas, el abono quedará marcado como pendiente de evidencia.</small></div>
         <button class="primary-button submit-payment" type="submit">Confirmar pago <span aria-hidden="true">→</span></button>
@@ -416,7 +417,7 @@
         <section class="insurance-block" aria-labelledby="insurance-block-title">
           <div class="insurance-general"><div><span id="insurance-block-title">Seguros</span><small>General: 10% del préstamo</small></div><strong id="insurance-general-amount">$ 0</strong></div>
           <label class="exception-toggle"><input type="checkbox" id="insurance-custom-toggle"><span>Cobrar un valor de seguros diferente al general</span></label>
-          <div class="exception-fields" id="insurance-custom-fields" hidden><label class="custom-field">Valor de los seguros ($)<input name="insuranceAmount" data-money id="insurance-custom-amount" type="number" min="0" step="1" inputmode="numeric" placeholder="Ej. 50.000"></label><label class="custom-field">¿Por qué este valor es diferente?<textarea name="insuranceReason" id="insurance-custom-reason" rows="2" maxlength="400" placeholder="Ej. Cliente renovado, acuerdo especial, préstamo pequeño…"></textarea></label></div>
+          <div class="exception-fields" id="insurance-custom-fields" hidden><label class="custom-field">Valor de los seguros ($)<input name="insuranceAmount" data-money data-money-thousands id="insurance-custom-amount" type="number" min="0" step="1" inputmode="numeric" placeholder="Ej. 50"></label><label class="custom-field">¿Por qué este valor es diferente?<textarea name="insuranceReason" id="insurance-custom-reason" rows="2" maxlength="400" placeholder="Ej. Cliente renovado, acuerdo especial, préstamo pequeño…"></textarea></label></div>
           <small class="insurance-note">Los seguros se cobran al entregar el préstamo y se suman a la base del día.</small>
         </section>
         <label class="exception-toggle admin-base-exception" id="admin-no-base-impact-wrap" hidden><input type="checkbox" id="admin-no-base-impact"><span>Registrar préstamo sin afectar la base del trabajador</span></label>
@@ -430,7 +431,7 @@
       <button class="modal-close" id="close-worker-expense" type="button" aria-label="Cerrar">×</button>
       <form class="worker-expense-form" id="worker-expense-form">
           <div><p class="eyebrow">COMPROBANTE DE GASTO</p><h2 id="worker-expense-title">Registrar otro gasto</h2><p>Adjunta una foto del recibo; el total aparecerá en la liquidación de tu ruta. Si no tienes foto, el gasto quedará marcado "Sin comprobante" para el administrador.</p></div>
-          <label class="custom-field" for="worker-expense-amount">Monto del gasto ($)<input data-money id="worker-expense-amount" name="amount" type="number" min="1" step="1" inputmode="numeric" required></label>
+          <label class="custom-field" for="worker-expense-amount">Monto del gasto ($)<input data-money data-money-thousands id="worker-expense-amount" name="amount" type="number" min="1" step="1" inputmode="numeric" required></label>
           <label class="custom-field" for="worker-expense-note">Descripción<input id="worker-expense-note" name="note" type="text" maxlength="120" placeholder="Ej. parqueadero o materiales" required></label>
           <label class="custom-field file-field">Foto del comprobante (recomendada)<div class="file-picker-control"><input id="worker-expense-receipt" class="photo-file-input" name="receipt" type="file" accept="image/*" capture="environment" aria-label="Seleccionar foto del comprobante"><span class="file-picker-button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h3l1.5-2h7L17 7h3v12H4z"/><circle cx="12" cy="13" r="3.5"/></svg><span>Adjuntar foto</span></span><span class="file-picker-name" id="worker-expense-file-name">Ningún archivo seleccionado</span></div></label>
           <img id="worker-expense-preview" class="client-photo-preview expense-receipt-preview" alt="Vista previa del comprobante" hidden>
@@ -464,7 +465,7 @@
     // al cambiar el sello, el navegador descarga el JS/CSS nuevo en vez de usar su caché.
     // Para desarrollar con los módulos sueltos, abre index.html?dev desde un servidor local.
     (() => {
-      const APP_VERSION = '0f317d4e87';
+      const APP_VERSION = '466389abd1';
       const dev = new URLSearchParams(location.search).has('dev') && location.protocol !== 'file:';
       if (dev) {
         document.getElementById('app-styles').href = 'styles.css';

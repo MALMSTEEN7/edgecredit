@@ -2150,7 +2150,7 @@ const BASEMAPS = {
 
 const TIER_COLORS = { good: '#00C853', regular: '#FF9800', bad: '#E53935' };
 const TIER_LABELS = { good: 'Al día', regular: '1 pago atrasado', bad: '2 o más pagos atrasados' };
-const SOURCE_LABELS = { alta: 'GPS tomado al crear el cliente', abono: 'GPS tomado en un abono', admin: 'Ubicado manualmente por el administrador', trabajador: 'Ubicado manualmente por el trabajador', demo: 'Ubicación de demostración' };
+const SOURCE_LABELS = { alta: 'GPS tomado al crear el cliente', ficha: 'GPS tomado desde la ficha del cliente', abono: 'GPS tomado en un abono', admin: 'Ubicado manualmente por el administrador', trabajador: 'Ubicado manualmente por el trabajador', demo: 'Ubicación de demostración' };
 
 let leafletPromise = null;
 let map = null;
@@ -2270,7 +2270,13 @@ function popupContent(id, client, risk) {
     facts.append(dt, dd);
   });
   const source = document.createElement('small');
-  source.textContent = SOURCE_LABELS[client.location?.source] || 'Ubicación registrada';
+  const accuracy = Number(client.location?.accuracy);
+  const takenAt = client.location?.capturedAt ? new Date(client.location.capturedAt) : null;
+  source.textContent = [
+    SOURCE_LABELS[client.location?.source] || 'Ubicación registrada',
+    Number.isFinite(accuracy) && accuracy > 0 ? `± ${Math.round(accuracy)} m${accuracy > 100 ? ' (aproximada)' : ''}` : '',
+    takenAt && !Number.isNaN(takenAt.getTime()) ? takenAt.toLocaleDateString('es-CO', { day: 'numeric', month: 'short', year: 'numeric' }) : '',
+  ].filter(Boolean).join(' · ');
   const actions = document.createElement('div');
   actions.className = 'client-map-popup-actions';
   const open = document.createElement('button');
@@ -4988,6 +4994,67 @@ function saveClientNotes() {
   document.querySelector('#client-notes-status').textContent = '✓ Nota guardada';
 }
 
+function renderLocationLink(client) {
+  const customerLocation = document.querySelector('#client-location-link');
+  customerLocation.href = hasCoordinates(client.location)
+    ? `https://www.google.com/maps/dir/?api=1&destination=${Number(client.location.latitude)},${Number(client.location.longitude)}`
+    : `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(client.address)}`;
+  customerLocation.setAttribute('aria-label', `Abrir en el mapa el domicilio de ${client.name}: ${client.address}`);
+}
+
+/**
+ * Aviso de la ficha cuando la cartulina no tiene ubicación (se creó sin GPS) o la tiene
+ * aproximada. El trabajador la toma desde aquí cuando está en el domicilio; el admin ve el
+ * aviso pero no el botón (su GPS sería el de la oficina) y puede ubicarlo en el mapa.
+ */
+function renderLocationPending(client) {
+  const box = document.querySelector('#client-location-pending');
+  const located = hasCoordinates(client.location);
+  const approximate = located && isApproximateLocation(client.location);
+  box.hidden = (located && !approximate) || Number(client.balance) <= 0;
+  if (box.hidden) return;
+  const isWorker = state.userRole === 'worker';
+  box.classList.toggle('is-approximate', approximate);
+  document.querySelector('#client-location-pending-title').textContent = approximate ? `Ubicación aproximada (± ${client.location.accuracy} m)` : 'Sin ubicación GPS';
+  const reason = client.locationFailure && LOCATION_FAILURE_LABELS[client.locationFailure];
+  document.querySelector('#client-location-pending-text').textContent = !isWorker
+    ? 'El trabajador puede tomarla desde esta ficha, o ubícalo tú en el Mapa de clientes.'
+    : approximate ? 'Si estás en el domicilio, tómala de nuevo para que quede exacta en el mapa.'
+    : `${reason ? `No se pudo tomar al crearla (${reason}). ` : ''}Tómala cuando estés en el domicilio del cliente.`;
+  const button = document.querySelector('#client-capture-location');
+  button.hidden = !isWorker;
+  button.innerHTML = `<span aria-hidden="true">⌖</span> ${approximate ? 'Tomar de nuevo' : 'Tomar ubicación ahora'}`;
+}
+
+async function captureClientLocation() {
+  const clientId = state.activeClient;
+  const button = document.querySelector('#client-capture-location');
+  if (!clients[clientId] || button.disabled) return;
+  button.disabled = true;
+  button.setAttribute('aria-busy', 'true');
+  button.textContent = 'Tomando ubicación…';
+  const { location, reason } = await locateDevice({ timeout: 10000 });
+  button.disabled = false;
+  button.removeAttribute('aria-busy');
+  const client = clients[clientId];
+  if (!client) return;
+  if (!location) {
+    client.locationFailure = reason;
+    persistBusinessData();
+    if (state.activeClient === clientId) renderLocationPending(client);
+    showToast(`No se pudo tomar la ubicación (${LOCATION_FAILURE_LABELS[reason] || 'sin GPS'}). Inténtalo de nuevo en el domicilio.`);
+    return;
+  }
+  client.location = { ...location, source: 'ficha', by: state.activeWorker?.name || 'Trabajador' };
+  delete client.locationPending;
+  delete client.locationFailure;
+  persistBusinessData();
+  if (state.activeClient === clientId) { renderLocationLink(client); renderLocationPending(client); }
+  showToast(isApproximateLocation(client.location)
+    ? `Ubicación de ${client.name} guardada, pero es aproximada (± ${client.location.accuracy} m).`
+    : `Ubicación de ${client.name} guardada (± ${client.location.accuracy} m).`);
+}
+
 function openClient(clientId) {
   const client = clients[clientId];
   if (!client) return;
@@ -5020,11 +5087,8 @@ function openClient(clientId) {
   document.querySelector('#detail-installment').textContent = formatMoney(client.installment);
   document.querySelector('#detail-id').textContent = client.id;
   document.querySelector('#detail-address').textContent = client.address;
-  const customerLocation = document.querySelector('#client-location-link');
-  customerLocation.href = hasCoordinates(client.location)
-    ? `https://www.google.com/maps/dir/?api=1&destination=${Number(client.location.latitude)},${Number(client.location.longitude)}`
-    : `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(client.address)}`;
-  customerLocation.setAttribute('aria-label', `Abrir en el mapa el domicilio de ${client.name}: ${client.address}`);
+  renderLocationLink(client);
+  renderLocationPending(client);
   document.querySelector('#detail-phone').textContent = client.phone;
   document.querySelector('#detail-loan-total').textContent = formatMoney(client.total);
   document.querySelector('#detail-term').textContent = client.term;
@@ -5155,6 +5219,7 @@ function renderPersonCards(clientId) {
 }
 
 function __mount_clientDetailModule() {
+  document.querySelector('#client-capture-location').addEventListener('click', captureClientLocation);
   onClientRenewed(clientId => openClient(clientId));
   document.querySelector('#person-cards-list').addEventListener('click', event => {
     const chip = event.target.closest('[data-person-card]');
@@ -5867,7 +5932,11 @@ function closeNewClientModal() {
   if (customModal.hidden && interestModal.hidden && modal.hidden) document.body.classList.remove('modal-open');
 }
 
-function addNewClient(values, photoData = '', insurance) {
+/**
+ * `gps`: resultado de locateDevice() tomado al pulsar crear, o null si no se pidió
+ * (admin, o renovación sin cambio de dirección que conserva la ubicación anterior).
+ */
+function addNewClient(values, photoData = '', insurance, gps = null) {
   const clientId = `client-${Date.now()}`;
   const principal = Math.round(Number(values.principal));
   const interestException = document.querySelector('#interest-exception-toggle').checked;
@@ -5926,14 +5995,16 @@ function addNewClient(values, photoData = '', insurance) {
   } else placeInRoute(assignedRoute, clientId);
   appendClientCards(clientId);
   if (source) personCardIds(clients, source.id).forEach(id => { if (id !== clientId) renderClientRows(id); });
-  // El trabajador registra al cliente en su domicilio: esa posición alimenta el mapa del admin.
-  // En una renovación sin cambio de dirección se conserva la ubicación ya guardada.
-  if (!isAdmin && !created.location) {
-    captureLocation().then(location => {
-      if (!location || !clients[clientId] || clients[clientId].location) return;
-      clients[clientId].location = { ...location, source: 'alta' };
-      persistBusinessData();
-    });
+  // El trabajador registra al cliente en su domicilio: esa posición (con su precisión y
+  // fecha) va al mismo campo que usa el mapa. Sin ubicación, queda marcado para tomarla
+  // después desde la ficha.
+  if (gps && !hasCoordinates(created.location)) {
+    if (gps.location) created.location = { ...gps.location, source: 'alta' };
+    else {
+      created.location = null;
+      created.locationPending = true;
+      created.locationFailure = gps.reason;
+    }
   }
   const requests = [];
   if (!isAdmin && interestException) {
@@ -5965,13 +6036,19 @@ function addNewClient(values, photoData = '', insurance) {
   closeNewClientModal();
   const insuranceCopy = `Seguros ${formatMoney(insurance.amount)}${insurance.custom ? ' (valor especial)' : ''}.`;
   const lead = mode === 'renew' ? `Crédito renovado para ${name}.` : mode === 'extra' ? `Nueva cartulina creada para ${name}.` : isAdmin ? 'Cartulina creada para la ruta seleccionada.' : 'Cliente creado con el interés predeterminado del 20%.';
-  showToast(`${lead} ${insuranceCopy}${requests.length ? ` ${requests.length} solicitud(es) enviada(s) a Pendientes.` : ''}`);
+  const requestsCopy = requests.length ? ` ${requests.length} solicitud(es) enviada(s) a Pendientes.` : '';
+  if (gps && !gps.location) {
+    showToast(`Cartulina creada sin ubicación (${LOCATION_FAILURE_LABELS[gps.reason] || 'sin GPS'}). Tómala después desde la ficha del cliente.${requestsCopy}`);
+  } else if (gps && isApproximateLocation(created.location)) {
+    showToast(`${lead} Ubicación aproximada (± ${created.location.accuracy} m): revísala en el mapa.${requestsCopy}`);
+  } else showToast(`${lead} ${insuranceCopy}${requestsCopy}`);
   return clientId;
 }
 
 // El detalle del cliente se registra aquí para abrir la cartulina nueva tras renovar
 // (evita una importación circular new-client ↔ client-detail).
 let onRenewed = null;
+let creatingClient = false; // evita crear dos veces si pulsan «Crear» mientras se toma la ubicación
 function onClientRenewed(callback) { onRenewed = callback; }
 
 /** Registra los listeners del módulo. Se invoca una sola vez desde app.js. */
@@ -6025,12 +6102,34 @@ function __mount_newClientModule() {
       newClientError.textContent = insurance.error;
       return;
     }
+    if (creatingClient) return;
+    creatingClient = true;
+    const submit = document.querySelector('#new-client-submit');
+    const submitLabel = submit.innerHTML;
     try {
       const photoData = await compressClientPhoto(document.querySelector('#client-photo-input').files?.[0]);
       const sourceId = renewSourceId;
-      const createdId = addNewClient(values, photoData, insurance);
+      // GPS solo del trabajador (está en el domicilio). Una renovación con la misma dirección
+      // conserva la ubicación que ya tenía.
+      const source = linked ? clients[renewSourceId] : null;
+      const keepsLocation = source && values.address.trim() === (source.address || '') && hasCoordinates(source.location);
+      let gps = null;
+      if (state.userRole === 'worker' && !keepsLocation) {
+        submit.disabled = true;
+        submit.setAttribute('aria-busy', 'true');
+        submit.textContent = 'Tomando ubicación…';
+        gps = await locateDevice({ timeout: 10000 });
+        if (newClientModal.hidden) return; // lo cancelaron mientras se tomaba la ubicación
+      }
+      const createdId = addNewClient(values, photoData, insurance, gps);
       if (sourceId && createdId && state.activeClient === sourceId) onRenewed?.(createdId);
     } catch (error) { newClientError.textContent = error.message || 'No se pudo procesar la foto.'; }
+    finally {
+      creatingClient = false;
+      submit.disabled = false;
+      submit.removeAttribute('aria-busy');
+      submit.innerHTML = submitLabel;
+    }
   });
 }
 
@@ -6990,26 +7089,45 @@ function formatDate(value) {
 // ── js/shared/geo.js
 /**
  * shared/geo · Captura de la posición GPS del dispositivo sin bloquear la operación.
- * Nunca rechaza: si no hay permiso, señal o soporte, resuelve con null.
+ * Nunca rechaza: resuelve con { location, reason }. Si no hay ubicación, `reason` dice por
+ * qué: 'denied' (permiso negado), 'unavailable' (sin señal), 'timeout' o 'unsupported'.
  */
-function captureLocation({ timeout = 10000, maximumAge = 60000 } = {}) {
-  if (!navigator.geolocation) return Promise.resolve(null);
+function locateDevice({ timeout = 10000 } = {}) {
+  if (!navigator.geolocation) return Promise.resolve({ location: null, reason: 'unsupported' });
   return new Promise(resolve => {
     let settled = false;
     const done = value => { if (!settled) { settled = true; resolve(value); } };
     // Algunos navegadores nunca responden si el usuario ignora el aviso de permiso.
-    const guard = window.setTimeout(() => done(null), timeout + 1000);
+    const guard = window.setTimeout(() => done({ location: null, reason: 'timeout' }), timeout + 500);
     navigator.geolocation.getCurrentPosition(position => {
       window.clearTimeout(guard);
       done({
-        latitude: position.coords.latitude,
-        longitude: position.coords.longitude,
-        accuracy: Math.round(position.coords.accuracy),
-        capturedAt: new Date(position.timestamp || Date.now()).toISOString()
+        location: {
+          latitude: position.coords.latitude,
+          longitude: position.coords.longitude,
+          accuracy: Math.round(position.coords.accuracy),
+          capturedAt: new Date(position.timestamp || Date.now()).toISOString(),
+        },
+        reason: null,
       });
-    }, () => { window.clearTimeout(guard); done(null); }, { enableHighAccuracy: true, timeout, maximumAge });
+    }, error => {
+      window.clearTimeout(guard);
+      done({ location: null, reason: error?.code === 1 ? 'denied' : error?.code === 3 ? 'timeout' : 'unavailable' });
+    }, { enableHighAccuracy: true, timeout, maximumAge: 0 }); // posición nueva: se toma en el domicilio
   });
 }
+
+const LOCATION_FAILURE_LABELS = {
+  denied: 'permiso de ubicación negado',
+  unavailable: 'sin señal de GPS',
+  timeout: 'se acabó el tiempo de espera',
+  unsupported: 'este navegador no da la ubicación',
+};
+
+/** Precisión (en metros) a partir de la cual la ubicación se guarda pero se avisa que es aproximada. */
+const APPROXIMATE_LOCATION_METERS = 100;
+
+const isApproximateLocation = location => Number(location?.accuracy) > APPROXIMATE_LOCATION_METERS;
 
 const hasCoordinates = location => Boolean(location) && Number.isFinite(Number(location.latitude)) && Number.isFinite(Number(location.longitude));
 
@@ -7369,7 +7487,12 @@ function __mount_imageViewerModule() {
  *  - `input.value` devuelve solo los dígitos ("4000000").
  *  - `new FormData(form)` también recibe los dígitos (evento `formdata`).
  * Los campos que se crean después (modales, tablas) se preparan solos.
+ *
+ * Con `data-money-thousands` (abonos, gastos y seguros que escribe el trabajador en la
+ * calle) un número menor que 1.000 se entiende en miles: 20 → 20.000, «20,5» o «20.5» →
+ * 20.500. Debajo del campo se ve el valor real («= $ 20.000») y `value` devuelve ese valor.
  */
+
 
 const nativeValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value');
 /** Dígitos del texto, conservando el signo menos si va al inicio (p. ej. una base negativa). */
@@ -7380,17 +7503,85 @@ const onlyDigits = text => {
 };
 const withDots = digits => (digits && digits !== '-' ? Number(digits).toLocaleString('es-CO', { maximumFractionDigits: 0 }) : digits);
 
+/**
+ * Monto escrito «en miles» → pesos (o null si no hay número).
+ * «20» → 20000 · «20,5» / «20.5» → 20500 · «1.500» / «1500» → 1500 · «1.000.000» → 1000000.
+ * Con un solo separador y hasta 3 cifras después, «20.500» da 20.500 leído de las dos
+ * formas (20,5 mil o 20 mil 500), así que no hay ambigüedad con los puntos de miles.
+ */
+function parseThousandsAmount(text) {
+  const raw = String(text ?? '').replace(/[\s$]/g, '');
+  if (!raw) return null;
+  const decimal = raw.match(/^(\d{1,3})[.,](\d{1,3})$/);
+  if (decimal) return Math.round(Number(`${decimal[1]}.${decimal[2]}`) * 1000);
+  const digits = raw.replace(/\D/g, '');
+  if (!digits) return null;
+  const amount = Number(digits);
+  return amount < 1000 ? amount * 1000 : amount;
+}
+
 function applyMinValidity(input) {
   const min = input.dataset.moneyMin;
-  const digits = onlyDigits(nativeValue.get.call(input));
+  const digits = input.dataset.moneyThousands !== undefined ? String(parseThousandsAmount(nativeValue.get.call(input)) ?? '') : onlyDigits(nativeValue.get.call(input));
   const tooLow = min !== undefined && min !== '' && digits !== '' && Number(digits) < Number(min);
   input.setCustomValidity(tooLow ? `El valor debe ser de al menos ${withDots(String(min))}.` : '');
+}
+
+/** Valor real debajo del campo en miles. Va después del recuadro del campo si lo tiene. */
+function thousandsHint(input) {
+  if (input._moneyHint) return input._moneyHint;
+  const hint = document.createElement('small');
+  hint.className = 'money-thousands-hint';
+  hint.id = `${input.id || `money-${Math.random().toString(36).slice(2, 8)}`}-hint`;
+  hint.setAttribute('aria-live', 'polite');
+  (input.closest('.amount-input-wrap') || input).after(hint);
+  input.setAttribute('aria-describedby', [input.getAttribute('aria-describedby'), hint.id].filter(Boolean).join(' '));
+  input._moneyHint = hint;
+  return hint;
+}
+
+function updateThousandsHint(input) {
+  const amount = parseThousandsAmount(nativeValue.get.call(input));
+  const hint = thousandsHint(input);
+  hint.textContent = amount === null ? 'En miles: 20 = $ 20.000 · 20,5 = $ 20.500' : `= ${formatMoney(amount)}`;
+  hint.classList.toggle('has-amount', amount !== null);
+}
+
+/** Campo en miles: se escribe libre (cifras y una coma o punto) y se lee en pesos. */
+function enhanceThousandsInput(input) {
+  const current = onlyDigits(nativeValue.get.call(input).split(/[.,](?=\d{1,2}$)/)[0]);
+  if (input.min !== '' && input.dataset.moneyMin === undefined) input.dataset.moneyMin = input.min;
+  input.type = 'text';
+  input.inputMode = 'decimal';
+  input.autocomplete = 'off';
+  input.removeAttribute('min');
+  input.removeAttribute('step');
+  Object.defineProperty(input, 'value', {
+    configurable: true,
+    get() { const amount = parseThousandsAmount(nativeValue.get.call(this)); return amount === null ? '' : String(amount); },
+    set(value) {
+      // El código asigna pesos (p. ej. el seguro general): se muestran con puntos, que se leen igual.
+      nativeValue.set.call(this, withDots(onlyDigits(String(value ?? '').split(/[.,](?=\d{1,2}$)/)[0])));
+      updateThousandsHint(this);
+      applyMinValidity(this);
+    },
+  });
+  nativeValue.set.call(input, withDots(current));
+  updateThousandsHint(input);
+  input.addEventListener('input', () => {
+    const text = nativeValue.get.call(input);
+    const clean = text.replace(/[^\d.,]/g, '');
+    if (clean !== text) nativeValue.set.call(input, clean);
+    updateThousandsHint(input);
+    applyMinValidity(input);
+  });
 }
 
 /** Convierte un input numérico en campo de dinero con puntos. */
 function enhanceMoneyInput(input) {
   if (!(input instanceof HTMLInputElement) || input.dataset.moneyReady) return;
   input.dataset.moneyReady = '1';
+  if (input.dataset.moneyThousands !== undefined) { enhanceThousandsInput(input); return; }
   const current = onlyDigits(nativeValue.get.call(input).split(/[.,](?=\d{1,2}$)/)[0]);
   if (input.min !== '' && input.dataset.moneyMin === undefined) input.dataset.moneyMin = input.min;
   input.type = 'text';

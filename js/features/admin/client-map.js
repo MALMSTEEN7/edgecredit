@@ -38,7 +38,7 @@ const BASEMAPS = {
 
 export const TIER_COLORS = { good: '#00C853', regular: '#FF9800', bad: '#E53935' };
 const TIER_LABELS = { good: 'Al día', regular: '1 pago atrasado', bad: '2 o más pagos atrasados' };
-const SOURCE_LABELS = { alta: 'GPS tomado al crear el cliente', abono: 'GPS tomado en un abono', admin: 'Ubicado manualmente por el administrador', trabajador: 'Ubicado manualmente por el trabajador', demo: 'Ubicación de demostración' };
+const SOURCE_LABELS = { alta: 'GPS tomado al crear el cliente', ficha: 'GPS tomado desde la ficha del cliente', abono: 'GPS tomado en un abono', admin: 'Ubicado manualmente por el administrador', trabajador: 'Ubicado manualmente por el trabajador', demo: 'Ubicación de demostración' };
 
 let leafletPromise = null;
 let map = null;
@@ -158,7 +158,13 @@ function popupContent(id, client, risk) {
     facts.append(dt, dd);
   });
   const source = document.createElement('small');
-  source.textContent = SOURCE_LABELS[client.location?.source] || 'Ubicación registrada';
+  const accuracy = Number(client.location?.accuracy);
+  const takenAt = client.location?.capturedAt ? new Date(client.location.capturedAt) : null;
+  source.textContent = [
+    SOURCE_LABELS[client.location?.source] || 'Ubicación registrada',
+    Number.isFinite(accuracy) && accuracy > 0 ? `± ${Math.round(accuracy)} m${accuracy > 100 ? ' (aproximada)' : ''}` : '',
+    takenAt && !Number.isNaN(takenAt.getTime()) ? takenAt.toLocaleDateString('es-CO', { day: 'numeric', month: 'short', year: 'numeric' }) : '',
+  ].filter(Boolean).join(' · ');
   const actions = document.createElement('div');
   actions.className = 'client-map-popup-actions';
   const open = document.createElement('button');

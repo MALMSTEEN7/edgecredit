@@ -562,3 +562,19 @@
   border-radius: 10px;
   object-fit: cover;
 }
+
+/* Valor real de los campos en miles (ui/money-input.js): «= $ 20.000». */
+.money-thousands-hint {
+  display: block;
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.4;
+}
+
+.money-thousands-hint.has-amount {
+  color: var(--primary);
+  font-size: 15px;
+  font-weight: 700;
+}

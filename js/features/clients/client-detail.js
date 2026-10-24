@@ -17,7 +17,7 @@ import { openCustomModal } from '../../ui/custom-modal.js';
 import { showView } from '../../ui/navigation.js';
 import { showToast } from '../../ui/toast.js';
 import { bindImageViewer } from '../../ui/image-viewer.js';
-import { hasCoordinates } from '../../shared/geo.js';
+import { LOCATION_FAILURE_LABELS, hasCoordinates, isApproximateLocation, locateDevice } from '../../shared/geo.js';
 import { clientInsurance, generalInsuranceAmount, resolveInsurance } from '../../domain/insurance.js';
 import { canRenew, onClientRenewed } from './new-client.js';
 import { MAX_ACTIVE_CARDS_PER_PERSON, activeCardIds, canAddCard, personCardIds } from '../../domain/person-cards.js';
@@ -212,6 +212,67 @@ function saveClientNotes() {
   document.querySelector('#client-notes-status').textContent = '✓ Nota guardada';
 }
 
+function renderLocationLink(client) {
+  const customerLocation = document.querySelector('#client-location-link');
+  customerLocation.href = hasCoordinates(client.location)
+    ? `https://www.google.com/maps/dir/?api=1&destination=${Number(client.location.latitude)},${Number(client.location.longitude)}`
+    : `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(client.address)}`;
+  customerLocation.setAttribute('aria-label', `Abrir en el mapa el domicilio de ${client.name}: ${client.address}`);
+}
+
+/**
+ * Aviso de la ficha cuando la cartulina no tiene ubicación (se creó sin GPS) o la tiene
+ * aproximada. El trabajador la toma desde aquí cuando está en el domicilio; el admin ve el
+ * aviso pero no el botón (su GPS sería el de la oficina) y puede ubicarlo en el mapa.
+ */
+function renderLocationPending(client) {
+  const box = document.querySelector('#client-location-pending');
+  const located = hasCoordinates(client.location);
+  const approximate = located && isApproximateLocation(client.location);
+  box.hidden = (located && !approximate) || Number(client.balance) <= 0;
+  if (box.hidden) return;
+  const isWorker = state.userRole === 'worker';
+  box.classList.toggle('is-approximate', approximate);
+  document.querySelector('#client-location-pending-title').textContent = approximate ? `Ubicación aproximada (± ${client.location.accuracy} m)` : 'Sin ubicación GPS';
+  const reason = client.locationFailure && LOCATION_FAILURE_LABELS[client.locationFailure];
+  document.querySelector('#client-location-pending-text').textContent = !isWorker
+    ? 'El trabajador puede tomarla desde esta ficha, o ubícalo tú en el Mapa de clientes.'
+    : approximate ? 'Si estás en el domicilio, tómala de nuevo para que quede exacta en el mapa.'
+    : `${reason ? `No se pudo tomar al crearla (${reason}). ` : ''}Tómala cuando estés en el domicilio del cliente.`;
+  const button = document.querySelector('#client-capture-location');
+  button.hidden = !isWorker;
+  button.innerHTML = `<span aria-hidden="true">⌖</span> ${approximate ? 'Tomar de nuevo' : 'Tomar ubicación ahora'}`;
+}
+
+async function captureClientLocation() {
+  const clientId = state.activeClient;
+  const button = document.querySelector('#client-capture-location');
+  if (!clients[clientId] || button.disabled) return;
+  button.disabled = true;
+  button.setAttribute('aria-busy', 'true');
+  button.textContent = 'Tomando ubicación…';
+  const { location, reason } = await locateDevice({ timeout: 10000 });
+  button.disabled = false;
+  button.removeAttribute('aria-busy');
+  const client = clients[clientId];
+  if (!client) return;
+  if (!location) {
+    client.locationFailure = reason;
+    persistBusinessData();
+    if (state.activeClient === clientId) renderLocationPending(client);
+    showToast(`No se pudo tomar la ubicación (${LOCATION_FAILURE_LABELS[reason] || 'sin GPS'}). Inténtalo de nuevo en el domicilio.`);
+    return;
+  }
+  client.location = { ...location, source: 'ficha', by: state.activeWorker?.name || 'Trabajador' };
+  delete client.locationPending;
+  delete client.locationFailure;
+  persistBusinessData();
+  if (state.activeClient === clientId) { renderLocationLink(client); renderLocationPending(client); }
+  showToast(isApproximateLocation(client.location)
+    ? `Ubicación de ${client.name} guardada, pero es aproximada (± ${client.location.accuracy} m).`
+    : `Ubicación de ${client.name} guardada (± ${client.location.accuracy} m).`);
+}
+
 export function openClient(clientId) {
   const client = clients[clientId];
   if (!client) return;
@@ -244,11 +305,8 @@ export function openClient(clientId) {
   document.querySelector('#detail-installment').textContent = formatMoney(client.installment);
   document.querySelector('#detail-id').textContent = client.id;
   document.querySelector('#detail-address').textContent = client.address;
-  const customerLocation = document.querySelector('#client-location-link');
-  customerLocation.href = hasCoordinates(client.location)
-    ? `https://www.google.com/maps/dir/?api=1&destination=${Number(client.location.latitude)},${Number(client.location.longitude)}`
-    : `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(client.address)}`;
-  customerLocation.setAttribute('aria-label', `Abrir en el mapa el domicilio de ${client.name}: ${client.address}`);
+  renderLocationLink(client);
+  renderLocationPending(client);
   document.querySelector('#detail-phone').textContent = client.phone;
   document.querySelector('#detail-loan-total').textContent = formatMoney(client.total);
   document.querySelector('#detail-term').textContent = client.term;
@@ -379,6 +437,7 @@ function renderPersonCards(clientId) {
 }
 
 export function mount() {
+  document.querySelector('#client-capture-location').addEventListener('click', captureClientLocation);
   onClientRenewed(clientId => openClient(clientId));
   document.querySelector('#person-cards-list').addEventListener('click', event => {
     const chip = event.target.closest('[data-person-card]');

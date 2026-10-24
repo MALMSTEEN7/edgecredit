@@ -1,25 +1,44 @@
 /**
  * shared/geo · Captura de la posición GPS del dispositivo sin bloquear la operación.
- * Nunca rechaza: si no hay permiso, señal o soporte, resuelve con null.
+ * Nunca rechaza: resuelve con { location, reason }. Si no hay ubicación, `reason` dice por
+ * qué: 'denied' (permiso negado), 'unavailable' (sin señal), 'timeout' o 'unsupported'.
  */
-export function captureLocation({ timeout = 10000, maximumAge = 60000 } = {}) {
-  if (!navigator.geolocation) return Promise.resolve(null);
+export function locateDevice({ timeout = 10000 } = {}) {
+  if (!navigator.geolocation) return Promise.resolve({ location: null, reason: 'unsupported' });
   return new Promise(resolve => {
     let settled = false;
     const done = value => { if (!settled) { settled = true; resolve(value); } };
     // Algunos navegadores nunca responden si el usuario ignora el aviso de permiso.
-    const guard = window.setTimeout(() => done(null), timeout + 1000);
+    const guard = window.setTimeout(() => done({ location: null, reason: 'timeout' }), timeout + 500);
     navigator.geolocation.getCurrentPosition(position => {
       window.clearTimeout(guard);
       done({
-        latitude: position.coords.latitude,
-        longitude: position.coords.longitude,
-        accuracy: Math.round(position.coords.accuracy),
-        capturedAt: new Date(position.timestamp || Date.now()).toISOString()
+        location: {
+          latitude: position.coords.latitude,
+          longitude: position.coords.longitude,
+          accuracy: Math.round(position.coords.accuracy),
+          capturedAt: new Date(position.timestamp || Date.now()).toISOString(),
+        },
+        reason: null,
       });
-    }, () => { window.clearTimeout(guard); done(null); }, { enableHighAccuracy: true, timeout, maximumAge });
+    }, error => {
+      window.clearTimeout(guard);
+      done({ location: null, reason: error?.code === 1 ? 'denied' : error?.code === 3 ? 'timeout' : 'unavailable' });
+    }, { enableHighAccuracy: true, timeout, maximumAge: 0 }); // posición nueva: se toma en el domicilio
   });
 }
+
+export const LOCATION_FAILURE_LABELS = {
+  denied: 'permiso de ubicación negado',
+  unavailable: 'sin señal de GPS',
+  timeout: 'se acabó el tiempo de espera',
+  unsupported: 'este navegador no da la ubicación',
+};
+
+/** Precisión (en metros) a partir de la cual la ubicación se guarda pero se avisa que es aproximada. */
+export const APPROXIMATE_LOCATION_METERS = 100;
+
+export const isApproximateLocation = location => Number(location?.accuracy) > APPROXIMATE_LOCATION_METERS;
 
 export const hasCoordinates = location => Boolean(location) && Number.isFinite(Number(location.latitude)) && Number.isFinite(Number(location.longitude));
 

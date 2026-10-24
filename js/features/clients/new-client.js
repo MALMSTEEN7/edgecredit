@@ -17,7 +17,7 @@ import { MAX_ACTIVE_CARDS_PER_PERSON, activeCardIds, canAddCard, personCardIds, 
 import { localDateISO } from '../../shared/dates.js';
 import { formatMoney, normalizeSearch } from '../../shared/format.js';
 import { compressClientPhoto } from '../../shared/media.js';
-import { captureLocation } from '../../shared/geo.js';
+import { LOCATION_FAILURE_LABELS, hasCoordinates, isApproximateLocation, locateDevice } from '../../shared/geo.js';
 import { showToast } from '../../ui/toast.js';
 
 // Cartulina de origen cuando el modal está en modo «Renovar crédito» (linkMode 'renew')
@@ -245,7 +245,11 @@ export function closeNewClientModal() {
   if (customModal.hidden && interestModal.hidden && modal.hidden) document.body.classList.remove('modal-open');
 }
 
-function addNewClient(values, photoData = '', insurance) {
+/**
+ * `gps`: resultado de locateDevice() tomado al pulsar crear, o null si no se pidió
+ * (admin, o renovación sin cambio de dirección que conserva la ubicación anterior).
+ */
+function addNewClient(values, photoData = '', insurance, gps = null) {
   const clientId = `client-${Date.now()}`;
   const principal = Math.round(Number(values.principal));
   const interestException = document.querySelector('#interest-exception-toggle').checked;
@@ -304,14 +308,16 @@ function addNewClient(values, photoData = '', insurance) {
   } else placeInRoute(assignedRoute, clientId);
   appendClientCards(clientId);
   if (source) personCardIds(clients, source.id).forEach(id => { if (id !== clientId) renderClientRows(id); });
-  // El trabajador registra al cliente en su domicilio: esa posición alimenta el mapa del admin.
-  // En una renovación sin cambio de dirección se conserva la ubicación ya guardada.
-  if (!isAdmin && !created.location) {
-    captureLocation().then(location => {
-      if (!location || !clients[clientId] || clients[clientId].location) return;
-      clients[clientId].location = { ...location, source: 'alta' };
-      persistBusinessData();
-    });
+  // El trabajador registra al cliente en su domicilio: esa posición (con su precisión y
+  // fecha) va al mismo campo que usa el mapa. Sin ubicación, queda marcado para tomarla
+  // después desde la ficha.
+  if (gps && !hasCoordinates(created.location)) {
+    if (gps.location) created.location = { ...gps.location, source: 'alta' };
+    else {
+      created.location = null;
+      created.locationPending = true;
+      created.locationFailure = gps.reason;
+    }
   }
   const requests = [];
   if (!isAdmin && interestException) {
@@ -343,13 +349,19 @@ function addNewClient(values, photoData = '', insurance) {
   closeNewClientModal();
   const insuranceCopy = `Seguros ${formatMoney(insurance.amount)}${insurance.custom ? ' (valor especial)' : ''}.`;
   const lead = mode === 'renew' ? `Crédito renovado para ${name}.` : mode === 'extra' ? `Nueva cartulina creada para ${name}.` : isAdmin ? 'Cartulina creada para la ruta seleccionada.' : 'Cliente creado con el interés predeterminado del 20%.';
-  showToast(`${lead} ${insuranceCopy}${requests.length ? ` ${requests.length} solicitud(es) enviada(s) a Pendientes.` : ''}`);
+  const requestsCopy = requests.length ? ` ${requests.length} solicitud(es) enviada(s) a Pendientes.` : '';
+  if (gps && !gps.location) {
+    showToast(`Cartulina creada sin ubicación (${LOCATION_FAILURE_LABELS[gps.reason] || 'sin GPS'}). Tómala después desde la ficha del cliente.${requestsCopy}`);
+  } else if (gps && isApproximateLocation(created.location)) {
+    showToast(`${lead} Ubicación aproximada (± ${created.location.accuracy} m): revísala en el mapa.${requestsCopy}`);
+  } else showToast(`${lead} ${insuranceCopy}${requestsCopy}`);
   return clientId;
 }
 
 // El detalle del cliente se registra aquí para abrir la cartulina nueva tras renovar
 // (evita una importación circular new-client ↔ client-detail).
 let onRenewed = null;
+let creatingClient = false; // evita crear dos veces si pulsan «Crear» mientras se toma la ubicación
 export function onClientRenewed(callback) { onRenewed = callback; }
 
 /** Registra los listeners del módulo. Se invoca una sola vez desde app.js. */
@@ -403,11 +415,33 @@ export function mount() {
       newClientError.textContent = insurance.error;
       return;
     }
+    if (creatingClient) return;
+    creatingClient = true;
+    const submit = document.querySelector('#new-client-submit');
+    const submitLabel = submit.innerHTML;
     try {
       const photoData = await compressClientPhoto(document.querySelector('#client-photo-input').files?.[0]);
       const sourceId = renewSourceId;
-      const createdId = addNewClient(values, photoData, insurance);
+      // GPS solo del trabajador (está en el domicilio). Una renovación con la misma dirección
+      // conserva la ubicación que ya tenía.
+      const source = linked ? clients[renewSourceId] : null;
+      const keepsLocation = source && values.address.trim() === (source.address || '') && hasCoordinates(source.location);
+      let gps = null;
+      if (state.userRole === 'worker' && !keepsLocation) {
+        submit.disabled = true;
+        submit.setAttribute('aria-busy', 'true');
+        submit.textContent = 'Tomando ubicación…';
+        gps = await locateDevice({ timeout: 10000 });
+        if (newClientModal.hidden) return; // lo cancelaron mientras se tomaba la ubicación
+      }
+      const createdId = addNewClient(values, photoData, insurance, gps);
       if (sourceId && createdId && state.activeClient === sourceId) onRenewed?.(createdId);
     } catch (error) { newClientError.textContent = error.message || 'No se pudo procesar la foto.'; }
+    finally {
+      creatingClient = false;
+      submit.disabled = false;
+      submit.removeAttribute('aria-busy');
+      submit.innerHTML = submitLabel;
+    }
   });
 }
