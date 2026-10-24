@@ -19,8 +19,15 @@
   flex-direction: column;
   gap: 15px;
   padding: 28px 20px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   border-right: 1px solid var(--line);
   background: var(--card);
+}
+
+/* Si la ventana es baja, la barra hace scroll en vez de aplastar o cortar las opciones. */
+.admin-sidebar > * {
+  flex-shrink: 0;
 }
 
 .admin-nav-caption {
@@ -179,8 +186,6 @@
     width: min(300px,86vw);
     gap: 10px;
     padding: 18px 16px calc(18px + env(safe-area-inset-bottom));
-    overflow-y: auto;
-    overscroll-behavior: contain;
     box-shadow: 12px 0 40px rgba(0,0,0,.45);
     transform: translateX(-105%);
     visibility: hidden;
