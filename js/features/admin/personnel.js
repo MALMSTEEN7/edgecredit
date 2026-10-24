@@ -11,6 +11,7 @@ import { renderAdminRoute, syncRouteSelect } from './admin-shell.js';
 import { fetchWorkerLocation } from '../worker/location.js';
 import { hashCredential } from '../../shared/crypto.js';
 import { daysUntil } from '../../shared/dates.js';
+import { addCashEntry } from '../../domain/ledger.js';
 import { escapeHTML, formatMoney, routeKey } from '../../shared/format.js';
 import { openCustomModal } from '../../ui/custom-modal.js';
 import { geocodeMunicipality } from '../../shared/geo.js';
@@ -307,7 +308,7 @@ export function mount() {
         { name: 'city', label: 'Ciudad / municipio', placeholder: 'Ej. Cúcuta', required: true },
         { name: 'motorcycle', label: 'Modelo de la moto', required: true },
         { name: 'plate', label: 'Placa', required: true },
-        { name: 'openingAmount', label: 'Monto de apertura del cobro ($)', type: 'number', min: 0, step: 1000, value: 0, required: true },
+        { name: 'openingAmount', label: 'Monto de apertura del cobro ($) · si el cobro es nuevo, entra a la caja', type: 'number', min: 0, step: 1000, value: 0, required: true, money: true },
         { name: 'soatExpiry', label: 'Vencimiento del SOAT', type: 'date', required: true },
         { name: 'technicalExpiry', label: 'Vencimiento técnico-mecánica', type: 'date', required: true }
       ],
@@ -320,6 +321,10 @@ export function mount() {
         catch (error) { customModalError.textContent = error.message; return false; }
         const department = findDepartment(values.department);
         if (!department) { customModalError.textContent = 'Selecciona el departamento donde trabaja.'; return false; }
+        // ¿El cobro se abre con este trabajador? Entonces su monto de apertura es el capital
+        // inicial y entra a la caja. En un cobro que ya existe no toca la caja.
+        const existingRoute = routeSettlements[routeKey(values.route)];
+        const opensRoute = !existingRoute || (!existingRoute.cashBox?.openingDate && !Object.keys(existingRoute.ledger || {}).length && !(existingRoute.cashEntries || []).length);
         const routeId = ensureRoute(values.route);
         if (!routeId) { customModalError.textContent = 'Escribe el nombre de la ruta asignada.'; return false; }
         const worker = { id: `worker-${Date.now()}`, name: values.name.trim(), username, passwordHash, route: routeSettlements[routeId]?.name || values.route.trim(), department: department.name, city: values.city.trim(), motorcycle: values.motorcycle.trim(), plate: values.plate.trim().toUpperCase(), openingAmount: Number(values.openingAmount), soatExpiry: values.soatExpiry, technicalExpiry: values.technicalExpiry };
@@ -344,6 +349,10 @@ export function mount() {
         personnel.push(worker);
         if (routeSettlements[routeId]) {
           routeSettlements[routeId].base = worker.openingAmount;
+          if (opensRoute && worker.openingAmount > 0) {
+            addCashEntry(routeSettlements[routeId], worker.openingAmount, { note: `Apertura del cobro (${worker.name})` });
+            showToast(`Cobro ${routeSettlements[routeId].name} abierto: ${formatMoney(worker.openingAmount)} entraron a la caja.`);
+          }
           syncRouteSelect();
           routeSelect.value = routeId;
           renderAdminRoute(routeId);

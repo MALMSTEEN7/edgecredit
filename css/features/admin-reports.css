@@ -764,3 +764,9 @@
   font-weight: 600;
   cursor: help;
 }
+
+/* Última entrada de capital registrada en la caja del cobro. */
+.cashbox-side .cashbox-last-entry {
+  color: var(--success);
+  font-weight: 600;
+}

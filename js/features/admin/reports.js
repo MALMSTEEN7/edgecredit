@@ -12,7 +12,7 @@ import { routeSelect } from '../../core/dom.js';
 import { state } from '../../core/state.js';
 import { clients, persistBusinessData } from '../../core/store.js';
 import { liveInsuranceEntries, insuranceCollectedOn } from '../../domain/insurance.js';
-import { LEDGER_MONTHS_KEPT, cashBoxAt, cutInsurance, dayRecord, ensureLedger, insuranceDueAt, insuranceEntries, insurancePeriod, ledgerDifference, setDayField, undoLastInsuranceCut } from '../../domain/ledger.js';
+import { LEDGER_MONTHS_KEPT, addCashEntry, cashBoxAt, ledgerCutoff, cutInsurance, dayRecord, ensureLedger, insuranceDueAt, insuranceEntries, insurancePeriod, ledgerDifference, setDayField, undoLastInsuranceCut } from '../../domain/ledger.js';
 import { INSURANCE_CUT_TEST_MODE } from '../../core/config.js';
 import { localDateISO } from '../../shared/dates.js';
 import { formatMoney } from '../../shared/format.js';
@@ -28,6 +28,7 @@ const COLUMNS = [
   { key: 'expenses', label: 'Gastos', editable: true },
   { key: 'otherExpenses', label: 'Otros gastos', editable: true },
   { key: 'cashOut', label: 'Salida de caja', editable: true },
+  { key: 'cashIn', label: 'Entrada a caja' },
   { key: 'cashDelivered', label: 'Efectivo' },
 ];
 const rq = selector => document.querySelector(selector);
@@ -126,6 +127,35 @@ function renderCashBox(route) {
   rq('#cashbox-opening').textContent = !openingDate ? 'Empezó en $ 0 con el primer cierre del cobro.'
     : route.cashBox.prunedBefore === openingDate ? `Viene de ${formatMoney(opening)} el ${since} (se guardan los cierres de los últimos ${LEDGER_MONTHS_KEPT} meses).`
     : `Apertura: ${formatMoney(opening)} desde el ${since}`;
+  const last = [...(route.cashEntries || [])].sort((a, b) => b.ts - a.ts)[0];
+  const lastEntry = rq('#cashbox-last-entry');
+  lastEntry.hidden = !last;
+  if (last) lastEntry.textContent = `Última entrada: ${formatMoney(last.amount)} el ${new Date(`${last.date}T12:00:00`).toLocaleDateString('es-CO')}${last.note ? ` · ${last.note}` : ''} · ${last.by}`;
+}
+
+/** Entrada de caja: el admin inyecta capital al cobro (queda registrado con fecha y motivo). */
+function openCashEntry(route) {
+  if (!route) return;
+  const today = localDateISO();
+  openCustomModal({
+    title: `Entrada de caja · ${route.name}`,
+    description: 'Capital que se inyecta al cobro. Suma a la caja desde la fecha elegida y queda registrado con quién lo hizo y el motivo. No modifica los cierres.',
+    fields: [
+      { name: 'amount', label: 'Monto que entra a la caja ($)', type: 'number', min: 1, step: 1, value: '', required: true },
+      { name: 'date', label: 'Fecha', type: 'date', value: today, min: ledgerCutoff(today), max: today, required: true },
+      { name: 'note', label: 'Motivo', placeholder: 'Ej. Inyección de capital', value: '' },
+    ],
+    submitLabel: 'Registrar entrada',
+    onSubmit: values => {
+      const amount = Math.round(Number(values.amount) || 0);
+      if (amount <= 0) { rq('#custom-modal-error').textContent = 'Escribe un monto mayor que cero.'; return false; }
+      if (!values.date || values.date > today || values.date < ledgerCutoff(today)) { rq('#custom-modal-error').textContent = `La fecha debe estar entre el ${new Date(`${ledgerCutoff(today)}T12:00:00`).toLocaleDateString('es-CO')} y hoy.`; return false; }
+      addCashEntry(route, amount, { date: values.date, by: 'Administrador', note: values.note || 'Inyección de capital' });
+      persistBusinessData();
+      renderRouteReports(route);
+      showToast(`Entrada de ${formatMoney(amount)} registrada en la caja de ${route.name}.`);
+    },
+  });
 }
 
 // ── Cierre semanal ──
@@ -416,6 +446,7 @@ function cutInsuranceNow(route) {
 
 /** Registra los listeners del módulo. Se invoca una sola vez desde app.js. */
 export function mount() {
+  rq('#cashbox-entry').addEventListener('click', () => openCashEntry(state.activeSettlement));
   DATE_PICKERS.forEach(selector => rq(selector).addEventListener('change', event => {
     const value = event.target.value;
     if (!value) return;

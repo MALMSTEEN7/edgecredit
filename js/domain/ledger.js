@@ -8,8 +8,9 @@
  * - El día de hoy, mientras no se cierre, se lee de los valores vivos de la ruta.
  * - `route.cashBox` es la CAJA del cobro: el monto de apertura (dinero disponible para
  *   prestar). No se reinicia nunca; cada día suma el cobro y resta préstamos, gastos,
- *   otros gastos y salidas de caja. No se edita desde la app: un cobro sin apertura empieza
- *   en $0 con su primer cierre.
+ *   otros gastos y salidas de caja, y suma las ENTRADAS de caja (capital que se inyecta:
+ *   `ledger[día].cashIn`, con su detalle en `route.cashEntries`). La apertura no se edita:
+ *   un cobro sin apertura empieza en $0 y su capital inicial entra como una entrada.
  * - Solo se guardan los cierres de los últimos LEDGER_MONTHS_KEPT meses (pruneOldLedger):
  *   lo que movieron los días borrados queda sumado en la apertura, así la caja no cambia.
  * - `route.insuranceCuts` registra cada «Cuadrar seguros».
@@ -20,7 +21,7 @@
 
 import { localDateISO, shiftDateISO } from '../shared/dates.js';
 
-export const DAY_FIELDS = ['base', 'collections', 'loans', 'expenses', 'otherExpenses', 'cashDelivered', 'cashOut', 'insurance'];
+export const DAY_FIELDS = ['base', 'collections', 'loans', 'expenses', 'otherExpenses', 'cashDelivered', 'cashOut', 'cashIn', 'insurance'];
 const LIVE_FIELDS = ['base', 'collections', 'loans', 'expenses', 'otherExpenses', 'cashDelivered'];
 export const EDITABLE_FIELDS = ['expenses', 'otherExpenses', 'cashOut'];
 
@@ -29,6 +30,7 @@ export function ensureLedger(route) {
   route.ledger ||= {};
   route.cashBox ||= { opening: 0, openingDate: null };
   route.insuranceCuts ||= [];
+  route.cashEntries ||= [];
   return route;
 }
 
@@ -43,7 +45,7 @@ export function dayRecord(route, dateISO, liveInsurance = 0) {
   const today = localDateISO();
   if (dateISO === today && !closedToday(route)) {
     const live = Object.fromEntries(LIVE_FIELDS.map(field => [field, Number(route[field] || 0)]));
-    return { ...live, cashOut: Number(stored?.cashOut || 0), insurance: liveInsurance, closed: false, live: true };
+    return { ...live, cashOut: Number(stored?.cashOut || 0), cashIn: Number(stored?.cashIn || 0), insurance: liveInsurance, closed: false, live: true };
   }
   if (!stored) return { ...Object.fromEntries(DAY_FIELDS.map(field => [field, 0])), closed: false, empty: true };
   return {
@@ -61,7 +63,7 @@ export function ledgerDifference(record) {
 
 /** Movimiento de la caja del cobro en un día. */
 export function cashBoxMovement(record) {
-  return record.collections - record.loans - record.expenses - record.otherExpenses - record.cashOut + Number(record.cashAdjustment || 0);
+  return record.collections - record.loans - record.expenses - record.otherExpenses - record.cashOut + Number(record.cashIn || 0) + Number(record.cashAdjustment || 0);
 }
 
 /** Caja al cierre del día indicado (incluye hoy en vivo si la fecha llega a hoy). */
@@ -106,7 +108,23 @@ export function pruneOldLedger(route, today = localDateISO()) {
     route.cashBox = { ...route.cashBox, opening, openingDate: cutoff, prunedBefore: cutoff };
   }
   old.forEach(date => { delete route.ledger[date]; });
+  route.cashEntries = route.cashEntries.filter(entry => entry.date >= cutoff);
   return true;
+}
+
+/**
+ * Entrada de caja: capital que se inyecta al cobro (o el capital con que se abre un cobro
+ * nuevo). Suma a la caja ese día y queda el detalle de quién, cuándo y por qué.
+ */
+export function addCashEntry(route, amount, { date = localDateISO(), by = 'Administrador', note = '' } = {}) {
+  ensureLedger(route);
+  const value = Math.round(Number(amount) || 0);
+  if (value <= 0) return null;
+  route.ledger[date] ||= { closed: false };
+  route.ledger[date].cashIn = Number(route.ledger[date].cashIn || 0) + value;
+  const entry = { id: `entry-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, date, amount: value, by, note: String(note || '').trim(), ts: Date.now() };
+  route.cashEntries.push(entry);
+  return entry;
 }
 
 /** Guarda el día al cerrar el cobro (antes de reiniciar los valores vivos). */

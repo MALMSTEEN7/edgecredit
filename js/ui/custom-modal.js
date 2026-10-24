@@ -41,6 +41,7 @@ export function openCustomModal({ title, description = '', fields = [], submitLa
       input = document.createElement('input');
       input.type = field.type || 'text';
       if (field.min !== undefined) input.min = String(field.min);
+      if (field.max !== undefined) input.max = String(field.max);
       if (field.step !== undefined) input.step = String(field.step);
       if (field.minLength !== undefined) input.minLength = Number(field.minLength);
       if (field.placeholder) input.placeholder = field.placeholder;

@@ -1196,8 +1196,9 @@ function liveInsuranceEntries(clients, routeId, dateISO, sinceTs = 0) {
  * - El día de hoy, mientras no se cierre, se lee de los valores vivos de la ruta.
  * - `route.cashBox` es la CAJA del cobro: el monto de apertura (dinero disponible para
  *   prestar). No se reinicia nunca; cada día suma el cobro y resta préstamos, gastos,
- *   otros gastos y salidas de caja. No se edita desde la app: un cobro sin apertura empieza
- *   en $0 con su primer cierre.
+ *   otros gastos y salidas de caja, y suma las ENTRADAS de caja (capital que se inyecta:
+ *   `ledger[día].cashIn`, con su detalle en `route.cashEntries`). La apertura no se edita:
+ *   un cobro sin apertura empieza en $0 y su capital inicial entra como una entrada.
  * - Solo se guardan los cierres de los últimos LEDGER_MONTHS_KEPT meses (pruneOldLedger):
  *   lo que movieron los días borrados queda sumado en la apertura, así la caja no cambia.
  * - `route.insuranceCuts` registra cada «Cuadrar seguros».
@@ -1207,7 +1208,7 @@ function liveInsuranceEntries(clients, routeId, dateISO, sinceTs = 0) {
  */
 
 
-const DAY_FIELDS = ['base', 'collections', 'loans', 'expenses', 'otherExpenses', 'cashDelivered', 'cashOut', 'insurance'];
+const DAY_FIELDS = ['base', 'collections', 'loans', 'expenses', 'otherExpenses', 'cashDelivered', 'cashOut', 'cashIn', 'insurance'];
 const LIVE_FIELDS = ['base', 'collections', 'loans', 'expenses', 'otherExpenses', 'cashDelivered'];
 const EDITABLE_FIELDS = ['expenses', 'otherExpenses', 'cashOut'];
 
@@ -1216,6 +1217,7 @@ function ensureLedger(route) {
   route.ledger ||= {};
   route.cashBox ||= { opening: 0, openingDate: null };
   route.insuranceCuts ||= [];
+  route.cashEntries ||= [];
   return route;
 }
 
@@ -1230,7 +1232,7 @@ function dayRecord(route, dateISO, liveInsurance = 0) {
   const today = localDateISO();
   if (dateISO === today && !closedToday(route)) {
     const live = Object.fromEntries(LIVE_FIELDS.map(field => [field, Number(route[field] || 0)]));
-    return { ...live, cashOut: Number(stored?.cashOut || 0), insurance: liveInsurance, closed: false, live: true };
+    return { ...live, cashOut: Number(stored?.cashOut || 0), cashIn: Number(stored?.cashIn || 0), insurance: liveInsurance, closed: false, live: true };
   }
   if (!stored) return { ...Object.fromEntries(DAY_FIELDS.map(field => [field, 0])), closed: false, empty: true };
   return {
@@ -1248,7 +1250,7 @@ function ledgerDifference(record) {
 
 /** Movimiento de la caja del cobro en un día. */
 function cashBoxMovement(record) {
-  return record.collections - record.loans - record.expenses - record.otherExpenses - record.cashOut + Number(record.cashAdjustment || 0);
+  return record.collections - record.loans - record.expenses - record.otherExpenses - record.cashOut + Number(record.cashIn || 0) + Number(record.cashAdjustment || 0);
 }
 
 /** Caja al cierre del día indicado (incluye hoy en vivo si la fecha llega a hoy). */
@@ -1293,7 +1295,23 @@ function pruneOldLedger(route, today = localDateISO()) {
     route.cashBox = { ...route.cashBox, opening, openingDate: cutoff, prunedBefore: cutoff };
   }
   old.forEach(date => { delete route.ledger[date]; });
+  route.cashEntries = route.cashEntries.filter(entry => entry.date >= cutoff);
   return true;
+}
+
+/**
+ * Entrada de caja: capital que se inyecta al cobro (o el capital con que se abre un cobro
+ * nuevo). Suma a la caja ese día y queda el detalle de quién, cuándo y por qué.
+ */
+function addCashEntry(route, amount, { date = localDateISO(), by = 'Administrador', note = '' } = {}) {
+  ensureLedger(route);
+  const value = Math.round(Number(amount) || 0);
+  if (value <= 0) return null;
+  route.ledger[date] ||= { closed: false };
+  route.ledger[date].cashIn = Number(route.ledger[date].cashIn || 0) + value;
+  const entry = { id: `entry-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, date, amount: value, by, note: String(note || '').trim(), ts: Date.now() };
+  route.cashEntries.push(entry);
+  return entry;
 }
 
 /** Guarda el día al cerrar el cobro (antes de reiniciar los valores vivos). */
@@ -3466,6 +3484,7 @@ function __mount_pendingModule() {
 
 
 
+
 /** Tras crear, editar o eliminar personal: quita rutas sin trabajador ni clientes y repinta. */
 function refreshRoutesAfterStaffChange() {
   pruneOrphanRoutes();
@@ -3755,7 +3774,7 @@ function __mount_personnelModule() {
         { name: 'city', label: 'Ciudad / municipio', placeholder: 'Ej. Cúcuta', required: true },
         { name: 'motorcycle', label: 'Modelo de la moto', required: true },
         { name: 'plate', label: 'Placa', required: true },
-        { name: 'openingAmount', label: 'Monto de apertura del cobro ($)', type: 'number', min: 0, step: 1000, value: 0, required: true },
+        { name: 'openingAmount', label: 'Monto de apertura del cobro ($) · si el cobro es nuevo, entra a la caja', type: 'number', min: 0, step: 1000, value: 0, required: true, money: true },
         { name: 'soatExpiry', label: 'Vencimiento del SOAT', type: 'date', required: true },
         { name: 'technicalExpiry', label: 'Vencimiento técnico-mecánica', type: 'date', required: true }
       ],
@@ -3768,6 +3787,10 @@ function __mount_personnelModule() {
         catch (error) { customModalError.textContent = error.message; return false; }
         const department = findDepartment(values.department);
         if (!department) { customModalError.textContent = 'Selecciona el departamento donde trabaja.'; return false; }
+        // ¿El cobro se abre con este trabajador? Entonces su monto de apertura es el capital
+        // inicial y entra a la caja. En un cobro que ya existe no toca la caja.
+        const existingRoute = routeSettlements[routeKey(values.route)];
+        const opensRoute = !existingRoute || (!existingRoute.cashBox?.openingDate && !Object.keys(existingRoute.ledger || {}).length && !(existingRoute.cashEntries || []).length);
         const routeId = ensureRoute(values.route);
         if (!routeId) { customModalError.textContent = 'Escribe el nombre de la ruta asignada.'; return false; }
         const worker = { id: `worker-${Date.now()}`, name: values.name.trim(), username, passwordHash, route: routeSettlements[routeId]?.name || values.route.trim(), department: department.name, city: values.city.trim(), motorcycle: values.motorcycle.trim(), plate: values.plate.trim().toUpperCase(), openingAmount: Number(values.openingAmount), soatExpiry: values.soatExpiry, technicalExpiry: values.technicalExpiry };
@@ -3792,6 +3815,10 @@ function __mount_personnelModule() {
         personnel.push(worker);
         if (routeSettlements[routeId]) {
           routeSettlements[routeId].base = worker.openingAmount;
+          if (opensRoute && worker.openingAmount > 0) {
+            addCashEntry(routeSettlements[routeId], worker.openingAmount, { note: `Apertura del cobro (${worker.name})` });
+            showToast(`Cobro ${routeSettlements[routeId].name} abierto: ${formatMoney(worker.openingAmount)} entraron a la caja.`);
+          }
           syncRouteSelect();
           routeSelect.value = routeId;
           renderAdminRoute(routeId);
@@ -3866,6 +3893,7 @@ const COLUMNS = [
   { key: 'expenses', label: 'Gastos', editable: true },
   { key: 'otherExpenses', label: 'Otros gastos', editable: true },
   { key: 'cashOut', label: 'Salida de caja', editable: true },
+  { key: 'cashIn', label: 'Entrada a caja' },
   { key: 'cashDelivered', label: 'Efectivo' },
 ];
 const rq = selector => document.querySelector(selector);
@@ -3964,6 +3992,35 @@ function renderCashBox(route) {
   rq('#cashbox-opening').textContent = !openingDate ? 'Empezó en $ 0 con el primer cierre del cobro.'
     : route.cashBox.prunedBefore === openingDate ? `Viene de ${formatMoney(opening)} el ${since} (se guardan los cierres de los últimos ${LEDGER_MONTHS_KEPT} meses).`
     : `Apertura: ${formatMoney(opening)} desde el ${since}`;
+  const last = [...(route.cashEntries || [])].sort((a, b) => b.ts - a.ts)[0];
+  const lastEntry = rq('#cashbox-last-entry');
+  lastEntry.hidden = !last;
+  if (last) lastEntry.textContent = `Última entrada: ${formatMoney(last.amount)} el ${new Date(`${last.date}T12:00:00`).toLocaleDateString('es-CO')}${last.note ? ` · ${last.note}` : ''} · ${last.by}`;
+}
+
+/** Entrada de caja: el admin inyecta capital al cobro (queda registrado con fecha y motivo). */
+function openCashEntry(route) {
+  if (!route) return;
+  const today = localDateISO();
+  openCustomModal({
+    title: `Entrada de caja · ${route.name}`,
+    description: 'Capital que se inyecta al cobro. Suma a la caja desde la fecha elegida y queda registrado con quién lo hizo y el motivo. No modifica los cierres.',
+    fields: [
+      { name: 'amount', label: 'Monto que entra a la caja ($)', type: 'number', min: 1, step: 1, value: '', required: true },
+      { name: 'date', label: 'Fecha', type: 'date', value: today, min: ledgerCutoff(today), max: today, required: true },
+      { name: 'note', label: 'Motivo', placeholder: 'Ej. Inyección de capital', value: '' },
+    ],
+    submitLabel: 'Registrar entrada',
+    onSubmit: values => {
+      const amount = Math.round(Number(values.amount) || 0);
+      if (amount <= 0) { rq('#custom-modal-error').textContent = 'Escribe un monto mayor que cero.'; return false; }
+      if (!values.date || values.date > today || values.date < ledgerCutoff(today)) { rq('#custom-modal-error').textContent = `La fecha debe estar entre el ${new Date(`${ledgerCutoff(today)}T12:00:00`).toLocaleDateString('es-CO')} y hoy.`; return false; }
+      addCashEntry(route, amount, { date: values.date, by: 'Administrador', note: values.note || 'Inyección de capital' });
+      persistBusinessData();
+      renderRouteReports(route);
+      showToast(`Entrada de ${formatMoney(amount)} registrada en la caja de ${route.name}.`);
+    },
+  });
 }
 
 // ── Cierre semanal ──
@@ -4254,6 +4311,7 @@ function cutInsuranceNow(route) {
 
 /** Registra los listeners del módulo. Se invoca una sola vez desde app.js. */
 function __mount_reportsModule() {
+  rq('#cashbox-entry').addEventListener('click', () => openCashEntry(state.activeSettlement));
   DATE_PICKERS.forEach(selector => rq(selector).addEventListener('change', event => {
     const value = event.target.value;
     if (!value) return;
@@ -7735,6 +7793,7 @@ function openCustomModal({ title, description = '', fields = [], submitLabel = '
       input = document.createElement('input');
       input.type = field.type || 'text';
       if (field.min !== undefined) input.min = String(field.min);
+      if (field.max !== undefined) input.max = String(field.max);
       if (field.step !== undefined) input.step = String(field.step);
       if (field.minLength !== undefined) input.minLength = Number(field.minLength);
       if (field.placeholder) input.placeholder = field.placeholder;

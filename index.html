@@ -34,7 +34,7 @@
   <link rel="icon" href="icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="icon-192.png">
   <meta name="apple-mobile-web-app-capable" content="yes">
-  <link rel="stylesheet" id="app-styles" href="dist/styles.bundle.css?v=bc03dc15d5">
+  <link rel="stylesheet" id="app-styles" href="dist/styles.bundle.css?v=5de9cd75e4">
 </head>
 <body class="login-active">
   <section class="login-gateway" id="login-gateway" aria-labelledby="login-title">
@@ -302,12 +302,12 @@
           </div>
           <div class="cashbox-card" id="cashbox-card">
             <div class="cashbox-main"><span>Caja del cobro</span><strong id="cashbox-current">—</strong><small id="cashbox-opening">Sin monto de apertura</small></div>
-            <div class="cashbox-side"><small id="cashbox-caption">Dinero disponible para prestar. Se calcula sola con cada cierre: suma el cobro y resta préstamos, gastos, otros gastos y salidas de caja. No se puede modificar.</small></div>
+            <div class="cashbox-side"><small id="cashbox-caption">Dinero disponible para prestar. Se calcula sola: suma el cobro y las entradas de capital, y resta préstamos, gastos, otros gastos y salidas de caja. No se puede modificar a mano.</small><small class="cashbox-last-entry" id="cashbox-last-entry" hidden></small><button class="secondary-button" id="cashbox-entry" type="button"><span aria-hidden="true">＋</span> Entrada de caja</button></div>
           </div>
           <div class="week-selector" id="week-selector" role="tablist" aria-label="Semanas del mes (lunes a sábado)"></div>
           <p class="selected-week-label" id="selected-week-label"></p>
           <div class="report-table-wrap" role="region" aria-label="Cuadre financiero semanal. Desplaza horizontalmente para ver todas las columnas." tabindex="0">
-            <table class="audit-table ledger-table"><thead><tr><th scope="col">Fecha</th><th class="numeric" scope="col">Base</th><th class="numeric" scope="col">Cobro</th><th class="numeric" scope="col">Préstamos</th><th class="numeric editable-col" scope="col">Gastos <span aria-hidden="true">✎</span></th><th class="numeric editable-col" scope="col">Otros gastos <span aria-hidden="true">✎</span></th><th class="numeric editable-col" scope="col">Salida de caja <span aria-hidden="true">✎</span></th><th class="numeric" scope="col">Efectivo</th><th class="numeric" scope="col">Descuadre</th><th class="numeric" scope="col">Caja</th></tr></thead><tbody id="weekly-audit-body"></tbody><tfoot id="weekly-audit-foot"></tfoot></table>
+            <table class="audit-table ledger-table"><thead><tr><th scope="col">Fecha</th><th class="numeric" scope="col">Base</th><th class="numeric" scope="col">Cobro</th><th class="numeric" scope="col">Préstamos</th><th class="numeric editable-col" scope="col">Gastos <span aria-hidden="true">✎</span></th><th class="numeric editable-col" scope="col">Otros gastos <span aria-hidden="true">✎</span></th><th class="numeric editable-col" scope="col">Salida de caja <span aria-hidden="true">✎</span></th><th class="numeric" scope="col">Entrada a caja</th><th class="numeric" scope="col">Efectivo</th><th class="numeric" scope="col">Descuadre</th><th class="numeric" scope="col">Caja</th></tr></thead><tbody id="weekly-audit-body"></tbody><tfoot id="weekly-audit-foot"></tfoot></table>
           </div>
           <div class="report-metrics"><article><span>Cobro de la semana</span><strong id="weekly-collections">$ 0</strong></article><article><span>Descuadre de la semana</span><strong id="weekly-difference">$ 0</strong><small>Se reinicia cada sábado</small></article><article><span>Sueldo trabajador</span><strong id="weekly-salary">$ 0</strong></article></div>
           <p class="report-note" id="weekly-note">Gastos, otros gastos y salida de caja se pueden corregir directamente en la tabla. Cada fecha queda guardada en el libro diario del cobro.</p>
@@ -472,7 +472,7 @@
     // al cambiar el sello, el navegador descarga el JS/CSS nuevo en vez de usar su caché.
     // Para desarrollar con los módulos sueltos, abre index.html?dev desde un servidor local.
     (() => {
-      const APP_VERSION = 'bc03dc15d5';
+      const APP_VERSION = '5de9cd75e4';
       const dev = new URLSearchParams(location.search).has('dev') && location.protocol !== 'file:';
       if (dev) {
         document.getElementById('app-styles').href = 'styles.css';
