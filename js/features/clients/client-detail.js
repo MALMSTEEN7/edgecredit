@@ -420,13 +420,18 @@ function renderCardActions(client) {
   // trabajador llena lo mismo y le llega al admin como solicitud para aprobar o rechazar.
   const openRequest = pendingRestructure(pendingRequests, state.activeClient);
   const isWorker = state.userRole !== 'admin';
+  // El trabajador solo puede solicitar financiar cuando ya pasaron los días del plazo.
+  const daysLeft = Math.max(0, Number(client.totalDays || 0) - creditDay(client));
+  const financeLocked = isWorker && !financeAllowed(client);
   [['#finance-client', 'finance', 'Financiar', 'Intereses por pasar el plazo'], ['#retanqueo-client', 'retanqueo', 'Retanqueo', 'Prestar más sobre esta cartulina']].forEach(([selector, type, label, sub]) => {
     const button = document.querySelector(selector);
     button.hidden = cancelled;
     const waiting = isWorker && openRequest?.type === type;
-    button.disabled = isWorker && Boolean(openRequest);
+    const locked = type === 'finance' && financeLocked;
+    button.disabled = (isWorker && Boolean(openRequest)) || locked;
     button.querySelector('.detail-action-label').lastChild.textContent = ` ${isWorker ? `Solicitar ${label.toLocaleLowerCase('es')}` : label}`;
-    button.querySelector('.detail-action-sub').textContent = waiting ? 'Solicitud enviada: esperando al admin' : isWorker && openRequest ? 'Hay otra solicitud pendiente' : sub;
+    button.querySelector('.detail-action-sub').textContent = waiting ? 'Solicitud enviada: esperando al admin' : isWorker && openRequest ? 'Hay otra solicitud pendiente'
+      : locked ? `Disponible cuando venza el plazo (falta${daysLeft === 1 ? '' : 'n'} ${daysLeft} día${daysLeft === 1 ? '' : 's'})` : sub;
   });
   hint.textContent = notes.join(' ');
   hint.hidden = !notes.length;
@@ -468,6 +473,9 @@ function afterRestructure(clientId) {
   openClient(clientId);
 }
 
+/** Financiar es para cartulinas que ya pasaron los días del plazo acordado. */
+const financeAllowed = client => creditDay(client) > Number(client.totalDays || 0);
+
 /**
  * Solicitud del trabajador al admin con los parámetros que él mismo puso. El admin la aprueba
  * (se aplica tal cual) o la rechaza desde Solicitudes.
@@ -491,6 +499,7 @@ function openFinanceModal() {
   if (!client || Number(client.balance) <= 0) return;
   const isWorker = state.userRole !== 'admin';
   if (isWorker && pendingRestructure(pendingRequests, clientId)) { showToast('Esta cartulina ya tiene una solicitud pendiente con el administrador.'); return; }
+  if (isWorker && !financeAllowed(client)) { showToast('Solo se puede solicitar financiar cuando ya pasaron los días del plazo.'); return; }
   openCustomModal({
     title: `${isWorker ? 'Solicitar financiar' : 'Financiar'} · ${client.name}`,
     description: `Saldo actual ${formatMoney(client.balance)}. Se le suman los intereses de financiación y arranca un plazo nuevo desde hoy. Si no cambias nada: ${FINANCE_INTEREST_PERCENT} % del saldo = ${formatMoney(percentOrAmount(client.balance, FINANCE_INTEREST_PERCENT))}.`,
