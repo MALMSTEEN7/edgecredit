@@ -14,7 +14,7 @@ import { escapeHTML, formatMoney, routeKey } from '../../shared/format.js';
 import { paymentFrequencyLabels } from '../../core/config.js';
 import { showToast } from '../../ui/toast.js';
 import { renderAdminRoute } from './admin-shell.js';
-import { appendClientCards, filterClientCards, renderClientRows } from '../clients/directory.js';
+import { appendClientCards, filterClientCards } from '../clients/directory.js';
 
 let legacyRaw = null;
 let legacyFileName = '';
@@ -121,8 +121,7 @@ function importLegacyCards(cards, routeName) {
   cards.forEach(({ clientId, client }) => {
     if (clients[clientId]) return;
     clients[clientId] = client;
-    appendClientCards(clientId);
-    renderClientRows(clientId);
+    appendClientCards(clientId, { refresh: false });
   });
   persistBusinessData();
   filterClientCards();

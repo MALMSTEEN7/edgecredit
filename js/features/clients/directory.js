@@ -17,7 +17,11 @@ import { showView } from '../../ui/navigation.js';
 import { renderHomeHeader, renderHomeRowActions } from '../worker/home.js';
 import { personCardIds } from '../../domain/person-cards.js';
 
-export function appendClientCards(clientId) {
+/**
+ * Agrega las filas del cliente en el Inicio y el directorio. Al cargar muchos clientes de una vez
+ * se pasa `{ refresh: false }` y se filtra una sola vez al final (filtrar por cada uno es muy lento).
+ */
+export function appendClientCards(clientId, { refresh = true } = {}) {
   const client = clients[clientId];
   document.querySelectorAll('#inicio .client-list, #directorio .client-list').forEach(list => {
     const isHome = Boolean(list.closest('#inicio'));
@@ -52,7 +56,7 @@ export function appendClientCards(clientId) {
     list.append(card);
   });
   renderClientRows(clientId);
-  filterClientCards();
+  if (refresh) filterClientCards();
 }
 
 export function setClientAvatar(element, client) {

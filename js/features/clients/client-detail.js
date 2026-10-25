@@ -579,7 +579,7 @@ export function mount() {
       const oldAmount = Number(client.payments[index].amount) || 0;
       openCustomModal({
         title: 'Editar abono', description: `Actualiza el monto registrado el ${formatDate(client.payments[index].date)}.`,
-        fields: [{ name: 'amount', label: 'Monto del abono', money: true, type: 'number', min: 1, step: 1, value: client.payments[index].amount, required: true }],
+        fields: [{ name: 'amount', label: 'Monto del abono', money: true, thousands: true, type: 'number', min: 1, step: 1, value: client.payments[index].amount, required: true }],
         onSubmit: values => {
           const amount = Number(values.amount);
           if (amount > oldAmount + Number(client.balance)) { customModalError.textContent = 'El monto corregido supera el saldo disponible.'; return false; }

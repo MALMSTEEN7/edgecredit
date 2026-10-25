@@ -7,10 +7,10 @@
  *  - `new FormData(form)` también recibe los dígitos (evento `formdata`).
  * Los campos que se crean después (modales, tablas) se preparan solos.
  *
- * Con `data-money-thousands` (abonos, gastos y seguros que escribe el trabajador en la
- * calle) TODO lo que se escribe está en miles: 20 → 20.000, «20,5» o «20.5» → 20.500,
- * 1.000 → 1.000.000, 10.000 → 10.000.000. Debajo del campo se ve el valor real
- * («= $ 20.000») y `value` devuelve ese valor en pesos.
+ * Con `data-money-thousands` (abonos, préstamos, gastos, seguros y base del trabajador; en el
+ * admin la liquidación diaria, peticiones y abonos) TODO lo que se escribe está en miles:
+ * 20 → 20.000, «20,5» o «20.5» → 20.500, 1.000 → 1.000.000, 10.000 → 10.000.000. Debajo del
+ * campo se ve el valor real («= $ 20.000») y `value` devuelve ese valor en pesos.
  */
 
 import { formatMoney } from '../shared/format.js';
@@ -32,7 +32,9 @@ const withDots = digits => (digits && digits !== '-' ? Number(digits).toLocaleSt
  *   «1.000,5» → 1.000.500 · «0,75» → 750
  */
 export function parseThousandsAmount(text) {
-  const raw = String(text ?? '').replace(/[\s$]/g, '');
+  const trimmed = String(text ?? '').replace(/[\s$]/g, '');
+  const negative = trimmed.startsWith('-'); // una base negativa que llega del código («-225»)
+  const raw = negative ? trimmed.slice(1) : trimmed;
   let whole = raw;
   let fraction = '';
   const comma = raw.lastIndexOf(',');
@@ -44,7 +46,8 @@ export function parseThousandsAmount(text) {
   const wholeDigits = whole.replace(/\D/g, '');
   const fractionDigits = fraction.replace(/\D/g, '').slice(0, 3);
   if (!wholeDigits && !fractionDigits) return null;
-  return Number(wholeDigits || 0) * 1000 + Math.round(Number(`0.${fractionDigits || 0}`) * 1000);
+  const amount = Number(wholeDigits || 0) * 1000 + Math.round(Number(`0.${fractionDigits || 0}`) * 1000);
+  return negative ? -amount : amount;
 }
 
 /** Pesos → como se escriben en miles: 20000 → «20», 20500 → «20,5», 1000000 → «1.000». */

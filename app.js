@@ -134,10 +134,12 @@ function boot() {
   state.activeWorker = personnel[0] || { id: 'worker-unassigned', name: 'Trabajador', route: '', openingAmount: 0 };
   state.workerRoute = routeKey(state.activeWorker.route);
   const initialClientIds = new Set(clientButtons.map(button => button.dataset.client));
+  // Filas de todos los clientes; el filtro del directorio se aplica una sola vez al final.
   Object.keys(clients).forEach(clientId => {
-    renderClientRows(clientId);
-    if (!initialClientIds.has(clientId)) appendClientCards(clientId);
+    if (initialClientIds.has(clientId)) renderClientRows(clientId);
+    else appendClientCards(clientId, { refresh: false });
   });
+  filterClientCards();
   renderPendingRequests();
   applyTheme(savedTheme);
   renderAdminRoute(routeSelect.value);
@@ -167,8 +169,8 @@ function refreshFromServer() {
   normalizeClientSchedules();
   const rendered = new Set([...document.querySelectorAll('#directorio .client-row')].map(row => row.dataset.client));
   Object.keys(clients).forEach(clientId => {
-    if (!rendered.has(clientId)) appendClientCards(clientId);
-    renderClientRows(clientId);
+    if (rendered.has(clientId)) renderClientRows(clientId);
+    else appendClientCards(clientId, { refresh: false });
   });
   filterClientCards();
   renderPendingRequests();

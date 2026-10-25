@@ -600,3 +600,22 @@
   border-bottom: 0;
   font-size: clamp(1.15rem, 1.5vw, 1.45rem);
 }
+
+/* Liquidación en miles: el valor real («= $ 958.000») va en una línea debajo del número. */
+.settlement-layout .settlement-fields .editable-money {
+  flex-wrap: wrap;
+  row-gap: 0;
+}
+
+.settlement-fields .editable-money .money-thousands-hint,
+.settlement-fields .editable-money .money-thousands-hint.has-amount {
+  flex: 1 0 100%;
+  margin: 0;
+  font-size: 12px;
+  text-align: right;
+}
+
+.settlement-layout .settlement-fields .editable-money input {
+  flex: 1 1 0;
+  width: auto;
+}

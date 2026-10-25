@@ -126,7 +126,7 @@ export function mount() {
         openCustomModal({
           title: 'Revisar visita o pago',
           description: `${request.workerName} solicita corregir la visita de ${request.clientName} (${formatDate(request.visitDate)}). Comentario: ${request.comment}`,
-          fields: [{ name: 'amount', label: `Monto correcto del abono (${formatDate(request.visitDate)})`, money: true, type: 'number', min: 1, step: 1, required: true, value: request.requestedAmount || '', placeholder: 'Ingresa el monto acordado' }],
+          fields: [{ name: 'amount', label: `Monto correcto del abono (${formatDate(request.visitDate)})`, money: true, thousands: true, type: 'number', min: 1, step: 1, required: true, value: request.requestedAmount || '', placeholder: 'Ingresa el monto acordado' }],
           submitLabel: 'Guardar monto',
           onSubmit: values => {
             const client = clients[request.clientId];

@@ -3253,8 +3253,7 @@ function importLegacyCards(cards, routeName) {
   cards.forEach(({ clientId, client }) => {
     if (clients[clientId]) return;
     clients[clientId] = client;
-    appendClientCards(clientId);
-    renderClientRows(clientId);
+    appendClientCards(clientId, { refresh: false });
   });
   persistBusinessData();
   filterClientCards();
@@ -3451,7 +3450,7 @@ function __mount_pendingModule() {
         openCustomModal({
           title: 'Revisar visita o pago',
           description: `${request.workerName} solicita corregir la visita de ${request.clientName} (${formatDate(request.visitDate)}). Comentario: ${request.comment}`,
-          fields: [{ name: 'amount', label: `Monto correcto del abono (${formatDate(request.visitDate)})`, money: true, type: 'number', min: 1, step: 1, required: true, value: request.requestedAmount || '', placeholder: 'Ingresa el monto acordado' }],
+          fields: [{ name: 'amount', label: `Monto correcto del abono (${formatDate(request.visitDate)})`, money: true, thousands: true, type: 'number', min: 1, step: 1, required: true, value: request.requestedAmount || '', placeholder: 'Ingresa el monto acordado' }],
           submitLabel: 'Guardar monto',
           onSubmit: values => {
             const client = clients[request.clientId];
@@ -5753,7 +5752,7 @@ function __mount_clientDetailModule() {
       const oldAmount = Number(client.payments[index].amount) || 0;
       openCustomModal({
         title: 'Editar abono', description: `Actualiza el monto registrado el ${formatDate(client.payments[index].date)}.`,
-        fields: [{ name: 'amount', label: 'Monto del abono', money: true, type: 'number', min: 1, step: 1, value: client.payments[index].amount, required: true }],
+        fields: [{ name: 'amount', label: 'Monto del abono', money: true, thousands: true, type: 'number', min: 1, step: 1, value: client.payments[index].amount, required: true }],
         onSubmit: values => {
           const amount = Number(values.amount);
           if (amount > oldAmount + Number(client.balance)) { customModalError.textContent = 'El monto corregido supera el saldo disponible.'; return false; }
@@ -5792,7 +5791,11 @@ function __mount_clientDetailModule() {
 
 
 
-function appendClientCards(clientId) {
+/**
+ * Agrega las filas del cliente en el Inicio y el directorio. Al cargar muchos clientes de una vez
+ * se pasa `{ refresh: false }` y se filtra una sola vez al final (filtrar por cada uno es muy lento).
+ */
+function appendClientCards(clientId, { refresh = true } = {}) {
   const client = clients[clientId];
   document.querySelectorAll('#inicio .client-list, #directorio .client-list').forEach(list => {
     const isHome = Boolean(list.closest('#inicio'));
@@ -5827,7 +5830,7 @@ function appendClientCards(clientId) {
     list.append(card);
   });
   renderClientRows(clientId);
-  filterClientCards();
+  if (refresh) filterClientCards();
 }
 
 function setClientAvatar(element, client) {
@@ -6210,7 +6213,8 @@ function setLinkedMode(sourceId, mode) {
   const linked = Boolean(linkMode);
   const copy = LINK_COPY[linkMode];
   ['name', 'idNumber', 'phone'].forEach(name => { newClientForm.elements[name].readOnly = linked; });
-  document.querySelector('#client-photo-input').required = !linked;
+  // La foto es opcional por ahora: las fotos pesan y el sistema todavía carga todo al abrir.
+  document.querySelector('#client-photo-input').required = false;
   document.querySelector('.client-photo-field').hidden = linked;
   document.querySelector('.route-position-field').hidden = linked;
   document.querySelector('#new-client-title').textContent = copy?.title || 'Registrar cliente';
@@ -7845,6 +7849,8 @@ function openCustomModal({ title, description = '', fields = [], submitLabel = '
     }
     // Campos de dinero ($): se muestran con separador de miles (ui/money-input.js).
     if (field.money || (field.type === 'number' && /\(\$\)/.test(field.label))) input.dataset.money = '';
+    // `thousands: true`: el monto se escribe en miles (200 = $ 200.000), como los abonos.
+    if (field.thousands) { input.dataset.money = ''; input.dataset.moneyThousands = ''; }
     input.id = `custom-field-${index}`;
     input.name = field.name;
     input.value = field.value ?? '';
@@ -7972,10 +7978,10 @@ function __mount_imageViewerModule() {
  *  - `new FormData(form)` también recibe los dígitos (evento `formdata`).
  * Los campos que se crean después (modales, tablas) se preparan solos.
  *
- * Con `data-money-thousands` (abonos, gastos y seguros que escribe el trabajador en la
- * calle) TODO lo que se escribe está en miles: 20 → 20.000, «20,5» o «20.5» → 20.500,
- * 1.000 → 1.000.000, 10.000 → 10.000.000. Debajo del campo se ve el valor real
- * («= $ 20.000») y `value` devuelve ese valor en pesos.
+ * Con `data-money-thousands` (abonos, préstamos, gastos, seguros y base del trabajador; en el
+ * admin la liquidación diaria, peticiones y abonos) TODO lo que se escribe está en miles:
+ * 20 → 20.000, «20,5» o «20.5» → 20.500, 1.000 → 1.000.000, 10.000 → 10.000.000. Debajo del
+ * campo se ve el valor real («= $ 20.000») y `value` devuelve ese valor en pesos.
  */
 
 
@@ -7996,7 +8002,9 @@ const withDots = digits => (digits && digits !== '-' ? Number(digits).toLocaleSt
  *   «1.000,5» → 1.000.500 · «0,75» → 750
  */
 function parseThousandsAmount(text) {
-  const raw = String(text ?? '').replace(/[\s$]/g, '');
+  const trimmed = String(text ?? '').replace(/[\s$]/g, '');
+  const negative = trimmed.startsWith('-'); // una base negativa que llega del código («-225»)
+  const raw = negative ? trimmed.slice(1) : trimmed;
   let whole = raw;
   let fraction = '';
   const comma = raw.lastIndexOf(',');
@@ -8008,7 +8016,8 @@ function parseThousandsAmount(text) {
   const wholeDigits = whole.replace(/\D/g, '');
   const fractionDigits = fraction.replace(/\D/g, '').slice(0, 3);
   if (!wholeDigits && !fractionDigits) return null;
-  return Number(wholeDigits || 0) * 1000 + Math.round(Number(`0.${fractionDigits || 0}`) * 1000);
+  const amount = Number(wholeDigits || 0) * 1000 + Math.round(Number(`0.${fractionDigits || 0}`) * 1000);
+  return negative ? -amount : amount;
 }
 
 /** Pesos → como se escriben en miles: 20000 → «20», 20500 → «20,5», 1000000 → «1.000». */
@@ -9722,10 +9731,12 @@ function boot() {
   state.activeWorker = personnel[0] || { id: 'worker-unassigned', name: 'Trabajador', route: '', openingAmount: 0 };
   state.workerRoute = routeKey(state.activeWorker.route);
   const initialClientIds = new Set(clientButtons.map(button => button.dataset.client));
+  // Filas de todos los clientes; el filtro del directorio se aplica una sola vez al final.
   Object.keys(clients).forEach(clientId => {
-    renderClientRows(clientId);
-    if (!initialClientIds.has(clientId)) appendClientCards(clientId);
+    if (initialClientIds.has(clientId)) renderClientRows(clientId);
+    else appendClientCards(clientId, { refresh: false });
   });
+  filterClientCards();
   renderPendingRequests();
   applyTheme(savedTheme);
   renderAdminRoute(routeSelect.value);
@@ -9755,8 +9766,8 @@ function refreshFromServer() {
   normalizeClientSchedules();
   const rendered = new Set([...document.querySelectorAll('#directorio .client-row')].map(row => row.dataset.client));
   Object.keys(clients).forEach(clientId => {
-    if (!rendered.has(clientId)) appendClientCards(clientId);
-    renderClientRows(clientId);
+    if (rendered.has(clientId)) renderClientRows(clientId);
+    else appendClientCards(clientId, { refresh: false });
   });
   filterClientCards();
   renderPendingRequests();

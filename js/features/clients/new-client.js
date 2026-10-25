@@ -126,7 +126,8 @@ function setLinkedMode(sourceId, mode) {
   const linked = Boolean(linkMode);
   const copy = LINK_COPY[linkMode];
   ['name', 'idNumber', 'phone'].forEach(name => { newClientForm.elements[name].readOnly = linked; });
-  document.querySelector('#client-photo-input').required = !linked;
+  // La foto es opcional por ahora: las fotos pesan y el sistema todavía carga todo al abrir.
+  document.querySelector('#client-photo-input').required = false;
   document.querySelector('.client-photo-field').hidden = linked;
   document.querySelector('.route-position-field').hidden = linked;
   document.querySelector('#new-client-title').textContent = copy?.title || 'Registrar cliente';

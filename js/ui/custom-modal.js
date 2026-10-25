@@ -48,6 +48,8 @@ export function openCustomModal({ title, description = '', fields = [], submitLa
     }
     // Campos de dinero ($): se muestran con separador de miles (ui/money-input.js).
     if (field.money || (field.type === 'number' && /\(\$\)/.test(field.label))) input.dataset.money = '';
+    // `thousands: true`: el monto se escribe en miles (200 = $ 200.000), como los abonos.
+    if (field.thousands) { input.dataset.money = ''; input.dataset.moneyThousands = ''; }
     input.id = `custom-field-${index}`;
     input.name = field.name;
     input.value = field.value ?? '';
