@@ -77,6 +77,22 @@ export function normalizeClientSchedules() {
   });
 }
 
+/**
+ * Días que lleva la cartulina: hoy − fecha de inicio (como el sistema anterior, que lo
+ * calculaba al abrirla). Va subiendo solo cada día.
+ */
+export function creditDay(client, today = localDateISO()) {
+  if (!client?.creditStartDate) return Math.max(0, Number(client?.routeDay) || 0);
+  return Math.max(0, dayDifference(client.creditStartDate, today));
+}
+
+/** Fecha de inicio para que la cartulina lleve `day` días hoy (al corregirlo a mano). */
+export function startDateForCreditDay(day, today = localDateISO()) {
+  const start = localDate(today);
+  start.setDate(start.getDate() - Math.max(0, Math.round(Number(day) || 0)));
+  return localDateISO(start);
+}
+
 export function paymentCycleIndex(client, dateValue = localDateISO()) {
   let cycle = 0;
   while (cycle < 10000 && dateValue > paymentDueDate(client, cycle)) cycle += 1;

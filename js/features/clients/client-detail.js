@@ -8,7 +8,7 @@ import { creditDetails, customModalError, disclosureButton, interestToggle, rout
 import { state } from '../../core/state.js';
 import { clients, ensureRoute, expandedPaymentHistory, persistBusinessData, routeSettlements } from '../../core/store.js';
 import { syncCancelledCard, updateClientLoanAccounting } from '../../domain/accounting.js';
-import { balancesAfterPayments, inferClientPrincipal, paymentBehavior, paymentHistory, rememberWorstHistory, updatePaidAmountTotal } from '../../domain/loan-schedule.js';
+import { balancesAfterPayments, creditDay, inferClientPrincipal, startDateForCreditDay, paymentBehavior, paymentHistory, rememberWorstHistory, updatePaidAmountTotal } from '../../domain/loan-schedule.js';
 import { renderAdminRoute } from '../admin/admin-shell.js';
 import { filterClientCards, removeClient, renderClientRows, setClientAvatar } from './directory.js';
 import { localDateISO } from '../../shared/dates.js';
@@ -152,7 +152,7 @@ export function renderHistory(client) {
 }
 
 function updateMoratoryButton(client) {
-  const overdue = state.userRole !== 'admin' && client.routeDay >= client.totalDays;
+  const overdue = state.userRole !== 'admin' && creditDay(client) >= client.totalDays;
   interestToggle.hidden = !overdue;
   interestToggle.setAttribute('aria-hidden', String(!overdue));
 }
@@ -307,10 +307,11 @@ export function openClient(clientId) {
   document.querySelector('.progress-ring').style.setProperty('--progress', `${progressPercent * 3.6}deg`);
   document.querySelector('.progress-center > strong').textContent = `${progressPercent}%`;
   document.querySelector('.progress-ring').setAttribute('aria-label', `${progressPercent} por ciento pagado`);
-  document.querySelector('#route-day').textContent = `Día ${client.routeDay} / ${client.totalDays} días`;
-  const overdueDays = Math.max(0, client.routeDay - client.totalDays);
+  const day = creditDay(client);
+  document.querySelector('#route-day').textContent = `Día ${day} / ${client.totalDays} días`;
+  const overdueDays = Math.max(0, day - client.totalDays);
   document.querySelector('#route-days-label').textContent = state.userRole === 'admin' ? 'Días de mora' : 'Días restantes para finalizar';
-  document.querySelector('#route-days-left').textContent = state.userRole === 'admin' ? `${overdueDays} ${overdueDays === 1 ? 'día' : 'días'}` : `Faltan ${Math.max(0, client.totalDays - client.routeDay)} días`;
+  document.querySelector('#route-days-left').textContent = state.userRole === 'admin' ? `${overdueDays} ${overdueDays === 1 ? 'día' : 'días'}` : `Faltan ${Math.max(0, client.totalDays - day)} días`;
   document.querySelector('#detail-installment').textContent = formatMoney(client.installment);
   document.querySelector('#detail-id').textContent = client.id;
   document.querySelector('#detail-address').textContent = client.address;
@@ -578,7 +579,7 @@ export function mount() {
         { name: 'insuranceReason', label: 'Motivo si los seguros son diferentes al 10%', type: 'textarea', rows: 2, value: clientInsurance(client).reason },
         { name: 'paid', label: 'Cuotas pagadas', type: 'number', min: 0, step: 1, value: client.paid, required: true },
         { name: 'installments', label: 'Total de cuotas', type: 'number', min: 1, step: 1, value: client.installments, required: true },
-        { name: 'routeDay', label: 'Día actual del crédito', type: 'number', min: 1, step: 1, value: client.routeDay, required: true },
+        { name: 'routeDay', label: 'Días que lleva el crédito', type: 'number', min: 0, step: 1, value: creditDay(client), required: true },
         { name: 'totalDays', label: 'Duración acordada (días)', type: 'number', min: 1, step: 1, value: client.totalDays, required: true },
         { name: 'status', label: 'Estado', type: 'select', value: client.late ? 'late' : 'current', options: [{ value: 'current', label: 'Al día' }, { value: 'late', label: 'Mora' }] },
       ],
@@ -636,6 +637,8 @@ export function mount() {
         client.paid = Number(values.paid);
         client.schedulePaidBaseline = Number(values.paid);
         client.installments = Number(values.installments);
+        // Corregir los días mueve la fecha de inicio: así siguen subiendo solos cada día.
+        if (Number(values.routeDay) !== creditDay(client)) client.creditStartDate = startDateForCreditDay(values.routeDay);
         client.routeDay = Number(values.routeDay);
         client.totalDays = Number(values.totalDays);
         client.term = `${client.totalDays} días`;
