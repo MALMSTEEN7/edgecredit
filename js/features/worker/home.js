@@ -66,7 +66,8 @@ export function renderHomeRowActions() {
   });
   const anyVisible = rows.some(row => !row.hidden);
   const empty = document.querySelector('#home-route-done');
-  if (empty) empty.hidden = anyVisible || state.userRole !== 'worker';
+  const organized = (state.dailyRouteOrder[state.workerRoute] || []).length > 0;
+  if (empty) empty.hidden = anyVisible || !organized || state.userRole !== 'worker';
 }
 
 /** Registra los listeners del módulo. Se invoca una sola vez desde app.js. */

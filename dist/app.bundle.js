@@ -1133,9 +1133,12 @@ const FREQUENCY_COLORS = {
   monthly: { key: 'monthly', label: 'Mensual', color: '#89cff0', ink: '#0a2a3b' }, // azul bebé
 };
 
-/** Color de la cartulina o null (diarias, o semanales que arrancaron un domingo). */
+/**
+ * Color de la cartulina o null: canceladas (saldo en cero; si la persona saca otra cartulina,
+ * la nueva sí lleva color), diarias, o semanales que arrancaron un domingo.
+ */
 function cardColor(client) {
-  if (!client) return null;
+  if (!client || Number(client.balance) <= 0) return null;
   if (FREQUENCY_COLORS[client.frequency]) return FREQUENCY_COLORS[client.frequency];
   if (client.frequency && client.frequency !== 'weekly') return null;
   const [year, month, day] = String(client.creditStartDate || '').split('-').map(Number);
@@ -6408,9 +6411,10 @@ function filterClientCards() {
     const matchesQuery = card.textContent.toLocaleLowerCase('es').includes(query);
     const exists = Object.prototype.hasOwnProperty.call(clients, card.dataset.client);
     // Inicio: solo cartulinas activas de la ruta del día que aún no se visitaron hoy
-    // (al registrar un abono o "No pagó hoy" la fila desaparece del Inicio).
+    // (al registrar un abono o "No pagó hoy" la fila desaparece del Inicio). Si el trabajador
+    // todavía no armó la ruta del día, el Inicio queda vacío (solo el aviso).
     const homeClient = clients[card.dataset.client];
-    const dailySelected = !card.closest('#inicio .client-list') || (exists && Number(homeClient.balance) > 0 && visitStatus(card.dataset.client) === 'pending' && (!todayOrder.length || todayOrder.includes(card.dataset.client)));
+    const dailySelected = !card.closest('#inicio .client-list') || (exists && Number(homeClient.balance) > 0 && visitStatus(card.dataset.client) === 'pending' && (todayOrder.includes(card.dataset.client) || (!todayOrder.length && state.userRole !== 'worker')));
     const inDirectory = Boolean(card.closest('#directorio'));
     const passesFilter = !inDirectory || (exists && matchesDirectoryFilter(homeClient));
     card.hidden = !exists || !matchesRoute || !matchesQuery || !dailySelected || !passesFilter;
@@ -7045,6 +7049,47 @@ function __mount_newClientModule() {
 
 
 
+
+
+
+/** Tarjeta con «Más información» abierta (`modo:id`). Solo una a la vez. */
+let openRouteInfo = null;
+
+/** Información completa de la cartulina, para desplegar debajo de la tarjeta. */
+function routeCardInfo(client) {
+  const payments = (client.payments || []).filter(payment => Number(payment.amount) > 0);
+  const paid = payments.reduce((sum, payment) => sum + Number(payment.amount), 0);
+  const last = [...payments].sort((a, b) => String(b.date).localeCompare(String(a.date)))[0];
+  const rows = [
+    ['Cédula', client.id],
+    ['Teléfono', client.phone],
+    ['Dirección', client.address],
+    ['Estado', paymentBehavior(client).label],
+    ['Historial', paymentHistory(client).label],
+    ['Saldo', formatMoney(client.balance)],
+    ['Cuota', formatMoney(client.installment)],
+    ['Cuotas', client.installments ? `${client.paid || 0} de ${client.installments}` : ''],
+    ['Frecuencia', paymentFrequencyLabels[client.frequency] || 'Semanal'],
+    ['Total del crédito', formatMoney(client.total)],
+    ['Abonado', formatMoney(paid)],
+    ['Último abono', last ? `${formatMoney(last.amount)} · ${formatDate(last.date)}` : 'Sin abonos'],
+    ['Inicio del crédito', client.creditStartDate ? formatDate(client.creditStartDate) : ''],
+    ['Plazo', client.term || (client.totalDays ? `${client.totalDays} días` : '')],
+  ].filter(([, value]) => value !== undefined && value !== null && String(value).trim() !== '');
+  const list = document.createElement('dl');
+  list.className = 'route-card-info';
+  rows.forEach(([label, value]) => {
+    const item = document.createElement('div');
+    const term = document.createElement('dt');
+    term.textContent = label;
+    const detail = document.createElement('dd');
+    detail.textContent = value;
+    item.append(term, detail);
+    list.append(item);
+  });
+  return list;
+}
+
 function routeDayKey(route = state.workerRoute) {
   const date = localDateISO();
   return `${route}:${date}`;
@@ -7152,7 +7197,19 @@ function routeClientCard(clientId, mode, routeOrder = []) {
     add.type = 'button'; add.className = 'route-add-button'; add.dataset.routeAdd = clientId; add.textContent = '＋ Agregar';
     actions.append(add);
   }
-  card.append(handle, content, actions);
+  // Más información: despliega la cartulina completa debajo (solo una abierta a la vez).
+  const infoKey = `${mode}:${clientId}`;
+  const open = openRouteInfo === infoKey;
+  const info = document.createElement('button');
+  info.type = 'button'; info.className = 'route-info-button'; info.dataset.routeInfo = infoKey;
+  info.setAttribute('aria-expanded', String(open));
+  info.textContent = open ? 'Menos información ▴' : 'Más información ▾';
+  actions.append(info);
+  const band = document.createElement('span');
+  band.className = 'card-color-band';
+  paintCardColorBand(band, client, card);
+  card.append(band, handle, content, actions);
+  if (open) card.append(routeCardInfo(client));
   return card;
 }
 
@@ -7228,6 +7285,12 @@ function updateDailyRouteDrop(container, mode) {
       if (!order.includes(addButton.dataset.routeAdd)) order.push(addButton.dataset.routeAdd);
       state.dailyRouteOrder[state.workerRoute] = order;
       persistBusinessData(); renderRouteBuilder(); filterClientCards();
+      return;
+    }
+    const infoButton = event.target.closest('[data-route-info]');
+    if (infoButton) {
+      openRouteInfo = openRouteInfo === infoButton.dataset.routeInfo ? null : infoButton.dataset.routeInfo;
+      renderRouteBuilder();
       return;
     }
     const correctionButton = event.target.closest('[data-route-correction]');
@@ -7785,7 +7848,8 @@ function renderHomeRowActions() {
   });
   const anyVisible = rows.some(row => !row.hidden);
   const empty = document.querySelector('#home-route-done');
-  if (empty) empty.hidden = anyVisible || state.userRole !== 'worker';
+  const organized = (state.dailyRouteOrder[state.workerRoute] || []).length > 0;
+  if (empty) empty.hidden = anyVisible || !organized || state.userRole !== 'worker';
 }
 
 /** Registra los listeners del módulo. Se invoca una sola vez desde app.js. */

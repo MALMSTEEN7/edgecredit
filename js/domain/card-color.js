@@ -19,9 +19,12 @@ const FREQUENCY_COLORS = {
   monthly: { key: 'monthly', label: 'Mensual', color: '#89cff0', ink: '#0a2a3b' }, // azul bebé
 };
 
-/** Color de la cartulina o null (diarias, o semanales que arrancaron un domingo). */
+/**
+ * Color de la cartulina o null: canceladas (saldo en cero; si la persona saca otra cartulina,
+ * la nueva sí lleva color), diarias, o semanales que arrancaron un domingo.
+ */
 export function cardColor(client) {
-  if (!client) return null;
+  if (!client || Number(client.balance) <= 0) return null;
   if (FREQUENCY_COLORS[client.frequency]) return FREQUENCY_COLORS[client.frequency];
   if (client.frequency && client.frequency !== 'weekly') return null;
   const [year, month, day] = String(client.creditStartDate || '').split('-').map(Number);

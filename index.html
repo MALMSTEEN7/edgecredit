@@ -34,7 +34,7 @@
   <link rel="icon" href="icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="icon-192.png">
   <meta name="apple-mobile-web-app-capable" content="yes">
-  <link rel="stylesheet" id="app-styles" href="dist/styles.bundle.css?v=c9c750be76">
+  <link rel="stylesheet" id="app-styles" href="dist/styles.bundle.css?v=d2f5a9fbf2">
 </head>
 <body class="login-active">
   <section class="login-gateway" id="login-gateway" aria-labelledby="login-title">
@@ -86,7 +86,7 @@
         <div class="section-heading home-section-heading"><div class="worker-home-identity"><span class="avatar" aria-label="Perfil de Camila">C</span><div><p class="eyebrow">LUNES, 28 DE SEPTIEMBRE</p><h1 id="home-title">Buen día, Camila</h1></div></div><button class="primary-button add-client-button" id="add-client" type="button">Nuevo cliente <span aria-hidden="true">＋</span></button></div>
         <div class="list-heading"><div><p class="eyebrow" id="home-list-eyebrow">RUTA DEL DÍA</p><h2>Clientes de hoy</h2></div><button type="button" class="home-route-link" data-go-view="ruta-diaria">Organizar ruta <span aria-hidden="true">→</span></button></div>
         <p class="home-route-done" id="home-route-done" role="status" hidden>✓ Terminaste la ruta de hoy: todos los clientes ya tienen abono o visita registrada. Puedes revisarlos en «Ruta diaria».</p>
-        <p class="home-route-hint" id="home-route-hint" hidden>Aún no organizaste la ruta de hoy: se muestran todos tus clientes. Ordénalos en «Ruta diaria».</p>
+        <p class="home-route-hint" id="home-route-hint" hidden>Aún no se ha armado la ruta del día. Ármala en «Ruta diaria» y aquí aparecerán los clientes que vas a visitar.</p>
         <div class="client-list" aria-label="Clientes de la ruta diaria">
         </div>
         <div class="home-toggles" role="group" aria-label="Resumen de tu jornada">
@@ -493,7 +493,7 @@
     // al cambiar el sello, el navegador descarga el JS/CSS nuevo en vez de usar su caché.
     // Para desarrollar con los módulos sueltos, abre index.html?dev desde un servidor local.
     (() => {
-      const APP_VERSION = 'c9c750be76';
+      const APP_VERSION = 'd2f5a9fbf2';
       const dev = new URLSearchParams(location.search).has('dev') && location.protocol !== 'file:';
       if (dev) {
         document.getElementById('app-styles').href = 'styles.css';

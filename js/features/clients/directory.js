@@ -163,9 +163,10 @@ export function filterClientCards() {
     const matchesQuery = card.textContent.toLocaleLowerCase('es').includes(query);
     const exists = Object.prototype.hasOwnProperty.call(clients, card.dataset.client);
     // Inicio: solo cartulinas activas de la ruta del día que aún no se visitaron hoy
-    // (al registrar un abono o "No pagó hoy" la fila desaparece del Inicio).
+    // (al registrar un abono o "No pagó hoy" la fila desaparece del Inicio). Si el trabajador
+    // todavía no armó la ruta del día, el Inicio queda vacío (solo el aviso).
     const homeClient = clients[card.dataset.client];
-    const dailySelected = !card.closest('#inicio .client-list') || (exists && Number(homeClient.balance) > 0 && visitStatus(card.dataset.client) === 'pending' && (!todayOrder.length || todayOrder.includes(card.dataset.client)));
+    const dailySelected = !card.closest('#inicio .client-list') || (exists && Number(homeClient.balance) > 0 && visitStatus(card.dataset.client) === 'pending' && (todayOrder.includes(card.dataset.client) || (!todayOrder.length && state.userRole !== 'worker')));
     const inDirectory = Boolean(card.closest('#directorio'));
     const passesFilter = !inDirectory || (exists && matchesDirectoryFilter(homeClient));
     card.hidden = !exists || !matchesRoute || !matchesQuery || !dailySelected || !passesFilter;

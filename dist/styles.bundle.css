@@ -6407,6 +6407,49 @@ button.evidence-link:active {
   content: "✓";
 }
 
+/* Franja de color de la cartulina en el borde superior (igual que en el directorio). */
+.route-sort-item.has-card-color {
+  position: relative;
+  overflow: hidden;
+  padding-top: 28px;
+  border-top-color: var(--card-color);
+}
+
+/* Más información: la cartulina completa se despliega debajo (una a la vez). */
+.route-card-actions .route-info-button {
+  border-color: var(--line);
+  background: transparent;
+  color: var(--text);
+}
+
+.route-card-info {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 8px 14px;
+  flex: 1 0 100%;
+  margin: 4px 0 0;
+  padding: 12px;
+  border-radius: 9px;
+  background: var(--card);
+  cursor: default;
+}
+
+.route-card-info div {
+  min-width: 0;
+}
+
+.route-card-info dt {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.route-card-info dd {
+  margin: 2px 0 0;
+  font-size: 13px;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
 /* ── css/features/settings.css */
 /* features/settings · Ajustes. */
 

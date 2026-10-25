@@ -13,6 +13,47 @@ import { formatDate, formatMoney, routeKey } from '../../shared/format.js';
 import { moveId } from '../../shared/math.js';
 import { openCustomModal } from '../../ui/custom-modal.js';
 import { showToast } from '../../ui/toast.js';
+import { paymentFrequencyLabels } from '../../core/config.js';
+import { paintCardColorBand } from '../../domain/card-color.js';
+import { paymentBehavior, paymentHistory } from '../../domain/loan-schedule.js';
+
+/** Tarjeta con «Más información» abierta (`modo:id`). Solo una a la vez. */
+let openRouteInfo = null;
+
+/** Información completa de la cartulina, para desplegar debajo de la tarjeta. */
+function routeCardInfo(client) {
+  const payments = (client.payments || []).filter(payment => Number(payment.amount) > 0);
+  const paid = payments.reduce((sum, payment) => sum + Number(payment.amount), 0);
+  const last = [...payments].sort((a, b) => String(b.date).localeCompare(String(a.date)))[0];
+  const rows = [
+    ['Cédula', client.id],
+    ['Teléfono', client.phone],
+    ['Dirección', client.address],
+    ['Estado', paymentBehavior(client).label],
+    ['Historial', paymentHistory(client).label],
+    ['Saldo', formatMoney(client.balance)],
+    ['Cuota', formatMoney(client.installment)],
+    ['Cuotas', client.installments ? `${client.paid || 0} de ${client.installments}` : ''],
+    ['Frecuencia', paymentFrequencyLabels[client.frequency] || 'Semanal'],
+    ['Total del crédito', formatMoney(client.total)],
+    ['Abonado', formatMoney(paid)],
+    ['Último abono', last ? `${formatMoney(last.amount)} · ${formatDate(last.date)}` : 'Sin abonos'],
+    ['Inicio del crédito', client.creditStartDate ? formatDate(client.creditStartDate) : ''],
+    ['Plazo', client.term || (client.totalDays ? `${client.totalDays} días` : '')],
+  ].filter(([, value]) => value !== undefined && value !== null && String(value).trim() !== '');
+  const list = document.createElement('dl');
+  list.className = 'route-card-info';
+  rows.forEach(([label, value]) => {
+    const item = document.createElement('div');
+    const term = document.createElement('dt');
+    term.textContent = label;
+    const detail = document.createElement('dd');
+    detail.textContent = value;
+    item.append(term, detail);
+    list.append(item);
+  });
+  return list;
+}
 
 export function routeDayKey(route = state.workerRoute) {
   const date = localDateISO();
@@ -121,7 +162,19 @@ function routeClientCard(clientId, mode, routeOrder = []) {
     add.type = 'button'; add.className = 'route-add-button'; add.dataset.routeAdd = clientId; add.textContent = '＋ Agregar';
     actions.append(add);
   }
-  card.append(handle, content, actions);
+  // Más información: despliega la cartulina completa debajo (solo una abierta a la vez).
+  const infoKey = `${mode}:${clientId}`;
+  const open = openRouteInfo === infoKey;
+  const info = document.createElement('button');
+  info.type = 'button'; info.className = 'route-info-button'; info.dataset.routeInfo = infoKey;
+  info.setAttribute('aria-expanded', String(open));
+  info.textContent = open ? 'Menos información ▴' : 'Más información ▾';
+  actions.append(info);
+  const band = document.createElement('span');
+  band.className = 'card-color-band';
+  paintCardColorBand(band, client, card);
+  card.append(band, handle, content, actions);
+  if (open) card.append(routeCardInfo(client));
   return card;
 }
 
@@ -197,6 +250,12 @@ function updateDailyRouteDrop(container, mode) {
       if (!order.includes(addButton.dataset.routeAdd)) order.push(addButton.dataset.routeAdd);
       state.dailyRouteOrder[state.workerRoute] = order;
       persistBusinessData(); renderRouteBuilder(); filterClientCards();
+      return;
+    }
+    const infoButton = event.target.closest('[data-route-info]');
+    if (infoButton) {
+      openRouteInfo = openRouteInfo === infoButton.dataset.routeInfo ? null : infoButton.dataset.routeInfo;
+      renderRouteBuilder();
       return;
     }
     const correctionButton = event.target.closest('[data-route-correction]');
