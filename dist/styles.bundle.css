@@ -6471,17 +6471,63 @@ button.evidence-link:active {
   list-style: none;
 }
 
-.route-card-payments li {
+.route-card-payments summary {
   display: flex;
+  align-items: baseline;
   justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  list-style: none;
+}
+
+.route-card-payments summary::-webkit-details-marker { display: none; }
+.route-card-payments summary > span:first-child::before { content: '▸ '; }
+.route-card-payments[open] summary > span:first-child::before { content: '▾ '; }
+
+.route-loan-step {
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.route-loan-step b.is-up { color: var(--success, #00c853); }
+.route-loan-step b.is-down { color: var(--danger, #e53935); }
+
+/* Fecha | abono a la izquierda y saldo a la derecha, como el historial del sistema anterior. */
+.route-card-payments li {
+  display: grid;
+  grid-template-columns: 84px 1fr auto;
+  align-items: baseline;
   gap: 10px;
   padding: 7px 0;
   border-top: 1px solid var(--line);
-  font-size: 12px;
+  font-size: 13px;
 }
 
-.route-card-payments li span {
+.route-card-payments li.route-payments-head {
+  border-top: 0;
+  padding-top: 0;
   color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.route-payment-date {
+  color: var(--muted);
+}
+
+.route-payment-balance,
+.route-payments-head span:last-child {
+  text-align: right;
+}
+
+.route-payment-balance {
+  font-weight: 700;
+}
+
+.route-card-info dd.is-late {
+  color: var(--danger, #e53935);
 }
 
 .route-card-payments p {
@@ -6505,18 +6551,6 @@ button.evidence-link:active {
   font-size: 13px;
   font-weight: 700;
   overflow-wrap: anywhere;
-}
-
-.route-card-payments li strong {
-  text-align: right;
-}
-
-.route-card-payments li strong small {
-  display: block;
-  margin-top: 2px;
-  color: var(--muted);
-  font-size: 11px;
-  font-weight: 600;
 }
 
 /* ── css/features/settings.css */

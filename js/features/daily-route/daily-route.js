@@ -8,42 +8,65 @@ import { state } from '../../core/state.js';
 import { clients, pendingRequests, persistBusinessData } from '../../core/store.js';
 import { renderPendingRequests } from '../admin/pending.js';
 import { filterClientCards, renderClientRows } from '../clients/directory.js';
-import { localDateISO } from '../../shared/dates.js';
+import { localDate, localDateISO } from '../../shared/dates.js';
 import { formatDate, formatMoney, routeKey } from '../../shared/format.js';
 import { moveId } from '../../shared/math.js';
 import { openCustomModal } from '../../ui/custom-modal.js';
 import { showToast } from '../../ui/toast.js';
-import { paymentFrequencyLabels } from '../../core/config.js';
 import { paintCardColorBand } from '../../domain/card-color.js';
-import { loanCount, loanCountLabel } from '../../domain/person-cards.js';
-import { balancesAfterPayments, paymentBehavior, paymentHistory, ratingSystemActive } from '../../domain/loan-schedule.js';
+import { loanCount, personCardIds } from '../../domain/person-cards.js';
+import { balancesAfterPayments, creditDay, inferClientPrincipal, paymentHistory, ratingSystemActive } from '../../domain/loan-schedule.js';
 
 /** Tarjeta con «Más información» abierta (`modo:id`). Solo una a la vez. */
 let openRouteInfo = null;
 /** Filtro de la biblioteca por calificación: all | good | irregular | bad. */
 let routeLibraryFilter = 'all';
 
-/** Información completa de la cartulina, para desplegar debajo de la tarjeta. */
-function routeCardInfo(client) {
+const RATING_TYPE = { good: 'Bueno', irregular: 'Regular', bad: 'Malo' };
+/** Miles con signo, como el sistema anterior: 200.000 → «+200», −100.000 → «−100». */
+const signedThousands = amount => `${amount > 0 ? '+' : amount < 0 ? '−' : ''}${(Math.abs(amount) / 1000).toLocaleString('es-CO', { maximumFractionDigits: 1 })}`;
+/** Fecha corta del historial: «23-oct-26». */
+const historyDate = iso => {
+  const [year, month, day] = String(iso || '').split('-').map(Number);
+  if (!year) return '—';
+  const name = new Date(year, month - 1, day).toLocaleDateString('es-CO', { month: 'short' }).replace('.', '');
+  return `${String(day).padStart(2, '0')}-${name}-${String(year).slice(-2)}`;
+};
+
+/**
+ * Número de préstamo de esta cartulina y cuánto subió o bajó el crédito frente al anterior
+ * de la misma persona (capital prestado). null en el primer préstamo.
+ */
+function loanStep(clientId) {
+  const client = clients[clientId];
+  const ids = personCardIds(clients, client.id);
+  const position = Math.max(0, ids.indexOf(clientId));
+  const previous = position > 0 ? clients[ids[position - 1]] : null;
+  return { number: loanCount(clients, client.id).total, change: previous ? inferClientPrincipal(client) - inferClientPrincipal(previous) : null };
+}
+
+/** Información de la cartulina, para desplegar debajo de la tarjeta (lo que pide la oficina). */
+function routeCardInfo(clientId) {
+  const client = clients[clientId];
   const payments = (client.payments || []).filter(payment => Number(payment.amount) > 0);
-  const paid = payments.reduce((sum, payment) => sum + Number(payment.amount), 0);
-  const last = [...payments].sort((a, b) => String(b.date).localeCompare(String(a.date)))[0];
+  const totalDays = Number(client.totalDays) || 0;
+  let dueDate = '';
+  if (client.creditStartDate && totalDays) {
+    const due = localDate(client.creditStartDate);
+    due.setDate(due.getDate() + totalDays);
+    dueDate = localDateISO(due);
+  }
+  // Días atrasados como el sistema anterior: negativo = días que faltan para vencer.
+  const lateDays = totalDays ? creditDay(client) - totalDays : null;
   const rows = [
-    ['Cédula', client.id],
-    ['Veces que se le ha prestado', loanCountLabel(loanCount(clients, client.id))],
-    ['Teléfono', client.phone],
-    ['Dirección', client.address],
-    ['Estado', paymentBehavior(client).label],
-    ['Historial', paymentHistory(client).label],
-    ['Saldo', formatMoney(client.balance)],
-    ['Cuota', formatMoney(client.installment)],
-    ['Cuotas', client.installments ? `${client.paid || 0} de ${client.installments}` : ''],
-    ['Frecuencia', paymentFrequencyLabels[client.frequency] || 'Semanal'],
-    ['Total del crédito', formatMoney(client.total)],
-    ['Abonado', formatMoney(paid)],
-    ['Último abono', last ? `${formatMoney(last.amount)} · ${formatDate(last.date)}` : 'Sin abonos'],
-    ['Inicio del crédito', client.creditStartDate ? formatDate(client.creditStartDate) : ''],
-    ['Plazo', client.term || (client.totalDays ? `${client.totalDays} días` : '')],
+    ['Valor del crédito', formatMoney(client.total)],
+    ['Saldo actual', formatMoney(client.balance)],
+    ['Plazo', totalDays ? `${totalDays} días` : client.term],
+    ['V. Cuota', formatMoney(client.installment)],
+    ['F. Crédito', client.creditStartDate ? formatDate(client.creditStartDate) : ''],
+    ['F. Vence', dueDate ? formatDate(dueDate) : ''],
+    ['Días atrasados', lateDays === null ? '' : String(lateDays)],
+    ['Tipo', RATING_TYPE[paymentHistory(client).level]],
   ].filter(([, value]) => value !== undefined && value !== null && String(value).trim() !== '');
   const list = document.createElement('dl');
   list.className = 'route-card-info';
@@ -53,16 +76,29 @@ function routeCardInfo(client) {
     term.textContent = label;
     const detail = document.createElement('dd');
     detail.textContent = value;
+    if (label === 'Días atrasados') detail.classList.toggle('is-late', lateDays > 0);
     item.append(term, detail);
     list.append(item);
   });
-  // Historial de abonos: otro desplegable dentro de la información, del más reciente al más antiguo.
+  // Historial de abonos: fecha y abono a la izquierda, saldo que dejó a la derecha.
   const history = document.createElement('details');
   history.className = 'route-card-payments';
   const summary = document.createElement('summary');
-  summary.textContent = `Historial de abonos (${payments.length})`;
+  const title = document.createElement('span');
+  title.textContent = `Historial de abonos (${payments.length})`;
+  const step = loanStep(clientId);
+  const loan = document.createElement('span');
+  loan.className = 'route-loan-step';
+  loan.textContent = `Préstamo #${step.number}`;
+  if (step.change !== null) {
+    const change = document.createElement('b');
+    change.className = step.change > 0 ? 'is-up' : step.change < 0 ? 'is-down' : '';
+    change.textContent = `${step.change > 0 ? '↑' : step.change < 0 ? '↓' : '='} ${signedThousands(step.change) || '0'}`;
+    change.title = step.change ? `Se le prestó ${formatMoney(Math.abs(step.change))} ${step.change > 0 ? 'más' : 'menos'} que en el crédito anterior` : 'Mismo valor que el crédito anterior';
+    loan.append(' ', change);
+  } else loan.title = 'Primer préstamo de esta persona';
+  summary.append(title, loan);
   history.append(summary);
-  // Cada abono con el saldo que dejó, del más reciente al más antiguo.
   const balances = balancesAfterPayments(client);
   const ordered = (client.payments || []).map((payment, index) => ({ payment, index, after: balances[index] }))
     .filter(({ payment }) => Number(payment.amount) > 0)
@@ -72,15 +108,21 @@ function routeCardInfo(client) {
     items.replaceChildren(...ordered.map(({ payment, after }) => {
       const item = document.createElement('li');
       const date = document.createElement('span');
-      date.textContent = `${formatDate(payment.date)} · ${payment.method === 'transfer' ? 'Transferencia' : 'Efectivo'}`;
+      date.className = 'route-payment-date';
+      date.textContent = historyDate(payment.date);
       const amount = document.createElement('strong');
+      amount.className = 'route-payment-amount';
       amount.textContent = formatMoney(payment.amount);
-      const balance = document.createElement('small');
-      balance.textContent = `Saldo ${formatMoney(after)}`;
-      amount.append(balance);
-      item.append(date, amount);
+      const balance = document.createElement('span');
+      balance.className = 'route-payment-balance';
+      balance.textContent = formatMoney(after);
+      item.append(date, amount, balance);
       return item;
     }));
+    const head = document.createElement('li');
+    head.className = 'route-payments-head';
+    head.innerHTML = '<span>Fecha</span><span>Abono</span><span>Saldo</span>';
+    items.prepend(head);
     history.append(items);
   } else {
     history.append(Object.assign(document.createElement('p'), { textContent: 'Aún no tiene abonos registrados.' }));
@@ -231,7 +273,7 @@ function routeClientCard(clientId, mode, routeOrder = []) {
   band.className = 'card-color-band';
   paintCardColorBand(band, client, card);
   card.append(band, handle, content, actions);
-  if (open) card.append(routeCardInfo(client));
+  if (open) card.append(routeCardInfo(clientId));
   return card;
 }
 
