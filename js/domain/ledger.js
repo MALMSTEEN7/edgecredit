@@ -144,6 +144,8 @@ export function recordClosure(route, dateISO, values, closedTs) {
     ...Object.fromEntries(LIVE_FIELDS.map(field => [field, Number(values[field] || 0)])),
     insurance: Number(previous.closed ? previous.insurance || 0 : 0) + Number(values.insurance || 0),
     cashOut: Number(previous.cashOut || 0),
+    // Abonos del día recibidos por transferencia: no pasan a la base del día siguiente.
+    transfers: Number(values.transfers || 0),
     closed: true,
     closedTs,
     demo: false,
@@ -158,16 +160,21 @@ export function closedDayCash(record) {
 
 /**
  * Base que le toca hoy a la ruta: el efectivo del último día cerrado antes de hoy (sirve
- * también para los días traídos del Excel). Si ese día fue sábado el efectivo se entregó y
- * la base arranca en 0, igual que al cerrar en Liquidación. Devuelve null sin cierres previos.
+ * también para los días traídos del Excel), sin los abonos de ese día que llegaron por
+ * transferencia: esa plata está en el banco, no en la mano del trabajador. Si ese día fue
+ * sábado el efectivo se entregó y la base arranca en 0, igual que al cerrar en Liquidación.
+ * `transfersOn(fecha)` da las transferencias de un cierre que no las guardó. Devuelve null
+ * sin cierres previos.
  */
-export function carriedBase(route, today = localDateISO()) {
+export function carriedBase(route, today = localDateISO(), transfersOn = () => 0) {
   ensureLedger(route);
   const last = Object.keys(route.ledger).filter(date => date < today && route.ledger[date]?.closed).sort().at(-1);
   if (!last) return null;
   const [year, month, day] = last.split('-').map(Number);
   const saturday = new Date(year, month - 1, day).getDay() === 6;
-  return { date: last, amount: saturday ? 0 : closedDayCash(dayRecord(route, last)), saturday };
+  const stored = route.ledger[last].transfers;
+  const transfers = Number(stored ?? transfersOn(last)) || 0;
+  return { date: last, amount: saturday ? 0 : Math.max(0, closedDayCash(dayRecord(route, last)) - transfers), transfers, saturday };
 }
 
 /**

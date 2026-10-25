@@ -52,11 +52,12 @@ export function refreshRouteOptions() {
  * y efectivo entregado vuelven a 0. El sábado el efectivo se entrega, así que la base
  * del lunes arranca en 0 (el admin puede asignarla en Liquidación).
  */
-function resetRouteDay(route, routeId) {
+function resetRouteDay(route, routeId, transfers = 0) {
   const computedCash = Number(route.collections || 0) + Number(route.base || 0) - Number(route.loans || 0) - Number(route.expenses || 0) - Number(route.otherExpenses || 0);
   const cash = Number(route.cashDelivered || 0) > 0 ? Number(route.cashDelivered) : Math.max(0, computedCash);
   const saturday = new Date().getDay() === 6;
-  const carried = saturday ? 0 : cash;
+  // Lo que entró por transferencia está en el banco: no pasa a la base del día siguiente.
+  const carried = saturday ? 0 : Math.max(0, cash - transfers);
   route.collections = 0;
   route.loans = 0;
   route.expenses = 0;
@@ -79,7 +80,7 @@ export function applyCarriedBases(today = localDateISO()) {
     if (!route || route.baseCarriedOn === today || route.lastClosure?.date === today) return;
     const started = ['collections', 'loans', 'expenses', 'otherExpenses', 'cashDelivered'].some(field => Number(route[field] || 0) !== 0);
     if (started) return;
-    const carried = carriedBase(route, today);
+    const carried = carriedBase(route, today, date => transfersOn(routeId, date));
     if (!carried) return;
     route.base = carried.amount;
     route.baseBank = 0;
@@ -88,6 +89,14 @@ export function applyCarriedBases(today = localDateISO()) {
     changed = true;
   });
   return changed;
+}
+
+/** Abonos de la ruta recibidos por transferencia en una fecha. */
+function transfersOn(routeId, dateISO) {
+  return Object.values(clients).reduce((sum, client) => {
+    if (client?.route !== routeId) return sum;
+    return sum + (client.payments || []).filter(payment => payment.date === dateISO && payment.method === 'transfer').reduce((total, payment) => total + (Number(payment.amount) || 0), 0);
+  }, 0);
 }
 
 /** Abonos ingresados hoy en la ruta: nombre de la cartulina y monto, del más reciente al más antiguo. */
@@ -182,8 +191,9 @@ export function mount() {
       // Libro diario: el día queda guardado con su fecha antes de reiniciar el resumen.
       const previousClosureTs = route.lastClosure?.date === localDateISO() && route.ledger?.[localDateISO()]?.closed ? Number(route.ledger[localDateISO()].closedTs) : 0;
       const insurance = insuranceCollectedOn(clients, routeId, localDateISO(), previousClosureTs).total;
-      recordClosure(route, localDateISO(), { ...route, insurance }, Date.parse(payload.submittedAt));
-      const reset = resetRouteDay(route, routeId);
+      const transfers = transfersOn(routeId, localDateISO());
+      recordClosure(route, localDateISO(), { ...route, insurance, transfers }, Date.parse(payload.submittedAt));
+      const reset = resetRouteDay(route, routeId, transfers);
       route.lastClosure.carriedBase = reset.carried;
       route.lastClosure.after = Object.fromEntries(CLOSURE_FIELDS.map(field => [field, Number(route[field] || 0)]));
       persistBusinessData();
@@ -191,7 +201,9 @@ export function mount() {
       refreshRouteOptions();
       const nextBase = reset.saturday
         ? `Sábado: el efectivo (${formatMoney(reset.cash)}) se entrega y la base del lunes arranca en ${formatMoney(0)}.`
-        : `El efectivo del día (${formatMoney(reset.cash)}) pasa como base del día siguiente; el resto del resumen quedó en 0.`;
+        : transfers
+          ? `El efectivo del día (${formatMoney(reset.cash)}) menos ${formatMoney(transfers)} de transferencias pasa como base del día siguiente: ${formatMoney(reset.carried)}. El resto del resumen quedó en 0.`
+          : `El efectivo del día (${formatMoney(reset.cash)}) pasa como base del día siguiente; el resto del resumen quedó en 0.`;
       adminFeedback.textContent = `Cierre de ${state.activeSettlement.name} enviado para auditoría. Diferencia: ${formatMoney(payload.difference)}. ${nextBase}`;
       showToast(payload.difference === 0 ? `Ruta cerrada. ${nextBase}` : `Cierre enviado con diferencia para auditoría. ${nextBase}`);
     };
