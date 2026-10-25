@@ -23,6 +23,22 @@ export function personCardIds(clients, idNumber) {
     .sort((a, b) => String(clients[a].creditStartDate || '').localeCompare(String(clients[b].creditStartDate || '')) || a.localeCompare(b));
 }
 
+/**
+ * Veces que se le ha prestado a la persona: cada cartulina a su nombre (activas, canceladas
+ * o renovadas) más cada retanqueo. Devuelve { total, cards, retanqueos }.
+ */
+export function loanCount(clients, idNumber) {
+  const ids = personCardIds(clients, idNumber);
+  const retanqueos = ids.reduce((sum, id) => sum + (clients[id].restructures || []).filter(entry => entry.type === 'retanqueo').length, 0);
+  return { total: ids.length + retanqueos, cards: ids.length, retanqueos };
+}
+
+/** Texto del contador: «3 préstamos» o «3 préstamos (1 retanqueo)». */
+export function loanCountLabel(count) {
+  const base = `${count.total} préstamo${count.total === 1 ? '' : 's'}`;
+  return count.retanqueos ? `${base} (${count.retanqueos} retanqueo${count.retanqueos === 1 ? '' : 's'})` : base;
+}
+
 export function isActiveCard(client) {
   return Number(client?.balance) > 0;
 }

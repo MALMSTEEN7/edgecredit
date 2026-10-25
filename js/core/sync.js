@@ -55,6 +55,7 @@ function routeStateData(routeId) {
   if (syncSession?.role === 'worker' && state.activeWorker?.id && !ids.includes(state.activeWorker.id)) ids.push(state.activeWorker.id);
   return {
     dailyRouteOrder: state.dailyRouteOrder[routeId] || [],
+    dailyRouteDate: state.dailyRouteDates[routeId] || '',
     clientLibraryOrder: state.clientLibraryOrder[routeId] || [],
     collectedRouteClients: pickKeys(state.collectedRouteClients, routeId),
     routeVisitOutcomes: pickKeys(state.routeVisitOutcomes, routeId),
@@ -184,6 +185,8 @@ function replaceObject(target, source) {
 
 function applyRouteState(routeId, data = {}) {
   state.dailyRouteOrder[routeId] = data.dailyRouteOrder || [];
+  if (data.dailyRouteDate) state.dailyRouteDates[routeId] = data.dailyRouteDate;
+  else delete state.dailyRouteDates[routeId];
   state.clientLibraryOrder[routeId] = data.clientLibraryOrder || [];
   Object.keys(state.collectedRouteClients).filter(key => key === routeId || key.startsWith(`${routeId}:`)).forEach(key => delete state.collectedRouteClients[key]);
   Object.assign(state.collectedRouteClients, data.collectedRouteClients || {});

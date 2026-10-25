@@ -33,6 +33,30 @@ export function pruneExpiredPaymentHistories() {
   if (changed && typeof persistBusinessData === 'function') persistBusinessData();
 }
 
+/**
+ * Saldo que quedó después de cada abono (mismo orden que client.payments), como el
+ * historial del sistema anterior: «23-oct → 200 · saldo 200.000». Se reconstruye desde el
+ * saldo actual sumando los abonos posteriores y restando lo que se agregó después
+ * (intereses, financiación y retanqueos). Los abonos de un mismo día se toman en el orden
+ * de la lista (el primero es el más reciente).
+ */
+export function balancesAfterPayments(client) {
+  const payments = client.payments || [];
+  const additions = [
+    ...(client.interestHistory || []).map(entry => ({ date: entry.date, amount: Number(entry.amount) || 0 })),
+    ...(client.restructures || []).filter(entry => entry.type === 'retanqueo').map(entry => ({ date: entry.date, amount: (Number(entry.extra) || 0) + (Number(entry.interest) || 0) })),
+  ];
+  const balance = Math.max(0, Number(client.balance) || 0);
+  return payments.map((payment, index) => {
+    const laterPaid = payments.reduce((sum, other, otherIndex) => {
+      const later = other.date > payment.date || (other.date === payment.date && otherIndex < index);
+      return later ? sum + (Number(other.amount) || 0) : sum;
+    }, 0);
+    const laterAdded = additions.reduce((sum, entry) => (entry.date >= payment.date ? sum + entry.amount : sum), 0);
+    return Math.max(0, balance + laterPaid - laterAdded);
+  });
+}
+
 export function updatePaidAmountTotal(client) {
   client.totalPaidAmount = (client.payments || []).reduce((sum, payment) => sum + (Number(payment.amount) || 0), 0);
 }

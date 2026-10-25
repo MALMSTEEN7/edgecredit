@@ -134,7 +134,7 @@ export function persistBusinessData() {
   persistListeners.forEach(listener => { try { listener(); } catch { /* la sincronización informa sus errores */ } });
   if (!localPersistence) return;
   try {
-    localStorage.setItem('edgecredit-business-data', JSON.stringify({ clients, routeSettlements, personnel, pendingRequests, dailyRouteOrder: state.dailyRouteOrder, clientLibraryOrder: state.clientLibraryOrder, collectedRouteClients: state.collectedRouteClients, routeVisitOutcomes: state.routeVisitOutcomes, security, shared, dataEpoch: DATA_EPOCH }));
+    localStorage.setItem('edgecredit-business-data', JSON.stringify({ clients, routeSettlements, personnel, pendingRequests, dailyRouteOrder: state.dailyRouteOrder, dailyRouteDates: state.dailyRouteDates, clientLibraryOrder: state.clientLibraryOrder, collectedRouteClients: state.collectedRouteClients, routeVisitOutcomes: state.routeVisitOutcomes, security, shared, dataEpoch: DATA_EPOCH }));
   } catch { showToast('No se pudieron guardar los datos localmente en este dispositivo.'); }
 }
 
@@ -167,6 +167,7 @@ export function hydrateBusinessData() {
     }
     if (Array.isArray(saved.pendingRequests)) pendingRequests.push(...saved.pendingRequests);
     if (saved.dailyRouteOrder && typeof saved.dailyRouteOrder === 'object') state.dailyRouteOrder = saved.dailyRouteOrder;
+    if (saved.dailyRouteDates && typeof saved.dailyRouteDates === 'object') state.dailyRouteDates = saved.dailyRouteDates;
     if (saved.clientLibraryOrder && typeof saved.clientLibraryOrder === 'object') state.clientLibraryOrder = saved.clientLibraryOrder;
     if (saved.collectedRouteClients && typeof saved.collectedRouteClients === 'object') state.collectedRouteClients = saved.collectedRouteClients;
     if (saved.routeVisitOutcomes && typeof saved.routeVisitOutcomes === 'object') state.routeVisitOutcomes = saved.routeVisitOutcomes;

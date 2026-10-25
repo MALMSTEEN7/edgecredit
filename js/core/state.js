@@ -11,6 +11,7 @@ export const state = {
   lastFocusedElement: null,
   workerRoute: '',
   dailyRouteOrder: {},
+  dailyRouteDates: {}, // día en que se armó la ruta de cada cobro (se reinicia al cambiar de día)
   clientLibraryOrder: {},
   collectedRouteClients: {},
   routeVisitOutcomes: {},

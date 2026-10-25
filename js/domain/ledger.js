@@ -207,6 +207,18 @@ export function setOtherExpensesNote(route, dateISO, text) {
   route.ledger[dateISO].otherExpensesNote = String(text || '').trim();
 }
 
+/** Comentario de la salida de caja de un día (a dónde o para qué salió la plata). */
+export function cashOutNote(route, dateISO) {
+  ensureLedger(route);
+  return String(route.ledger[dateISO]?.cashOutNote || '');
+}
+
+export function setCashOutNote(route, dateISO, text) {
+  ensureLedger(route);
+  route.ledger[dateISO] ||= { closed: false };
+  route.ledger[dateISO].cashOutNote = String(text || '').trim();
+}
+
 /** Sueldo del trabajador anotado ese día (ya está sumado en «otros gastos»). */
 export function daySalary(route, dateISO) {
   ensureLedger(route);

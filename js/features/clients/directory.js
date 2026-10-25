@@ -9,7 +9,7 @@ import { state } from '../../core/state.js';
 import { clients, persistBusinessData, routeSettlements } from '../../core/store.js';
 import { paymentBehavior, paymentHistory } from '../../domain/loan-schedule.js';
 import { openClient } from './client-detail.js';
-import { visitStatus } from '../daily-route/daily-route.js';
+import { todayRouteOrder, visitStatus } from '../daily-route/daily-route.js';
 import { formatMoney } from '../../shared/format.js';
 import { moveId } from '../../shared/math.js';
 import { openCustomModal } from '../../ui/custom-modal.js';
@@ -157,7 +157,7 @@ function renderDirectoryFilterCounts(route) {
 export function filterClientCards() {
   const route = state.userRole === 'admin' ? routeSelect.value : state.workerRoute;
   const query = document.querySelector('#directory-search')?.value.trim().toLocaleLowerCase('es') || '';
-  const todayOrder = state.dailyRouteOrder[route] || [];
+  const todayOrder = todayRouteOrder(route);
   document.querySelectorAll('#worker-view [data-client][data-route]').forEach(card => {
     const matchesRoute = card.dataset.route === route;
     const matchesQuery = card.textContent.toLocaleLowerCase('es').includes(query);

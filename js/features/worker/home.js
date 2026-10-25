@@ -5,7 +5,7 @@
 
 import { state } from '../../core/state.js';
 import { openClient } from '../clients/client-detail.js';
-import { markNoPayment } from '../daily-route/daily-route.js';
+import { markNoPayment, todayRouteOrder } from '../daily-route/daily-route.js';
 import { openPayment } from '../payments/payment.js';
 import { clients, routeSettlements } from '../../core/store.js';
 import { openCustomModal } from '../../ui/custom-modal.js';
@@ -31,7 +31,7 @@ export function renderHomeHeader() {
   const route = routeSettlements[state.workerRoute];
   const weekday = new Intl.DateTimeFormat('es-CO', { weekday: 'long' }).format(new Date());
   document.querySelector('#home-list-eyebrow').textContent = `${weekday} · RUTA ${route?.name || ''}`.toLocaleUpperCase('es');
-  const organized = (state.dailyRouteOrder[state.workerRoute] || []).length > 0;
+  const organized = todayRouteOrder().length > 0;
   document.querySelector('#home-route-hint').hidden = organized || state.userRole !== 'worker';
 }
 
@@ -66,7 +66,7 @@ export function renderHomeRowActions() {
   });
   const anyVisible = rows.some(row => !row.hidden);
   const empty = document.querySelector('#home-route-done');
-  const organized = (state.dailyRouteOrder[state.workerRoute] || []).length > 0;
+  const organized = todayRouteOrder().length > 0;
   if (empty) empty.hidden = anyVisible || !organized || state.userRole !== 'worker';
 }
 

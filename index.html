@@ -34,7 +34,7 @@
   <link rel="icon" href="icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="icon-192.png">
   <meta name="apple-mobile-web-app-capable" content="yes">
-  <link rel="stylesheet" id="app-styles" href="dist/styles.bundle.css?v=b129d53fe7">
+  <link rel="stylesheet" id="app-styles" href="dist/styles.bundle.css?v=589c8d511b">
 </head>
 <body class="login-active">
   <section class="login-gateway" id="login-gateway" aria-labelledby="login-title">
@@ -184,7 +184,7 @@
         <div class="client-location-pending" id="client-location-pending" role="status" hidden><span class="client-location-pending-copy"><strong id="client-location-pending-title">Sin ubicación GPS</strong><small id="client-location-pending-text">Tómala cuando estés en el domicilio del cliente.</small></span><button class="secondary-button" type="button" id="client-capture-location"><span aria-hidden="true">⌖</span> Tomar ubicación ahora</button></div>
         <button class="disclosure-button" type="button" aria-expanded="false" aria-controls="credit-details"><span>Ver detalles del crédito</span><span class="disclosure-chevron" aria-hidden="true">⌄</span></button>
         <div class="credit-details" id="credit-details" hidden>
-          <dl class="detail-grid"><div><dt>Cédula</dt><dd id="detail-id">1.024.567.890</dd></div><div><dt>Dirección</dt><dd id="detail-address">Cra. 12 # 34-56</dd></div><div><dt>Dirección alternativa</dt><dd id="detail-alt-address">—</dd></div><div><dt>Indicaciones del domicilio</dt><dd id="detail-address-notes">—</dd></div><div><dt>Teléfono</dt><dd id="detail-phone">300 555 0101</dd></div><div><dt>Valor total del préstamo</dt><dd id="detail-loan-total">$ 1.200.000</dd></div><div><dt>Plazo</dt><dd id="detail-term">16 semanas</dd></div><div><dt>Frecuencia de pago</dt><dd id="detail-frequency">Semanal</dd></div><div><dt>Capital / Intereses</dt><dd id="detail-breakdown">$ 1.000.000 / $ 200.000</dd></div><div><dt>Interés acordado</dt><dd id="detail-interest-rate">20%</dd></div><div><dt>Seguros cobrados</dt><dd id="detail-insurance">Tarifa general</dd></div><div class="detail-insurance-reason" id="detail-insurance-reason-row" hidden><dt>Motivo del valor de seguros</dt><dd id="detail-insurance-reason">—</dd></div><div id="detail-renewal-row" hidden><dt>Renovación</dt><dd id="detail-renewal">—</dd></div></dl>
+          <dl class="detail-grid"><div><dt>Cédula</dt><dd id="detail-id">1.024.567.890</dd></div><div><dt>Dirección</dt><dd id="detail-address">Cra. 12 # 34-56</dd></div><div><dt>Dirección alternativa</dt><dd id="detail-alt-address">—</dd></div><div><dt>Indicaciones del domicilio</dt><dd id="detail-address-notes">—</dd></div><div><dt>Teléfono</dt><dd id="detail-phone">300 555 0101</dd></div><div><dt>Valor total del préstamo</dt><dd id="detail-loan-total">$ 1.200.000</dd></div><div><dt>Plazo</dt><dd id="detail-term">16 semanas</dd></div><div><dt>Frecuencia de pago</dt><dd id="detail-frequency">Semanal</dd></div><div><dt>Veces que se le ha prestado</dt><dd id="detail-loan-count">—</dd></div><div><dt>Capital / Intereses</dt><dd id="detail-breakdown">$ 1.000.000 / $ 200.000</dd></div><div><dt>Interés acordado</dt><dd id="detail-interest-rate">20%</dd></div><div><dt>Seguros cobrados</dt><dd id="detail-insurance">Tarifa general</dd></div><div class="detail-insurance-reason" id="detail-insurance-reason-row" hidden><dt>Motivo del valor de seguros</dt><dd id="detail-insurance-reason">—</dd></div><div id="detail-renewal-row" hidden><dt>Renovación</dt><dd id="detail-renewal">—</dd></div></dl>
           <div class="client-location-links"><a class="secondary-button client-location-link" id="client-location-link" href="#" target="_blank" rel="noopener noreferrer">⌖ Ver ubicación del domicilio</a><a class="secondary-button client-location-link" id="client-alt-location-link" href="#" target="_blank" rel="noopener noreferrer" hidden>⌖ Ver dirección alternativa</a></div>
           <details class="address-history" id="address-history"><summary><span>Direcciones anteriores</span><span class="history-count" id="address-history-count">0</span></summary><ol id="address-history-list"></ol></details>
         </div>
@@ -493,7 +493,7 @@
     // al cambiar el sello, el navegador descarga el JS/CSS nuevo en vez de usar su caché.
     // Para desarrollar con los módulos sueltos, abre index.html?dev desde un servidor local.
     (() => {
-      const APP_VERSION = 'b129d53fe7';
+      const APP_VERSION = '589c8d511b';
       const dev = new URLSearchParams(location.search).has('dev') && location.protocol !== 'file:';
       if (dev) {
         document.getElementById('app-styles').href = 'styles.css';

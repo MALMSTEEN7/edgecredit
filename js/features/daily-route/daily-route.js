@@ -15,7 +15,8 @@ import { openCustomModal } from '../../ui/custom-modal.js';
 import { showToast } from '../../ui/toast.js';
 import { paymentFrequencyLabels } from '../../core/config.js';
 import { paintCardColorBand } from '../../domain/card-color.js';
-import { paymentBehavior, paymentHistory, ratingSystemActive } from '../../domain/loan-schedule.js';
+import { loanCount, loanCountLabel } from '../../domain/person-cards.js';
+import { balancesAfterPayments, paymentBehavior, paymentHistory, ratingSystemActive } from '../../domain/loan-schedule.js';
 
 /** Tarjeta con «Más información» abierta (`modo:id`). Solo una a la vez. */
 let openRouteInfo = null;
@@ -29,6 +30,7 @@ function routeCardInfo(client) {
   const last = [...payments].sort((a, b) => String(b.date).localeCompare(String(a.date)))[0];
   const rows = [
     ['Cédula', client.id],
+    ['Veces que se le ha prestado', loanCountLabel(loanCount(clients, client.id))],
     ['Teléfono', client.phone],
     ['Dirección', client.address],
     ['Estado', paymentBehavior(client).label],
@@ -60,15 +62,22 @@ function routeCardInfo(client) {
   const summary = document.createElement('summary');
   summary.textContent = `Historial de abonos (${payments.length})`;
   history.append(summary);
-  const ordered = [...payments].sort((a, b) => String(b.date).localeCompare(String(a.date)) || (Number(b.ts) || 0) - (Number(a.ts) || 0));
+  // Cada abono con el saldo que dejó, del más reciente al más antiguo.
+  const balances = balancesAfterPayments(client);
+  const ordered = (client.payments || []).map((payment, index) => ({ payment, index, after: balances[index] }))
+    .filter(({ payment }) => Number(payment.amount) > 0)
+    .sort((a, b) => String(b.payment.date).localeCompare(String(a.payment.date)) || a.index - b.index);
   if (ordered.length) {
     const items = document.createElement('ol');
-    items.replaceChildren(...ordered.map(payment => {
+    items.replaceChildren(...ordered.map(({ payment, after }) => {
       const item = document.createElement('li');
       const date = document.createElement('span');
       date.textContent = `${formatDate(payment.date)} · ${payment.method === 'transfer' ? 'Transferencia' : 'Efectivo'}`;
       const amount = document.createElement('strong');
       amount.textContent = formatMoney(payment.amount);
+      const balance = document.createElement('small');
+      balance.textContent = `Saldo ${formatMoney(after)}`;
+      amount.append(balance);
       item.append(date, amount);
       return item;
     }));
@@ -80,6 +89,26 @@ function routeCardInfo(client) {
   wrap.className = 'route-card-details';
   wrap.append(list, history);
   return wrap;
+}
+
+/**
+ * Ruta del día: solo vale el día en que se armó. Al día siguiente queda vacía y hay que armarla
+ * de nuevo. Una ruta guardada antes de que se anotara la fecha cuenta como armada hoy.
+ */
+export function todayRouteOrder(route = state.workerRoute) {
+  const order = state.dailyRouteOrder[route] || [];
+  if (!order.length) return order;
+  const today = localDateISO();
+  state.dailyRouteDates[route] ||= today;
+  if (state.dailyRouteDates[route] === today) return order;
+  state.dailyRouteOrder[route] = [];
+  delete state.dailyRouteDates[route];
+  return state.dailyRouteOrder[route];
+}
+
+function setTodayRouteOrder(order, route = state.workerRoute) {
+  state.dailyRouteOrder[route] = order;
+  state.dailyRouteDates[route] = localDateISO();
 }
 
 export function routeDayKey(route = state.workerRoute) {
@@ -217,7 +246,7 @@ export function renderRouteBuilder() {
   const savedLibrary = state.clientLibraryOrder[state.workerRoute] || [];
   const libraryOrder = [...savedLibrary.filter(id => routeIds.includes(id)), ...routeIds.filter(id => !savedLibrary.includes(id))].filter(id => isActiveCredit(clients[id]));
   // La lista del día se conserva tal como se armó, aunque los clientes ya hayan sido visitados.
-  const dailyOrder = (state.dailyRouteOrder[state.workerRoute] || []).filter(id => routeIds.includes(id));
+  const dailyOrder = todayRouteOrder().filter(id => routeIds.includes(id));
   const query = document.querySelector('#route-library-search').value.trim().toLocaleLowerCase('es');
   const matchesQuery = id => !query || `${clients[id].name} ${clients[id].id}`.toLocaleLowerCase('es').includes(query);
   const levels = Object.fromEntries(libraryOrder.map(id => [id, paymentHistory(clients[id]).level]));
@@ -233,11 +262,11 @@ export function renderRouteBuilder() {
 
 function commitRouteDrop(id, sourceMode, targetMode, beforeId) {
   if (targetMode === 'daily') {
-    const order = [...(state.dailyRouteOrder[state.workerRoute] || [])];
+    const order = [...todayRouteOrder()];
     if (!order.includes(id)) order.push(id);
-    state.dailyRouteOrder[state.workerRoute] = moveId(order, id, beforeId);
+    setTodayRouteOrder(moveId(order, id, beforeId));
   } else {
-    if (sourceMode === 'daily') state.dailyRouteOrder[state.workerRoute] = (state.dailyRouteOrder[state.workerRoute] || []).filter(item => item !== id);
+    if (sourceMode === 'daily') setTodayRouteOrder(todayRouteOrder().filter(item => item !== id));
     const order = [...(state.clientLibraryOrder[state.workerRoute] || Object.keys(clients).filter(key => clients[key].route === state.workerRoute))];
     state.clientLibraryOrder[state.workerRoute] = moveId(order, id, beforeId);
   }
@@ -279,9 +308,9 @@ function updateDailyRouteDrop(container, mode) {
   container.addEventListener('click', event => {
     const addButton = event.target.closest('[data-route-add]');
     if (addButton) {
-      const order = [...(state.dailyRouteOrder[state.workerRoute] || [])];
+      const order = [...todayRouteOrder()];
       if (!order.includes(addButton.dataset.routeAdd)) order.push(addButton.dataset.routeAdd);
-      state.dailyRouteOrder[state.workerRoute] = order;
+      setTodayRouteOrder(order);
       persistBusinessData(); renderRouteBuilder(); filterClientCards();
       return;
     }

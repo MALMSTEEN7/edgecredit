@@ -12,7 +12,7 @@ import { routeSelect } from '../../core/dom.js';
 import { state } from '../../core/state.js';
 import { clients, persistBusinessData } from '../../core/store.js';
 import { liveInsuranceEntries, insuranceCollectedOn } from '../../domain/insurance.js';
-import { LEDGER_MONTHS_KEPT, addCashEntry, cashBoxAt, ledgerCutoff, cutInsurance, dayRecord, daySalary, ensureLedger, insuranceDueAt, insuranceEntries, insurancePeriod, ledgerDifference, otherExpensesNote, setDayField, setOtherExpensesNote, setWeekSalary, undoLastInsuranceCut } from '../../domain/ledger.js';
+import { LEDGER_MONTHS_KEPT, addCashEntry, cashBoxAt, ledgerCutoff, cutInsurance, dayRecord, daySalary, ensureLedger, insuranceDueAt, insuranceEntries, insurancePeriod, ledgerDifference, cashOutNote, otherExpensesNote, setCashOutNote, setDayField, setOtherExpensesNote, setWeekSalary, undoLastInsuranceCut } from '../../domain/ledger.js';
 import { INSURANCE_CUT_TEST_MODE } from '../../core/config.js';
 import { localDateISO } from '../../shared/dates.js';
 import { formatMoney } from '../../shared/format.js';
@@ -209,6 +209,38 @@ function otherExpensesNoteButton(route, dateISO, disabled) {
   return button;
 }
 
+/** Botón junto a «Salida de caja»: comentario de a dónde o para qué salió la plata. */
+function cashOutNoteButton(route, dateISO, disabled) {
+  const note = cashOutNote(route, dateISO);
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'expense-note-button';
+  button.classList.toggle('has-note', Boolean(note));
+  button.dataset.noteDate = dateISO;
+  button.dataset.noteField = 'cashOut';
+  button.disabled = disabled;
+  button.textContent = '💬';
+  button.title = note || 'Sin comentario: toca para agregar a dónde o para qué salió la plata';
+  button.setAttribute('aria-label', `Comentario de salida de caja del ${dateISO}${note ? `: ${note.replace(/\n/g, '; ')}` : ''}`);
+  return button;
+}
+
+function openCashOutNote(route, dateISO) {
+  const day = new Date(`${dateISO}T12:00:00`).toLocaleDateString('es-CO', { weekday: 'long', day: '2-digit', month: '2-digit' });
+  openCustomModal({
+    title: `Salida de caja · ${day}`,
+    description: `Total del día: ${formatMoney(dayRecord(route, dateISO).cashOut)}.`,
+    fields: [{ name: 'note', label: '¿A dónde o para qué salió?', type: 'textarea', rows: 4, value: cashOutNote(route, dateISO), placeholder: 'Ej. Entrega al socio $ 500.000' }],
+    submitLabel: 'Guardar comentario',
+    onSubmit: values => {
+      setCashOutNote(route, dateISO, values.note);
+      persistBusinessData();
+      renderRouteReports(route);
+      showToast('Comentario de salida de caja guardado.');
+    },
+  });
+}
+
 function openOtherExpensesNote(route, dateISO) {
   const salary = daySalary(route, dateISO);
   const day = new Date(`${dateISO}T12:00:00`).toLocaleDateString('es-CO', { weekday: 'long', day: '2-digit', month: '2-digit' });
@@ -306,6 +338,7 @@ function renderWeeklyAudit(route, monthValue) {
       if (!editable) { row.append(future ? moneyCell(null) : moneyCell(record[key])); return; }
       const cell = editableCell(iso, key, record[key], future);
       if (key === 'otherExpenses') { cell.classList.add('has-note-button'); cell.append(otherExpensesNoteButton(route, iso, future)); }
+      if (key === 'cashOut') { cell.classList.add('has-note-button'); cell.append(cashOutNoteButton(route, iso, future)); }
       row.append(cell);
     });
     row.append(moneyCell(future ? null : ledgerDifference(record), { negativeClass: true }));
@@ -530,7 +563,8 @@ export function mount() {
   rq('#weekly-audit-body').addEventListener('click', event => {
     const button = event.target.closest('.expense-note-button');
     if (!button || state.userRole !== 'admin') return;
-    openOtherExpensesNote(state.activeSettlement, button.dataset.noteDate);
+    if (button.dataset.noteField === 'cashOut') openCashOutNote(state.activeSettlement, button.dataset.noteDate);
+    else openOtherExpensesNote(state.activeSettlement, button.dataset.noteDate);
   });
   rq('#weekly-salary').addEventListener('change', event => {
     const input = event.target;

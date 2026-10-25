@@ -256,6 +256,7 @@ const state = {
   lastFocusedElement: null,
   workerRoute: '',
   dailyRouteOrder: {},
+  dailyRouteDates: {}, // día en que se armó la ruta de cada cobro (se reinicia al cambiar de día)
   clientLibraryOrder: {},
   collectedRouteClients: {},
   routeVisitOutcomes: {},
@@ -411,7 +412,7 @@ function persistBusinessData() {
   persistListeners.forEach(listener => { try { listener(); } catch { /* la sincronización informa sus errores */ } });
   if (!localPersistence) return;
   try {
-    localStorage.setItem('edgecredit-business-data', JSON.stringify({ clients, routeSettlements, personnel, pendingRequests, dailyRouteOrder: state.dailyRouteOrder, clientLibraryOrder: state.clientLibraryOrder, collectedRouteClients: state.collectedRouteClients, routeVisitOutcomes: state.routeVisitOutcomes, security, shared, dataEpoch: DATA_EPOCH }));
+    localStorage.setItem('edgecredit-business-data', JSON.stringify({ clients, routeSettlements, personnel, pendingRequests, dailyRouteOrder: state.dailyRouteOrder, dailyRouteDates: state.dailyRouteDates, clientLibraryOrder: state.clientLibraryOrder, collectedRouteClients: state.collectedRouteClients, routeVisitOutcomes: state.routeVisitOutcomes, security, shared, dataEpoch: DATA_EPOCH }));
   } catch { showToast('No se pudieron guardar los datos localmente en este dispositivo.'); }
 }
 
@@ -444,6 +445,7 @@ function hydrateBusinessData() {
     }
     if (Array.isArray(saved.pendingRequests)) pendingRequests.push(...saved.pendingRequests);
     if (saved.dailyRouteOrder && typeof saved.dailyRouteOrder === 'object') state.dailyRouteOrder = saved.dailyRouteOrder;
+    if (saved.dailyRouteDates && typeof saved.dailyRouteDates === 'object') state.dailyRouteDates = saved.dailyRouteDates;
     if (saved.clientLibraryOrder && typeof saved.clientLibraryOrder === 'object') state.clientLibraryOrder = saved.clientLibraryOrder;
     if (saved.collectedRouteClients && typeof saved.collectedRouteClients === 'object') state.collectedRouteClients = saved.collectedRouteClients;
     if (saved.routeVisitOutcomes && typeof saved.routeVisitOutcomes === 'object') state.routeVisitOutcomes = saved.routeVisitOutcomes;
@@ -508,6 +510,7 @@ function routeStateData(routeId) {
   if (syncSession?.role === 'worker' && state.activeWorker?.id && !ids.includes(state.activeWorker.id)) ids.push(state.activeWorker.id);
   return {
     dailyRouteOrder: state.dailyRouteOrder[routeId] || [],
+    dailyRouteDate: state.dailyRouteDates[routeId] || '',
     clientLibraryOrder: state.clientLibraryOrder[routeId] || [],
     collectedRouteClients: pickKeys(state.collectedRouteClients, routeId),
     routeVisitOutcomes: pickKeys(state.routeVisitOutcomes, routeId),
@@ -637,6 +640,8 @@ function replaceObject(target, source) {
 
 function applyRouteState(routeId, data = {}) {
   state.dailyRouteOrder[routeId] = data.dailyRouteOrder || [];
+  if (data.dailyRouteDate) state.dailyRouteDates[routeId] = data.dailyRouteDate;
+  else delete state.dailyRouteDates[routeId];
   state.clientLibraryOrder[routeId] = data.clientLibraryOrder || [];
   Object.keys(state.collectedRouteClients).filter(key => key === routeId || key.startsWith(`${routeId}:`)).forEach(key => delete state.collectedRouteClients[key]);
   Object.assign(state.collectedRouteClients, data.collectedRouteClients || {});
@@ -1458,6 +1463,18 @@ function setOtherExpensesNote(route, dateISO, text) {
   route.ledger[dateISO].otherExpensesNote = String(text || '').trim();
 }
 
+/** Comentario de la salida de caja de un día (a dónde o para qué salió la plata). */
+function cashOutNote(route, dateISO) {
+  ensureLedger(route);
+  return String(route.ledger[dateISO]?.cashOutNote || '');
+}
+
+function setCashOutNote(route, dateISO, text) {
+  ensureLedger(route);
+  route.ledger[dateISO] ||= { closed: false };
+  route.ledger[dateISO].cashOutNote = String(text || '').trim();
+}
+
 /** Sueldo del trabajador anotado ese día (ya está sumado en «otros gastos»). */
 function daySalary(route, dateISO) {
   ensureLedger(route);
@@ -1853,6 +1870,30 @@ function pruneExpiredPaymentHistories() {
   if (changed && typeof persistBusinessData === 'function') persistBusinessData();
 }
 
+/**
+ * Saldo que quedó después de cada abono (mismo orden que client.payments), como el
+ * historial del sistema anterior: «23-oct → 200 · saldo 200.000». Se reconstruye desde el
+ * saldo actual sumando los abonos posteriores y restando lo que se agregó después
+ * (intereses, financiación y retanqueos). Los abonos de un mismo día se toman en el orden
+ * de la lista (el primero es el más reciente).
+ */
+function balancesAfterPayments(client) {
+  const payments = client.payments || [];
+  const additions = [
+    ...(client.interestHistory || []).map(entry => ({ date: entry.date, amount: Number(entry.amount) || 0 })),
+    ...(client.restructures || []).filter(entry => entry.type === 'retanqueo').map(entry => ({ date: entry.date, amount: (Number(entry.extra) || 0) + (Number(entry.interest) || 0) })),
+  ];
+  const balance = Math.max(0, Number(client.balance) || 0);
+  return payments.map((payment, index) => {
+    const laterPaid = payments.reduce((sum, other, otherIndex) => {
+      const later = other.date > payment.date || (other.date === payment.date && otherIndex < index);
+      return later ? sum + (Number(other.amount) || 0) : sum;
+    }, 0);
+    const laterAdded = additions.reduce((sum, entry) => (entry.date >= payment.date ? sum + entry.amount : sum), 0);
+    return Math.max(0, balance + laterPaid - laterAdded);
+  });
+}
+
 function updatePaidAmountTotal(client) {
   client.totalPaidAmount = (client.payments || []).reduce((sum, payment) => sum + (Number(payment.amount) || 0), 0);
 }
@@ -2122,6 +2163,22 @@ function personCardIds(clients, idNumber) {
   return Object.keys(clients)
     .filter(id => clients[id] && personKey(clients[id].id) === key)
     .sort((a, b) => String(clients[a].creditStartDate || '').localeCompare(String(clients[b].creditStartDate || '')) || a.localeCompare(b));
+}
+
+/**
+ * Veces que se le ha prestado a la persona: cada cartulina a su nombre (activas, canceladas
+ * o renovadas) más cada retanqueo. Devuelve { total, cards, retanqueos }.
+ */
+function loanCount(clients, idNumber) {
+  const ids = personCardIds(clients, idNumber);
+  const retanqueos = ids.reduce((sum, id) => sum + (clients[id].restructures || []).filter(entry => entry.type === 'retanqueo').length, 0);
+  return { total: ids.length + retanqueos, cards: ids.length, retanqueos };
+}
+
+/** Texto del contador: «3 préstamos» o «3 préstamos (1 retanqueo)». */
+function loanCountLabel(count) {
+  const base = `${count.total} préstamo${count.total === 1 ? '' : 's'}`;
+  return count.retanqueos ? `${base} (${count.retanqueos} retanqueo${count.retanqueos === 1 ? '' : 's'})` : base;
 }
 
 function isActiveCard(client) {
@@ -4426,6 +4483,38 @@ function otherExpensesNoteButton(route, dateISO, disabled) {
   return button;
 }
 
+/** Botón junto a «Salida de caja»: comentario de a dónde o para qué salió la plata. */
+function cashOutNoteButton(route, dateISO, disabled) {
+  const note = cashOutNote(route, dateISO);
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'expense-note-button';
+  button.classList.toggle('has-note', Boolean(note));
+  button.dataset.noteDate = dateISO;
+  button.dataset.noteField = 'cashOut';
+  button.disabled = disabled;
+  button.textContent = '💬';
+  button.title = note || 'Sin comentario: toca para agregar a dónde o para qué salió la plata';
+  button.setAttribute('aria-label', `Comentario de salida de caja del ${dateISO}${note ? `: ${note.replace(/\n/g, '; ')}` : ''}`);
+  return button;
+}
+
+function openCashOutNote(route, dateISO) {
+  const day = new Date(`${dateISO}T12:00:00`).toLocaleDateString('es-CO', { weekday: 'long', day: '2-digit', month: '2-digit' });
+  openCustomModal({
+    title: `Salida de caja · ${day}`,
+    description: `Total del día: ${formatMoney(dayRecord(route, dateISO).cashOut)}.`,
+    fields: [{ name: 'note', label: '¿A dónde o para qué salió?', type: 'textarea', rows: 4, value: cashOutNote(route, dateISO), placeholder: 'Ej. Entrega al socio $ 500.000' }],
+    submitLabel: 'Guardar comentario',
+    onSubmit: values => {
+      setCashOutNote(route, dateISO, values.note);
+      persistBusinessData();
+      renderRouteReports(route);
+      showToast('Comentario de salida de caja guardado.');
+    },
+  });
+}
+
 function openOtherExpensesNote(route, dateISO) {
   const salary = daySalary(route, dateISO);
   const day = new Date(`${dateISO}T12:00:00`).toLocaleDateString('es-CO', { weekday: 'long', day: '2-digit', month: '2-digit' });
@@ -4523,6 +4612,7 @@ function renderWeeklyAudit(route, monthValue) {
       if (!editable) { row.append(future ? moneyCell(null) : moneyCell(record[key])); return; }
       const cell = editableCell(iso, key, record[key], future);
       if (key === 'otherExpenses') { cell.classList.add('has-note-button'); cell.append(otherExpensesNoteButton(route, iso, future)); }
+      if (key === 'cashOut') { cell.classList.add('has-note-button'); cell.append(cashOutNoteButton(route, iso, future)); }
       row.append(cell);
     });
     row.append(moneyCell(future ? null : ledgerDifference(record), { negativeClass: true }));
@@ -4747,7 +4837,8 @@ function __mount_reportsModule() {
   rq('#weekly-audit-body').addEventListener('click', event => {
     const button = event.target.closest('.expense-note-button');
     if (!button || state.userRole !== 'admin') return;
-    openOtherExpensesNote(state.activeSettlement, button.dataset.noteDate);
+    if (button.dataset.noteField === 'cashOut') openCashOutNote(state.activeSettlement, button.dataset.noteDate);
+    else openOtherExpensesNote(state.activeSettlement, button.dataset.noteDate);
   });
   rq('#weekly-salary').addEventListener('change', event => {
     const input = event.target;
@@ -5734,6 +5825,7 @@ function renderHistory(client) {
   client.payments ||= [];
   const isExpanded = expandedPaymentHistory.has(state.activeClient);
   const paymentsToRender = isExpanded ? client.payments : client.payments.slice(0, 3);
+  const balances = balancesAfterPayments(client);
   paymentsToRender.forEach((payment, paymentIndex) => {
     const row = document.createElement('li');
     const dateAndMethod = document.createElement('span');
@@ -5759,6 +5851,11 @@ function renderHistory(client) {
     }
     const amount = document.createElement('strong');
     amount.textContent = formatMoney(payment.amount);
+    // Saldo del crédito después de este abono.
+    const after = document.createElement('small');
+    after.className = 'history-balance-after';
+    after.textContent = `Saldo ${formatMoney(balances[paymentIndex])}`;
+    amount.append(after);
     row.append(dateAndMethod, amount);
     if (state.userRole === 'admin') {
       const actions = document.createElement('span');
@@ -5977,6 +6074,7 @@ function openClient(clientId) {
   document.querySelector('#detail-loan-total').textContent = formatMoney(client.total);
   document.querySelector('#detail-term').textContent = client.term;
   document.querySelector('#detail-frequency').textContent = paymentFrequencyLabels[client.frequency] || 'Semanal';
+  document.querySelector('#detail-loan-count').textContent = loanCountLabel(loanCount(clients, client.id));
   document.querySelector('#detail-breakdown').textContent = client.breakdown;
   renderAddressDetails(client);
   renderClientNotes(client);
@@ -6507,7 +6605,7 @@ function renderDirectoryFilterCounts(route) {
 function filterClientCards() {
   const route = state.userRole === 'admin' ? routeSelect.value : state.workerRoute;
   const query = document.querySelector('#directory-search')?.value.trim().toLocaleLowerCase('es') || '';
-  const todayOrder = state.dailyRouteOrder[route] || [];
+  const todayOrder = todayRouteOrder(route);
   document.querySelectorAll('#worker-view [data-client][data-route]').forEach(card => {
     const matchesRoute = card.dataset.route === route;
     const matchesQuery = card.textContent.toLocaleLowerCase('es').includes(query);
@@ -7154,6 +7252,7 @@ function __mount_newClientModule() {
 
 
 
+
 /** Tarjeta con «Más información» abierta (`modo:id`). Solo una a la vez. */
 let openRouteInfo = null;
 /** Filtro de la biblioteca por calificación: all | good | irregular | bad. */
@@ -7166,6 +7265,7 @@ function routeCardInfo(client) {
   const last = [...payments].sort((a, b) => String(b.date).localeCompare(String(a.date)))[0];
   const rows = [
     ['Cédula', client.id],
+    ['Veces que se le ha prestado', loanCountLabel(loanCount(clients, client.id))],
     ['Teléfono', client.phone],
     ['Dirección', client.address],
     ['Estado', paymentBehavior(client).label],
@@ -7197,15 +7297,22 @@ function routeCardInfo(client) {
   const summary = document.createElement('summary');
   summary.textContent = `Historial de abonos (${payments.length})`;
   history.append(summary);
-  const ordered = [...payments].sort((a, b) => String(b.date).localeCompare(String(a.date)) || (Number(b.ts) || 0) - (Number(a.ts) || 0));
+  // Cada abono con el saldo que dejó, del más reciente al más antiguo.
+  const balances = balancesAfterPayments(client);
+  const ordered = (client.payments || []).map((payment, index) => ({ payment, index, after: balances[index] }))
+    .filter(({ payment }) => Number(payment.amount) > 0)
+    .sort((a, b) => String(b.payment.date).localeCompare(String(a.payment.date)) || a.index - b.index);
   if (ordered.length) {
     const items = document.createElement('ol');
-    items.replaceChildren(...ordered.map(payment => {
+    items.replaceChildren(...ordered.map(({ payment, after }) => {
       const item = document.createElement('li');
       const date = document.createElement('span');
       date.textContent = `${formatDate(payment.date)} · ${payment.method === 'transfer' ? 'Transferencia' : 'Efectivo'}`;
       const amount = document.createElement('strong');
       amount.textContent = formatMoney(payment.amount);
+      const balance = document.createElement('small');
+      balance.textContent = `Saldo ${formatMoney(after)}`;
+      amount.append(balance);
       item.append(date, amount);
       return item;
     }));
@@ -7217,6 +7324,26 @@ function routeCardInfo(client) {
   wrap.className = 'route-card-details';
   wrap.append(list, history);
   return wrap;
+}
+
+/**
+ * Ruta del día: solo vale el día en que se armó. Al día siguiente queda vacía y hay que armarla
+ * de nuevo. Una ruta guardada antes de que se anotara la fecha cuenta como armada hoy.
+ */
+function todayRouteOrder(route = state.workerRoute) {
+  const order = state.dailyRouteOrder[route] || [];
+  if (!order.length) return order;
+  const today = localDateISO();
+  state.dailyRouteDates[route] ||= today;
+  if (state.dailyRouteDates[route] === today) return order;
+  state.dailyRouteOrder[route] = [];
+  delete state.dailyRouteDates[route];
+  return state.dailyRouteOrder[route];
+}
+
+function setTodayRouteOrder(order, route = state.workerRoute) {
+  state.dailyRouteOrder[route] = order;
+  state.dailyRouteDates[route] = localDateISO();
 }
 
 function routeDayKey(route = state.workerRoute) {
@@ -7354,7 +7481,7 @@ function renderRouteBuilder() {
   const savedLibrary = state.clientLibraryOrder[state.workerRoute] || [];
   const libraryOrder = [...savedLibrary.filter(id => routeIds.includes(id)), ...routeIds.filter(id => !savedLibrary.includes(id))].filter(id => isActiveCredit(clients[id]));
   // La lista del día se conserva tal como se armó, aunque los clientes ya hayan sido visitados.
-  const dailyOrder = (state.dailyRouteOrder[state.workerRoute] || []).filter(id => routeIds.includes(id));
+  const dailyOrder = todayRouteOrder().filter(id => routeIds.includes(id));
   const query = document.querySelector('#route-library-search').value.trim().toLocaleLowerCase('es');
   const matchesQuery = id => !query || `${clients[id].name} ${clients[id].id}`.toLocaleLowerCase('es').includes(query);
   const levels = Object.fromEntries(libraryOrder.map(id => [id, paymentHistory(clients[id]).level]));
@@ -7370,11 +7497,11 @@ function renderRouteBuilder() {
 
 function commitRouteDrop(id, sourceMode, targetMode, beforeId) {
   if (targetMode === 'daily') {
-    const order = [...(state.dailyRouteOrder[state.workerRoute] || [])];
+    const order = [...todayRouteOrder()];
     if (!order.includes(id)) order.push(id);
-    state.dailyRouteOrder[state.workerRoute] = moveId(order, id, beforeId);
+    setTodayRouteOrder(moveId(order, id, beforeId));
   } else {
-    if (sourceMode === 'daily') state.dailyRouteOrder[state.workerRoute] = (state.dailyRouteOrder[state.workerRoute] || []).filter(item => item !== id);
+    if (sourceMode === 'daily') setTodayRouteOrder(todayRouteOrder().filter(item => item !== id));
     const order = [...(state.clientLibraryOrder[state.workerRoute] || Object.keys(clients).filter(key => clients[key].route === state.workerRoute))];
     state.clientLibraryOrder[state.workerRoute] = moveId(order, id, beforeId);
   }
@@ -7416,9 +7543,9 @@ function updateDailyRouteDrop(container, mode) {
   container.addEventListener('click', event => {
     const addButton = event.target.closest('[data-route-add]');
     if (addButton) {
-      const order = [...(state.dailyRouteOrder[state.workerRoute] || [])];
+      const order = [...todayRouteOrder()];
       if (!order.includes(addButton.dataset.routeAdd)) order.push(addButton.dataset.routeAdd);
-      state.dailyRouteOrder[state.workerRoute] = order;
+      setTodayRouteOrder(order);
       persistBusinessData(); renderRouteBuilder(); filterClientCards();
       return;
     }
@@ -7960,7 +8087,7 @@ function renderHomeHeader() {
   const route = routeSettlements[state.workerRoute];
   const weekday = new Intl.DateTimeFormat('es-CO', { weekday: 'long' }).format(new Date());
   document.querySelector('#home-list-eyebrow').textContent = `${weekday} · RUTA ${route?.name || ''}`.toLocaleUpperCase('es');
-  const organized = (state.dailyRouteOrder[state.workerRoute] || []).length > 0;
+  const organized = todayRouteOrder().length > 0;
   document.querySelector('#home-route-hint').hidden = organized || state.userRole !== 'worker';
 }
 
@@ -7995,7 +8122,7 @@ function renderHomeRowActions() {
   });
   const anyVisible = rows.some(row => !row.hidden);
   const empty = document.querySelector('#home-route-done');
-  const organized = (state.dailyRouteOrder[state.workerRoute] || []).length > 0;
+  const organized = todayRouteOrder().length > 0;
   if (empty) empty.hidden = anyVisible || !organized || state.userRole !== 'worker';
 }
 

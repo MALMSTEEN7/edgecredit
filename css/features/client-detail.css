@@ -1098,3 +1098,14 @@ button.evidence-link:active {
   opacity: .7;
   cursor: progress;
 }
+
+/* Saldo del crédito después de cada abono (como el historial del sistema anterior). */
+.history-balance-after {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  text-align: right;
+  white-space: nowrap;
+}

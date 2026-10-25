@@ -8,7 +8,7 @@ import { creditDetails, customModalError, disclosureButton, interestToggle, rout
 import { state } from '../../core/state.js';
 import { clients, ensureRoute, expandedPaymentHistory, persistBusinessData, routeSettlements } from '../../core/store.js';
 import { syncCancelledCard, updateClientLoanAccounting } from '../../domain/accounting.js';
-import { inferClientPrincipal, paymentBehavior, paymentHistory, rememberWorstHistory, updatePaidAmountTotal } from '../../domain/loan-schedule.js';
+import { balancesAfterPayments, inferClientPrincipal, paymentBehavior, paymentHistory, rememberWorstHistory, updatePaidAmountTotal } from '../../domain/loan-schedule.js';
 import { renderAdminRoute } from '../admin/admin-shell.js';
 import { filterClientCards, removeClient, renderClientRows, setClientAvatar } from './directory.js';
 import { localDateISO } from '../../shared/dates.js';
@@ -20,7 +20,7 @@ import { bindImageViewer } from '../../ui/image-viewer.js';
 import { LOCATION_FAILURE_LABELS, hasCoordinates, isApproximateLocation, locateDevice } from '../../shared/geo.js';
 import { clientInsurance, generalInsuranceAmount, resolveInsurance } from '../../domain/insurance.js';
 import { canRenew, onClientRenewed } from './new-client.js';
-import { MAX_ACTIVE_CARDS_PER_PERSON, activeCardIds, canAddCard, personCardIds } from '../../domain/person-cards.js';
+import { MAX_ACTIVE_CARDS_PER_PERSON, activeCardIds, canAddCard, loanCount, loanCountLabel, personCardIds } from '../../domain/person-cards.js';
 import { paintCardColorBand } from '../../domain/card-color.js';
 import { FINANCE_INTEREST_PERCENT, GENERAL_RETANQUEO, RETANQUEO_INTEREST_PERCENT, financeCard, percentOrAmount, retanqueoCard } from '../../domain/restructure.js';
 
@@ -71,6 +71,7 @@ export function renderHistory(client) {
   client.payments ||= [];
   const isExpanded = expandedPaymentHistory.has(state.activeClient);
   const paymentsToRender = isExpanded ? client.payments : client.payments.slice(0, 3);
+  const balances = balancesAfterPayments(client);
   paymentsToRender.forEach((payment, paymentIndex) => {
     const row = document.createElement('li');
     const dateAndMethod = document.createElement('span');
@@ -96,6 +97,11 @@ export function renderHistory(client) {
     }
     const amount = document.createElement('strong');
     amount.textContent = formatMoney(payment.amount);
+    // Saldo del crédito después de este abono.
+    const after = document.createElement('small');
+    after.className = 'history-balance-after';
+    after.textContent = `Saldo ${formatMoney(balances[paymentIndex])}`;
+    amount.append(after);
     row.append(dateAndMethod, amount);
     if (state.userRole === 'admin') {
       const actions = document.createElement('span');
@@ -314,6 +320,7 @@ export function openClient(clientId) {
   document.querySelector('#detail-loan-total').textContent = formatMoney(client.total);
   document.querySelector('#detail-term').textContent = client.term;
   document.querySelector('#detail-frequency').textContent = paymentFrequencyLabels[client.frequency] || 'Semanal';
+  document.querySelector('#detail-loan-count').textContent = loanCountLabel(loanCount(clients, client.id));
   document.querySelector('#detail-breakdown').textContent = client.breakdown;
   renderAddressDetails(client);
   renderClientNotes(client);
