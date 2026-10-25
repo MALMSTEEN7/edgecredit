@@ -74,7 +74,7 @@ export function financeCard(client, { interest, totalDays, by = 'Administrador',
  * se cobran en efectivo hoy (entran a la base del día, como al entregar un préstamo).
  * Devuelve lo que hay que registrar en la liquidación del cobro.
  */
-export function retanqueoCard(client, { extra, interest, insurance, totalDays, by = 'Administrador', today = localDateISO(), now = Date.now() }) {
+export function retanqueoCard(client, { extra, interest, insurance, insuranceReason = '', totalDays, by = 'Administrador', today = localDateISO(), now = Date.now() }) {
   const amount = Math.max(0, Math.round(Number(extra) || 0));
   const interestAmount = Math.max(0, Math.round(Number(interest) || 0));
   const insuranceAmount = Math.max(0, Math.round(Number(insurance) || 0));
@@ -85,7 +85,7 @@ export function retanqueoCard(client, { extra, interest, insurance, totalDays, b
   client.breakdown = `${formatMoney(client.principal)} / ${formatMoney(client.total - client.principal)}`;
   if (insuranceAmount) {
     client.extraInsurance ||= [];
-    client.extraInsurance.push({ date: today, ts: now, amount: insuranceAmount, reason: 'Retanqueo' });
+    client.extraInsurance.push({ date: today, ts: now, amount: insuranceAmount, reason: insuranceReason ? `Retanqueo · ${insuranceReason}` : 'Retanqueo' });
   }
   restartSchedule(client, totalDays, today);
   client.restructures ||= [];

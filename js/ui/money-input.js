@@ -210,6 +210,6 @@ export function mount() {
     .observe(document.body, { childList: true, subtree: true });
   // FormData lee el valor interno (con puntos): se reemplaza por los dígitos.
   document.addEventListener('formdata', event => {
-    event.target.querySelectorAll('input[data-money][name]').forEach(input => event.formData.set(input.name, input.value));
+    event.target.querySelectorAll('input[data-money][name]:not(:disabled)').forEach(input => event.formData.set(input.name, input.value));
   }, true);
 }

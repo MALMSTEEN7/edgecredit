@@ -4,12 +4,19 @@
  * cancelLabel/onCancel permiten usar el botón secundario como acción (p. ej. «No recordar más»);
  * si onCancel devuelve false, el modal sigue abierto.
  * onSubmit puede ser async; si devuelve false, el modal queda abierto.
+ *
+ * Además de los campos normales:
+ *  - `type: 'note'`: recuadro informativo (`label`, `value`, `hint`, `className`), como el
+ *    «Interés predeterminado» al crear un préstamo. `valueId`/`hintId` permiten cambiarlo en vivo.
+ *  - `type: 'checkbox'`: casilla (p. ej. «Usar un interés diferente al general»).
+ *  - `showWhen: '<nombre de casilla>'`: el campo solo se ve (y se envía) con esa casilla marcada.
+ *  - `onInput(form)`: se llama al escribir o marcar algo (para actualizar las notas).
  */
 
 import { customModal, customModalError, customModalFields, customModalForm, interestModal, modal, newClientModal } from '../core/dom.js';
 import { state } from '../core/state.js';
 
-export function openCustomModal({ title, description = '', fields = [], submitLabel = 'Guardar', onSubmit, cancelLabel = 'Cancelar', onCancel = null }) {
+export function openCustomModal({ title, description = '', fields = [], submitLabel = 'Guardar', onSubmit, cancelLabel = 'Cancelar', onCancel = null, onInput = null }) {
   state.lastFocusedElement = document.activeElement;
   document.querySelector('#custom-modal-title').textContent = title;
   document.querySelector('#custom-modal-description').textContent = description;
@@ -20,6 +27,39 @@ export function openCustomModal({ title, description = '', fields = [], submitLa
   customModalFields.replaceChildren();
   state.customModalSubmit = onSubmit;
   fields.forEach((field, index) => {
+    if (field.type === 'note') {
+      const note = document.createElement('div');
+      note.className = field.className || 'default-rate-note';
+      const label = document.createElement('span');
+      label.textContent = field.label;
+      const value = document.createElement('strong');
+      value.textContent = field.value ?? '';
+      if (field.valueId) value.id = field.valueId;
+      note.append(label, value);
+      if (field.hint) {
+        const hint = document.createElement('small');
+        hint.textContent = field.hint;
+        if (field.hintId) hint.id = field.hintId;
+        note.append(hint);
+      }
+      if (field.showWhen) { note.dataset.showWhen = field.showWhen; note.hidden = true; }
+      customModalFields.append(note);
+      return;
+    }
+    if (field.type === 'checkbox') {
+      const toggle = document.createElement('label');
+      toggle.className = 'exception-toggle';
+      const box = document.createElement('input');
+      box.type = 'checkbox';
+      box.id = `custom-field-${index}`;
+      box.name = field.name;
+      box.checked = Boolean(field.value);
+      const text = document.createElement('span');
+      text.textContent = field.label;
+      toggle.append(box, text);
+      customModalFields.append(toggle);
+      return;
+    }
     const wrapper = document.createElement('label');
     wrapper.className = 'custom-field';
     wrapper.htmlFor = `custom-field-${index}`;
@@ -55,12 +95,22 @@ export function openCustomModal({ title, description = '', fields = [], submitLa
     input.value = field.value ?? '';
     input.required = Boolean(field.required);
     wrapper.append(input);
+    if (field.showWhen) { wrapper.dataset.showWhen = field.showWhen; wrapper.classList.add('custom-field-dependent'); }
     customModalFields.append(wrapper);
   });
+  // Campos que dependen de una casilla: ocultos y deshabilitados (no se envían) hasta marcarla.
+  const syncDependents = () => customModalFields.querySelectorAll('[data-show-when]').forEach(node => {
+    const box = customModalFields.querySelector(`input[type="checkbox"][name="${node.dataset.showWhen}"]`);
+    node.hidden = !box?.checked;
+    node.querySelectorAll('input,select,textarea').forEach(control => { control.disabled = node.hidden; });
+  });
+  syncDependents();
+  customModalFields.oninput = customModalFields.onchange = () => { syncDependents(); onInput?.(customModalForm); };
+  onInput?.(customModalForm);
   customModal.hidden = false;
   customModal.classList.add('active');
   document.body.classList.add('modal-open');
-  window.setTimeout(() => customModalFields.querySelector('input,select')?.focus(), 20);
+  window.setTimeout(() => customModalFields.querySelector('input:not([type="checkbox"]),select')?.focus(), 20);
 }
 
 export function closeCustomModal() {

@@ -502,18 +502,25 @@ function openFinanceModal() {
   if (isWorker && !financeAllowed(client)) { showToast('Solo se puede solicitar financiar cuando ya pasaron los días del plazo.'); return; }
   openCustomModal({
     title: `${isWorker ? 'Solicitar financiar' : 'Financiar'} · ${client.name}`,
-    description: `Saldo actual ${formatMoney(client.balance)}. Se le suman los intereses de financiación y arranca un plazo nuevo desde hoy. Si no cambias nada: ${FINANCE_INTEREST_PERCENT} % del saldo = ${formatMoney(percentOrAmount(client.balance, FINANCE_INTEREST_PERCENT))}.`,
+    description: `Saldo actual ${formatMoney(client.balance)}. Se le suman los intereses de financiación y arranca un plazo nuevo desde hoy.`,
     fields: [
-      { name: 'percent', label: 'Interés de financiación (%) sobre el saldo', type: 'number', min: 0, step: 0.1, value: FINANCE_INTEREST_PERCENT, required: true },
-      { name: 'amount', label: 'O un monto exacto de interés (opcional, reemplaza el %)', money: true, thousands: true, type: 'number', min: 0, step: 1, value: '' },
+      { type: 'note', label: 'Interés de financiación', value: `${FINANCE_INTEREST_PERCENT}%`, hint: `General: ${FINANCE_INTEREST_PERCENT} % del saldo = ${formatMoney(percentOrAmount(client.balance, FINANCE_INTEREST_PERCENT))}`, valueId: 'finance-rate-value', hintId: 'finance-rate-hint' },
+      { type: 'checkbox', name: 'customInterest', label: 'Usar un interés diferente al general' },
+      { name: 'percent', label: 'Interés de financiación (%) sobre el saldo', type: 'number', min: 0, max: 100, step: 0.1, value: FINANCE_INTEREST_PERCENT, required: true, showWhen: 'customInterest' },
       { name: 'totalDays', label: 'Plazo nuevo (días) desde hoy', type: 'number', min: 1, step: 1, value: client.totalDays || 30, required: true },
     ],
+    onInput: form => {
+      const percent = form.elements.customInterest.checked ? Number(form.elements.percent.value) || 0 : FINANCE_INTEREST_PERCENT;
+      document.querySelector('#finance-rate-value').textContent = `${percent}%`;
+      document.querySelector('#finance-rate-hint').textContent = `${percent} % del saldo = ${formatMoney(percentOrAmount(client.balance, percent))}`;
+    },
     submitLabel: isWorker ? 'Enviar solicitud al admin' : 'Financiar',
     onSubmit: values => {
-      const interest = percentOrAmount(client.balance, values.percent, values.amount);
-      if (!(interest > 0)) { customModalError.textContent = 'Escribe un porcentaje o un monto mayor que cero.'; return false; }
+      const percent = values.customInterest ? Number(values.percent) : FINANCE_INTEREST_PERCENT;
+      const interest = percentOrAmount(client.balance, percent);
+      if (!(interest > 0)) { customModalError.textContent = 'Escribe un porcentaje mayor que cero.'; return false; }
       if (isWorker) {
-        sendRestructureRequest(clientId, 'finance', { interest, totalDays: Math.round(Number(values.totalDays)), percent: String(values.amount ?? '').trim() ? null : Number(values.percent), balance: Number(client.balance) });
+        sendRestructureRequest(clientId, 'finance', { interest, totalDays: Math.round(Number(values.totalDays)), percent, balance: Number(client.balance) });
         return;
       }
       financeCard(client, { interest, totalDays: values.totalDays });
@@ -536,27 +543,41 @@ function openRetanqueoModal() {
   if (isWorker && pendingRestructure(pendingRequests, clientId)) { showToast('Esta cartulina ya tiene una solicitud pendiente con el administrador.'); return; }
   openCustomModal({
     title: `${isWorker ? 'Solicitar retanqueo' : 'Retanqueo'} · ${client.name}`,
-    description: `Saldo actual ${formatMoney(client.balance)}. Al monto extra se le suman intereses (${RETANQUEO_INTEREST_PERCENT} %) y se cobran seguros (${GENERAL_RETANQUEO.insurancePercent} %) si no escribes otro valor. El saldo nuevo arranca un plazo nuevo desde hoy.`,
+    description: `Saldo actual ${formatMoney(client.balance)}. Al monto extra se le suman intereses y se cobran seguros; el saldo nuevo arranca un plazo nuevo desde hoy.`,
     fields: [
       { name: 'extra', label: 'Monto extra que se le presta', money: true, thousands: true, type: 'number', min: 1, step: 1, value: '', required: true },
-      { name: 'interestPercent', label: 'Interés sobre el extra (%)', type: 'number', min: 0, step: 0.1, value: RETANQUEO_INTEREST_PERCENT, required: true },
-      { name: 'interestAmount', label: 'O un monto exacto de interés (opcional, reemplaza el %)', money: true, thousands: true, type: 'number', min: 0, step: 1, value: '' },
-      { name: 'insurancePercent', label: 'Seguros sobre el extra (%)', type: 'number', min: 0, step: 0.1, value: GENERAL_RETANQUEO.insurancePercent, required: true },
-      { name: 'insuranceAmount', label: 'O un monto exacto de seguros (opcional, reemplaza el %)', money: true, thousands: true, type: 'number', min: 0, step: 1, value: '' },
+      { type: 'note', label: 'Interés sobre el extra', value: `${RETANQUEO_INTEREST_PERCENT}%`, hint: `General: ${RETANQUEO_INTEREST_PERCENT} % del monto extra`, valueId: 'retanqueo-rate-value', hintId: 'retanqueo-rate-hint' },
+      { type: 'checkbox', name: 'customInterest', label: 'Usar un interés diferente al general' },
+      { name: 'interestPercent', label: 'Interés del retanqueo (%)', type: 'number', min: 0, max: 100, step: 0.1, value: RETANQUEO_INTEREST_PERCENT, required: true, showWhen: 'customInterest' },
+      { type: 'note', className: 'default-rate-note insurance-rate-note', label: 'Seguros', value: formatMoney(0), hint: `General: ${GENERAL_RETANQUEO.insurancePercent} % del monto extra`, valueId: 'retanqueo-insurance-value', hintId: 'retanqueo-insurance-hint' },
+      { type: 'checkbox', name: 'customInsurance', label: 'Cobrar un valor de seguros diferente al general' },
+      { name: 'insuranceAmount', label: 'Valor de los seguros ($)', money: true, thousands: true, type: 'number', min: 0, step: 1, value: '', required: true, showWhen: 'customInsurance', placeholder: 'Ej. 10' },
+      { name: 'insuranceReason', label: '¿Por qué este valor es diferente?', type: 'textarea', rows: 2, value: '', showWhen: 'customInsurance', placeholder: 'Ej. Cliente antiguo, acuerdo especial…' },
       { name: 'totalDays', label: 'Plazo nuevo (días) desde hoy', type: 'number', min: 1, step: 1, value: client.totalDays || 30, required: true },
     ],
+    onInput: form => {
+      const extra = Math.round(Number(form.elements.extra.value) || 0);
+      const percent = form.elements.customInterest.checked ? Number(form.elements.interestPercent.value) || 0 : RETANQUEO_INTEREST_PERCENT;
+      document.querySelector('#retanqueo-rate-value').textContent = `${percent}%`;
+      document.querySelector('#retanqueo-rate-hint').textContent = extra ? `${percent} % del monto extra = ${formatMoney(percentOrAmount(extra, percent))}` : `${percent} % del monto extra`;
+      const insurance = form.elements.customInsurance.checked ? Math.round(Number(form.elements.insuranceAmount.value) || 0) : percentOrAmount(extra, GENERAL_RETANQUEO.insurancePercent);
+      document.querySelector('#retanqueo-insurance-value').textContent = formatMoney(insurance);
+      document.querySelector('#retanqueo-insurance-hint').textContent = form.elements.customInsurance.checked ? 'Valor diferente al general' : `General: ${GENERAL_RETANQUEO.insurancePercent} % del monto extra`;
+    },
     submitLabel: isWorker ? 'Enviar solicitud al admin' : 'Hacer retanqueo',
     onSubmit: values => {
       const extra = Math.round(Number(values.extra) || 0);
       if (extra <= 0) { customModalError.textContent = 'Escribe el monto extra que se le presta.'; return false; }
-      const interest = percentOrAmount(extra, values.interestPercent, values.interestAmount);
-      const insurance = percentOrAmount(extra, values.insurancePercent, values.insuranceAmount);
+      const interest = percentOrAmount(extra, values.customInterest ? Number(values.interestPercent) : RETANQUEO_INTEREST_PERCENT);
+      const insurance = values.customInsurance ? Math.round(Number(values.insuranceAmount) || 0) : percentOrAmount(extra, GENERAL_RETANQUEO.insurancePercent);
+      const insuranceReason = values.customInsurance ? String(values.insuranceReason || '').trim() : '';
       if (insurance > extra) { customModalError.textContent = 'Los seguros no pueden superar el monto extra.'; return false; }
+      if (values.customInsurance && !insuranceReason) { customModalError.textContent = 'Escribe por qué los seguros son diferentes al general.'; return false; }
       if (isWorker) {
-        sendRestructureRequest(clientId, 'retanqueo', { extra, interest, insurance, totalDays: Math.round(Number(values.totalDays)), balance: Number(client.balance) });
+        sendRestructureRequest(clientId, 'retanqueo', { extra, interest, insurance, insuranceReason, totalDays: Math.round(Number(values.totalDays)), balance: Number(client.balance) });
         return;
       }
-      retanqueoCard(client, { extra, interest, insurance, totalDays: values.totalDays });
+      retanqueoCard(client, { extra, interest, insurance, insuranceReason, totalDays: values.totalDays });
       recordRetanqueoInRoute(routeSettlements[client.route], client, clientId, { extra, interest, insurance });
       afterRestructure(clientId);
       showToast(`Retanqueo de ${formatMoney(extra)}: intereses ${formatMoney(interest)}, seguros ${formatMoney(insurance)}. Saldo nuevo ${formatMoney(client.balance)}.`);

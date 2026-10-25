@@ -754,6 +754,20 @@ button {
   background: var(--surface);
 }
 
+/* Campo que aparece al marcar una casilla en un modal (como los de crear un préstamo). */
+.custom-field-dependent {
+  margin-top: -4px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+}
+
+.custom-field-dependent[hidden],
+.default-rate-note[hidden] {
+  display: none;
+}
+
 .exception-fields>small {
   color: var(--muted);
   font-size: 10px;

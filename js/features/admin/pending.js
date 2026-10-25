@@ -22,7 +22,7 @@ const REQUEST_TITLES = { interest: 'Excepción de interés', insurance: 'Excepci
 function restructureSummary(request) {
   const p = request.params || {};
   if (request.type === 'finance') return `Saldo ${formatMoney(p.balance)} · interés de financiación ${formatMoney(p.interest)}${p.percent != null ? ` (${p.percent} %)` : ''} · plazo nuevo ${p.totalDays} días · saldo nuevo ${formatMoney(Number(p.balance) + Number(p.interest))}`;
-  return `Saldo ${formatMoney(p.balance)} · prestar ${formatMoney(p.extra)} más · intereses ${formatMoney(p.interest)} · seguros ${formatMoney(p.insurance)} · plazo nuevo ${p.totalDays} días · saldo nuevo ${formatMoney(Number(p.balance) + Number(p.extra) + Number(p.interest))}`;
+  return `Saldo ${formatMoney(p.balance)} · prestar ${formatMoney(p.extra)} más · intereses ${formatMoney(p.interest)} · seguros ${formatMoney(p.insurance)}${p.insuranceReason ? ` (${p.insuranceReason})` : ''} · plazo nuevo ${p.totalDays} días · saldo nuevo ${formatMoney(Number(p.balance) + Number(p.extra) + Number(p.interest))}`;
 }
 
 /** Aplica una financiación o un retanqueo aprobado con los parámetros del trabajador. */
@@ -34,7 +34,7 @@ function applyRestructureRequest(request) {
   if (request.type === 'finance') financeCard(client, { interest: Number(p.interest), totalDays: Number(p.totalDays), by });
   else {
     const values = { extra: Number(p.extra), interest: Number(p.interest), insurance: Number(p.insurance) };
-    retanqueoCard(client, { ...values, totalDays: Number(p.totalDays), by });
+    retanqueoCard(client, { ...values, insuranceReason: p.insuranceReason || '', totalDays: Number(p.totalDays), by });
     recordRetanqueoInRoute(routeSettlements[client.route], client, request.clientId, values);
   }
   return '';

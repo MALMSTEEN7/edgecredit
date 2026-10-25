@@ -2291,7 +2291,7 @@ function financeCard(client, { interest, totalDays, by = 'Administrador', today 
  * se cobran en efectivo hoy (entran a la base del día, como al entregar un préstamo).
  * Devuelve lo que hay que registrar en la liquidación del cobro.
  */
-function retanqueoCard(client, { extra, interest, insurance, totalDays, by = 'Administrador', today = localDateISO(), now = Date.now() }) {
+function retanqueoCard(client, { extra, interest, insurance, insuranceReason = '', totalDays, by = 'Administrador', today = localDateISO(), now = Date.now() }) {
   const amount = Math.max(0, Math.round(Number(extra) || 0));
   const interestAmount = Math.max(0, Math.round(Number(interest) || 0));
   const insuranceAmount = Math.max(0, Math.round(Number(insurance) || 0));
@@ -2302,7 +2302,7 @@ function retanqueoCard(client, { extra, interest, insurance, totalDays, by = 'Ad
   client.breakdown = `${formatMoney(client.principal)} / ${formatMoney(client.total - client.principal)}`;
   if (insuranceAmount) {
     client.extraInsurance ||= [];
-    client.extraInsurance.push({ date: today, ts: now, amount: insuranceAmount, reason: 'Retanqueo' });
+    client.extraInsurance.push({ date: today, ts: now, amount: insuranceAmount, reason: insuranceReason ? `Retanqueo · ${insuranceReason}` : 'Retanqueo' });
   }
   restartSchedule(client, totalDays, today);
   client.restructures ||= [];
@@ -3773,7 +3773,7 @@ const REQUEST_TITLES = { interest: 'Excepción de interés', insurance: 'Excepci
 function restructureSummary(request) {
   const p = request.params || {};
   if (request.type === 'finance') return `Saldo ${formatMoney(p.balance)} · interés de financiación ${formatMoney(p.interest)}${p.percent != null ? ` (${p.percent} %)` : ''} · plazo nuevo ${p.totalDays} días · saldo nuevo ${formatMoney(Number(p.balance) + Number(p.interest))}`;
-  return `Saldo ${formatMoney(p.balance)} · prestar ${formatMoney(p.extra)} más · intereses ${formatMoney(p.interest)} · seguros ${formatMoney(p.insurance)} · plazo nuevo ${p.totalDays} días · saldo nuevo ${formatMoney(Number(p.balance) + Number(p.extra) + Number(p.interest))}`;
+  return `Saldo ${formatMoney(p.balance)} · prestar ${formatMoney(p.extra)} más · intereses ${formatMoney(p.interest)} · seguros ${formatMoney(p.insurance)}${p.insuranceReason ? ` (${p.insuranceReason})` : ''} · plazo nuevo ${p.totalDays} días · saldo nuevo ${formatMoney(Number(p.balance) + Number(p.extra) + Number(p.interest))}`;
 }
 
 /** Aplica una financiación o un retanqueo aprobado con los parámetros del trabajador. */
@@ -3785,7 +3785,7 @@ function applyRestructureRequest(request) {
   if (request.type === 'finance') financeCard(client, { interest: Number(p.interest), totalDays: Number(p.totalDays), by });
   else {
     const values = { extra: Number(p.extra), interest: Number(p.interest), insurance: Number(p.insurance) };
-    retanqueoCard(client, { ...values, totalDays: Number(p.totalDays), by });
+    retanqueoCard(client, { ...values, insuranceReason: p.insuranceReason || '', totalDays: Number(p.totalDays), by });
     recordRetanqueoInRoute(routeSettlements[client.route], client, request.clientId, values);
   }
   return '';
@@ -6336,18 +6336,25 @@ function openFinanceModal() {
   if (isWorker && !financeAllowed(client)) { showToast('Solo se puede solicitar financiar cuando ya pasaron los días del plazo.'); return; }
   openCustomModal({
     title: `${isWorker ? 'Solicitar financiar' : 'Financiar'} · ${client.name}`,
-    description: `Saldo actual ${formatMoney(client.balance)}. Se le suman los intereses de financiación y arranca un plazo nuevo desde hoy. Si no cambias nada: ${FINANCE_INTEREST_PERCENT} % del saldo = ${formatMoney(percentOrAmount(client.balance, FINANCE_INTEREST_PERCENT))}.`,
+    description: `Saldo actual ${formatMoney(client.balance)}. Se le suman los intereses de financiación y arranca un plazo nuevo desde hoy.`,
     fields: [
-      { name: 'percent', label: 'Interés de financiación (%) sobre el saldo', type: 'number', min: 0, step: 0.1, value: FINANCE_INTEREST_PERCENT, required: true },
-      { name: 'amount', label: 'O un monto exacto de interés (opcional, reemplaza el %)', money: true, thousands: true, type: 'number', min: 0, step: 1, value: '' },
+      { type: 'note', label: 'Interés de financiación', value: `${FINANCE_INTEREST_PERCENT}%`, hint: `General: ${FINANCE_INTEREST_PERCENT} % del saldo = ${formatMoney(percentOrAmount(client.balance, FINANCE_INTEREST_PERCENT))}`, valueId: 'finance-rate-value', hintId: 'finance-rate-hint' },
+      { type: 'checkbox', name: 'customInterest', label: 'Usar un interés diferente al general' },
+      { name: 'percent', label: 'Interés de financiación (%) sobre el saldo', type: 'number', min: 0, max: 100, step: 0.1, value: FINANCE_INTEREST_PERCENT, required: true, showWhen: 'customInterest' },
       { name: 'totalDays', label: 'Plazo nuevo (días) desde hoy', type: 'number', min: 1, step: 1, value: client.totalDays || 30, required: true },
     ],
+    onInput: form => {
+      const percent = form.elements.customInterest.checked ? Number(form.elements.percent.value) || 0 : FINANCE_INTEREST_PERCENT;
+      document.querySelector('#finance-rate-value').textContent = `${percent}%`;
+      document.querySelector('#finance-rate-hint').textContent = `${percent} % del saldo = ${formatMoney(percentOrAmount(client.balance, percent))}`;
+    },
     submitLabel: isWorker ? 'Enviar solicitud al admin' : 'Financiar',
     onSubmit: values => {
-      const interest = percentOrAmount(client.balance, values.percent, values.amount);
-      if (!(interest > 0)) { customModalError.textContent = 'Escribe un porcentaje o un monto mayor que cero.'; return false; }
+      const percent = values.customInterest ? Number(values.percent) : FINANCE_INTEREST_PERCENT;
+      const interest = percentOrAmount(client.balance, percent);
+      if (!(interest > 0)) { customModalError.textContent = 'Escribe un porcentaje mayor que cero.'; return false; }
       if (isWorker) {
-        sendRestructureRequest(clientId, 'finance', { interest, totalDays: Math.round(Number(values.totalDays)), percent: String(values.amount ?? '').trim() ? null : Number(values.percent), balance: Number(client.balance) });
+        sendRestructureRequest(clientId, 'finance', { interest, totalDays: Math.round(Number(values.totalDays)), percent, balance: Number(client.balance) });
         return;
       }
       financeCard(client, { interest, totalDays: values.totalDays });
@@ -6370,27 +6377,41 @@ function openRetanqueoModal() {
   if (isWorker && pendingRestructure(pendingRequests, clientId)) { showToast('Esta cartulina ya tiene una solicitud pendiente con el administrador.'); return; }
   openCustomModal({
     title: `${isWorker ? 'Solicitar retanqueo' : 'Retanqueo'} · ${client.name}`,
-    description: `Saldo actual ${formatMoney(client.balance)}. Al monto extra se le suman intereses (${RETANQUEO_INTEREST_PERCENT} %) y se cobran seguros (${GENERAL_RETANQUEO.insurancePercent} %) si no escribes otro valor. El saldo nuevo arranca un plazo nuevo desde hoy.`,
+    description: `Saldo actual ${formatMoney(client.balance)}. Al monto extra se le suman intereses y se cobran seguros; el saldo nuevo arranca un plazo nuevo desde hoy.`,
     fields: [
       { name: 'extra', label: 'Monto extra que se le presta', money: true, thousands: true, type: 'number', min: 1, step: 1, value: '', required: true },
-      { name: 'interestPercent', label: 'Interés sobre el extra (%)', type: 'number', min: 0, step: 0.1, value: RETANQUEO_INTEREST_PERCENT, required: true },
-      { name: 'interestAmount', label: 'O un monto exacto de interés (opcional, reemplaza el %)', money: true, thousands: true, type: 'number', min: 0, step: 1, value: '' },
-      { name: 'insurancePercent', label: 'Seguros sobre el extra (%)', type: 'number', min: 0, step: 0.1, value: GENERAL_RETANQUEO.insurancePercent, required: true },
-      { name: 'insuranceAmount', label: 'O un monto exacto de seguros (opcional, reemplaza el %)', money: true, thousands: true, type: 'number', min: 0, step: 1, value: '' },
+      { type: 'note', label: 'Interés sobre el extra', value: `${RETANQUEO_INTEREST_PERCENT}%`, hint: `General: ${RETANQUEO_INTEREST_PERCENT} % del monto extra`, valueId: 'retanqueo-rate-value', hintId: 'retanqueo-rate-hint' },
+      { type: 'checkbox', name: 'customInterest', label: 'Usar un interés diferente al general' },
+      { name: 'interestPercent', label: 'Interés del retanqueo (%)', type: 'number', min: 0, max: 100, step: 0.1, value: RETANQUEO_INTEREST_PERCENT, required: true, showWhen: 'customInterest' },
+      { type: 'note', className: 'default-rate-note insurance-rate-note', label: 'Seguros', value: formatMoney(0), hint: `General: ${GENERAL_RETANQUEO.insurancePercent} % del monto extra`, valueId: 'retanqueo-insurance-value', hintId: 'retanqueo-insurance-hint' },
+      { type: 'checkbox', name: 'customInsurance', label: 'Cobrar un valor de seguros diferente al general' },
+      { name: 'insuranceAmount', label: 'Valor de los seguros ($)', money: true, thousands: true, type: 'number', min: 0, step: 1, value: '', required: true, showWhen: 'customInsurance', placeholder: 'Ej. 10' },
+      { name: 'insuranceReason', label: '¿Por qué este valor es diferente?', type: 'textarea', rows: 2, value: '', showWhen: 'customInsurance', placeholder: 'Ej. Cliente antiguo, acuerdo especial…' },
       { name: 'totalDays', label: 'Plazo nuevo (días) desde hoy', type: 'number', min: 1, step: 1, value: client.totalDays || 30, required: true },
     ],
+    onInput: form => {
+      const extra = Math.round(Number(form.elements.extra.value) || 0);
+      const percent = form.elements.customInterest.checked ? Number(form.elements.interestPercent.value) || 0 : RETANQUEO_INTEREST_PERCENT;
+      document.querySelector('#retanqueo-rate-value').textContent = `${percent}%`;
+      document.querySelector('#retanqueo-rate-hint').textContent = extra ? `${percent} % del monto extra = ${formatMoney(percentOrAmount(extra, percent))}` : `${percent} % del monto extra`;
+      const insurance = form.elements.customInsurance.checked ? Math.round(Number(form.elements.insuranceAmount.value) || 0) : percentOrAmount(extra, GENERAL_RETANQUEO.insurancePercent);
+      document.querySelector('#retanqueo-insurance-value').textContent = formatMoney(insurance);
+      document.querySelector('#retanqueo-insurance-hint').textContent = form.elements.customInsurance.checked ? 'Valor diferente al general' : `General: ${GENERAL_RETANQUEO.insurancePercent} % del monto extra`;
+    },
     submitLabel: isWorker ? 'Enviar solicitud al admin' : 'Hacer retanqueo',
     onSubmit: values => {
       const extra = Math.round(Number(values.extra) || 0);
       if (extra <= 0) { customModalError.textContent = 'Escribe el monto extra que se le presta.'; return false; }
-      const interest = percentOrAmount(extra, values.interestPercent, values.interestAmount);
-      const insurance = percentOrAmount(extra, values.insurancePercent, values.insuranceAmount);
+      const interest = percentOrAmount(extra, values.customInterest ? Number(values.interestPercent) : RETANQUEO_INTEREST_PERCENT);
+      const insurance = values.customInsurance ? Math.round(Number(values.insuranceAmount) || 0) : percentOrAmount(extra, GENERAL_RETANQUEO.insurancePercent);
+      const insuranceReason = values.customInsurance ? String(values.insuranceReason || '').trim() : '';
       if (insurance > extra) { customModalError.textContent = 'Los seguros no pueden superar el monto extra.'; return false; }
+      if (values.customInsurance && !insuranceReason) { customModalError.textContent = 'Escribe por qué los seguros son diferentes al general.'; return false; }
       if (isWorker) {
-        sendRestructureRequest(clientId, 'retanqueo', { extra, interest, insurance, totalDays: Math.round(Number(values.totalDays)), balance: Number(client.balance) });
+        sendRestructureRequest(clientId, 'retanqueo', { extra, interest, insurance, insuranceReason, totalDays: Math.round(Number(values.totalDays)), balance: Number(client.balance) });
         return;
       }
-      retanqueoCard(client, { extra, interest, insurance, totalDays: values.totalDays });
+      retanqueoCard(client, { extra, interest, insurance, insuranceReason, totalDays: values.totalDays });
       recordRetanqueoInRoute(routeSettlements[client.route], client, clientId, { extra, interest, insurance });
       afterRestructure(clientId);
       showToast(`Retanqueo de ${formatMoney(extra)}: intereses ${formatMoney(interest)}, seguros ${formatMoney(insurance)}. Saldo nuevo ${formatMoney(client.balance)}.`);
@@ -8752,11 +8773,18 @@ function normalizeRecoveryCode(code) {
  * cancelLabel/onCancel permiten usar el botón secundario como acción (p. ej. «No recordar más»);
  * si onCancel devuelve false, el modal sigue abierto.
  * onSubmit puede ser async; si devuelve false, el modal queda abierto.
+ *
+ * Además de los campos normales:
+ *  - `type: 'note'`: recuadro informativo (`label`, `value`, `hint`, `className`), como el
+ *    «Interés predeterminado» al crear un préstamo. `valueId`/`hintId` permiten cambiarlo en vivo.
+ *  - `type: 'checkbox'`: casilla (p. ej. «Usar un interés diferente al general»).
+ *  - `showWhen: '<nombre de casilla>'`: el campo solo se ve (y se envía) con esa casilla marcada.
+ *  - `onInput(form)`: se llama al escribir o marcar algo (para actualizar las notas).
  */
 
 
 
-function openCustomModal({ title, description = '', fields = [], submitLabel = 'Guardar', onSubmit, cancelLabel = 'Cancelar', onCancel = null }) {
+function openCustomModal({ title, description = '', fields = [], submitLabel = 'Guardar', onSubmit, cancelLabel = 'Cancelar', onCancel = null, onInput = null }) {
   state.lastFocusedElement = document.activeElement;
   document.querySelector('#custom-modal-title').textContent = title;
   document.querySelector('#custom-modal-description').textContent = description;
@@ -8767,6 +8795,39 @@ function openCustomModal({ title, description = '', fields = [], submitLabel = '
   customModalFields.replaceChildren();
   state.customModalSubmit = onSubmit;
   fields.forEach((field, index) => {
+    if (field.type === 'note') {
+      const note = document.createElement('div');
+      note.className = field.className || 'default-rate-note';
+      const label = document.createElement('span');
+      label.textContent = field.label;
+      const value = document.createElement('strong');
+      value.textContent = field.value ?? '';
+      if (field.valueId) value.id = field.valueId;
+      note.append(label, value);
+      if (field.hint) {
+        const hint = document.createElement('small');
+        hint.textContent = field.hint;
+        if (field.hintId) hint.id = field.hintId;
+        note.append(hint);
+      }
+      if (field.showWhen) { note.dataset.showWhen = field.showWhen; note.hidden = true; }
+      customModalFields.append(note);
+      return;
+    }
+    if (field.type === 'checkbox') {
+      const toggle = document.createElement('label');
+      toggle.className = 'exception-toggle';
+      const box = document.createElement('input');
+      box.type = 'checkbox';
+      box.id = `custom-field-${index}`;
+      box.name = field.name;
+      box.checked = Boolean(field.value);
+      const text = document.createElement('span');
+      text.textContent = field.label;
+      toggle.append(box, text);
+      customModalFields.append(toggle);
+      return;
+    }
     const wrapper = document.createElement('label');
     wrapper.className = 'custom-field';
     wrapper.htmlFor = `custom-field-${index}`;
@@ -8802,12 +8863,22 @@ function openCustomModal({ title, description = '', fields = [], submitLabel = '
     input.value = field.value ?? '';
     input.required = Boolean(field.required);
     wrapper.append(input);
+    if (field.showWhen) { wrapper.dataset.showWhen = field.showWhen; wrapper.classList.add('custom-field-dependent'); }
     customModalFields.append(wrapper);
   });
+  // Campos que dependen de una casilla: ocultos y deshabilitados (no se envían) hasta marcarla.
+  const syncDependents = () => customModalFields.querySelectorAll('[data-show-when]').forEach(node => {
+    const box = customModalFields.querySelector(`input[type="checkbox"][name="${node.dataset.showWhen}"]`);
+    node.hidden = !box?.checked;
+    node.querySelectorAll('input,select,textarea').forEach(control => { control.disabled = node.hidden; });
+  });
+  syncDependents();
+  customModalFields.oninput = customModalFields.onchange = () => { syncDependents(); onInput?.(customModalForm); };
+  onInput?.(customModalForm);
   customModal.hidden = false;
   customModal.classList.add('active');
   document.body.classList.add('modal-open');
-  window.setTimeout(() => customModalFields.querySelector('input,select')?.focus(), 20);
+  window.setTimeout(() => customModalFields.querySelector('input:not([type="checkbox"]),select')?.focus(), 20);
 }
 
 function closeCustomModal() {
@@ -9126,7 +9197,7 @@ function __mount_moneyInputModule() {
     .observe(document.body, { childList: true, subtree: true });
   // FormData lee el valor interno (con puntos): se reemplaza por los dígitos.
   document.addEventListener('formdata', event => {
-    event.target.querySelectorAll('input[data-money][name]').forEach(input => event.formData.set(input.name, input.value));
+    event.target.querySelectorAll('input[data-money][name]:not(:disabled)').forEach(input => event.formData.set(input.name, input.value));
   }, true);
 }
 
