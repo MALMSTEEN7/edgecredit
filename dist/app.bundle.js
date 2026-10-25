@@ -259,10 +259,6 @@ const state = {
   clientLibraryOrder: {},
   collectedRouteClients: {},
   routeVisitOutcomes: {},
-  workBaseAmount: 0,
-  workBaseAccount: 'cash',
-  workBaseCash: 0,
-  workBaseBank: 0,
   draggedRouteClient: null,
   routePointerDrag: null,
   directoryPointerDrag: null,
@@ -1065,18 +1061,19 @@ function updateClientLoanAccounting(client, clientId, oldState, newState) {
   const moved = oldState.route !== newState.route;
   if (moved && oldRoute) {
     oldRoute.loans = Math.max(0, Number(oldRoute.loans || 0) - oldState.principal);
-    if (!client.noBaseImpact) oldRoute.base = Number(oldRoute.base || 0) + oldState.principal;
+    // Préstamo «sin afectar la base»: su capital también está en la base (new-client.js).
+    if (client.noBaseImpact) oldRoute.base = Number(oldRoute.base || 0) - oldState.principal;
     updateListRow(oldRoute, 'loansEntered', 0, true);
     updateListRow(oldRoute, 'loansNew', 0, true);
     newRoute.loans = Number(newRoute.loans || 0) + newState.principal;
-    if (!client.noBaseImpact) newRoute.base = Number(newRoute.base || 0) - newState.principal;
+    if (client.noBaseImpact) newRoute.base = Number(newRoute.base || 0) + newState.principal;
     updateListRow(newRoute, 'loansEntered', newState.total);
     updateListRow(newRoute, 'loansNew', newState.principal);
     return;
   }
   const delta = newState.principal - oldState.principal;
   newRoute.loans = Math.max(0, Number(newRoute.loans || 0) + delta);
-  if (!client.noBaseImpact) newRoute.base = Number(newRoute.base || 0) - delta;
+  if (client.noBaseImpact) newRoute.base = Number(newRoute.base || 0) + delta;
   updateListRow(newRoute, 'loansEntered', newState.total);
   updateListRow(newRoute, 'loansNew', newState.principal);
 }
@@ -1208,6 +1205,7 @@ function liveInsuranceEntries(clients, routeId, dateISO, sinceTs = 0) {
  */
 
 
+
 const DAY_FIELDS = ['base', 'collections', 'loans', 'expenses', 'otherExpenses', 'cashDelivered', 'cashOut', 'cashIn', 'insurance'];
 const LIVE_FIELDS = ['base', 'collections', 'loans', 'expenses', 'otherExpenses', 'cashDelivered'];
 const EDITABLE_FIELDS = ['expenses', 'otherExpenses', 'cashOut'];
@@ -1225,27 +1223,33 @@ function closedToday(route) {
   return route.lastClosure?.date === localDateISO();
 }
 
-/** Datos de un día. Hoy sin cerrar = valores vivos de la ruta (+ salida de caja anotada). */
+/**
+ * Datos de un día. Hoy sin cerrar = valores vivos de la ruta (+ salida de caja anotada).
+ * `otherExpenses` incluye el sueldo del trabajador que anotó el admin (`salary`): lo paga la
+ * caja del cobro, pero no hace parte de lo que entrega el trabajador (no genera descuadre).
+ */
 function dayRecord(route, dateISO, liveInsurance = 0) {
   ensureLedger(route);
   const stored = route.ledger[dateISO];
   const today = localDateISO();
+  const salary = Number(stored?.salary || 0);
   if (dateISO === today && !closedToday(route)) {
     const live = Object.fromEntries(LIVE_FIELDS.map(field => [field, Number(route[field] || 0)]));
-    return { ...live, cashOut: Number(stored?.cashOut || 0), cashIn: Number(stored?.cashIn || 0), insurance: liveInsurance, closed: false, live: true };
+    return { ...live, otherExpenses: live.otherExpenses + salary, salary, cashOut: Number(stored?.cashOut || 0), cashIn: Number(stored?.cashIn || 0), insurance: liveInsurance, closed: false, live: true };
   }
-  if (!stored) return { ...Object.fromEntries(DAY_FIELDS.map(field => [field, 0])), closed: false, empty: true };
+  if (!stored) return { ...Object.fromEntries(DAY_FIELDS.map(field => [field, 0])), salary: 0, closed: false, empty: true };
+  const record = Object.fromEntries(DAY_FIELDS.map(field => [field, Number(stored[field] || 0)]));
   return {
-    ...Object.fromEntries(DAY_FIELDS.map(field => [field, Number(stored[field] || 0)])),
+    ...record, otherExpenses: record.otherExpenses + salary, salary,
     cashAdjustment: Number(stored.cashAdjustment || 0), adjustmentNote: stored.adjustmentNote || '',
     closed: Boolean(stored.closed), demo: Boolean(stored.demo),
   };
 }
 
-/** Descuadre del día (fórmula de la liquidación). Solo aplica a días cerrados. */
+/** Descuadre del día (fórmula de la liquidación). Solo aplica a días cerrados; el sueldo no cuenta. */
 function ledgerDifference(record) {
   if (!record.closed) return null;
-  return record.collections + record.base - record.loans - record.expenses - record.otherExpenses - record.cashDelivered;
+  return record.collections + record.base - record.loans - record.expenses - (record.otherExpenses - Number(record.salary || 0)) - record.cashDelivered;
 }
 
 /** Movimiento de la caja del cobro en un día. */
@@ -1296,6 +1300,7 @@ function pruneOldLedger(route, today = localDateISO()) {
   }
   old.forEach(date => { delete route.ledger[date]; });
   route.cashEntries = route.cashEntries.filter(entry => entry.date >= cutoff);
+  Object.entries(route.weeklySalaries || {}).forEach(([week, salary]) => { if (salary.date < cutoff) delete route.weeklySalaries[week]; });
   return true;
 }
 
@@ -1331,7 +1336,7 @@ function recordClosure(route, dateISO, values, closedTs) {
 
 /** Efectivo con que terminó un día cerrado: el entregado o, si no se anotó, el calculado. */
 function closedDayCash(record) {
-  const computed = record.collections + record.base - record.loans - record.expenses - record.otherExpenses;
+  const computed = record.collections + record.base - record.loans - record.expenses - (record.otherExpenses - Number(record.salary || 0));
   return Number(record.cashDelivered || 0) > 0 ? Number(record.cashDelivered) : Math.max(0, computed);
 }
 
@@ -1349,11 +1354,57 @@ function carriedBase(route, today = localDateISO()) {
   return { date: last, amount: saturday ? 0 : closedDayCash(dayRecord(route, last)), saturday };
 }
 
+/**
+ * Comentario de «otros gastos» de un día: el que dejó el admin o, si no lo ha cambiado, lo que
+ * anotó el trabajador al registrar cada gasto («Pinchada ($ 12.000)»). El sueldo va aparte (daySalary).
+ */
+function otherExpensesNote(route, dateISO) {
+  ensureLedger(route);
+  const stored = route.ledger[dateISO]?.otherExpensesNote;
+  if (typeof stored === 'string') return stored;
+  return (route.otherExpenseEntries || [])
+    .filter(entry => (entry.date || String(entry.createdAt || '').slice(0, 10)) === dateISO)
+    .map(entry => `${entry.note || 'Sin descripción'} (${formatMoney(entry.amount)})`)
+    .join('\n');
+}
+
+function setOtherExpensesNote(route, dateISO, text) {
+  ensureLedger(route);
+  route.ledger[dateISO] ||= { closed: false };
+  route.ledger[dateISO].otherExpensesNote = String(text || '').trim();
+}
+
+/** Sueldo del trabajador anotado ese día (ya está sumado en «otros gastos»). */
+function daySalary(route, dateISO) {
+  ensureLedger(route);
+  return Number(route.ledger[dateISO]?.salary || 0);
+}
+
+/**
+ * Sueldo de la semana que empieza en `weekFrom`. Queda en el día `dateISO` (el sábado, o hoy
+ * si la semana va en curso) y se ve sumado a «otros gastos» de ese día (dayRecord). Al
+ * cambiarlo se reemplaza en el mismo día. Devuelve la fecha donde quedó.
+ */
+function setWeekSalary(route, weekFrom, dateISO, amount) {
+  ensureLedger(route);
+  route.weeklySalaries ||= {};
+  const previous = route.weeklySalaries[weekFrom];
+  const date = previous?.date || dateISO;
+  const value = Math.max(0, Math.round(Number(amount) || 0));
+  route.ledger[date] ||= { closed: false };
+  route.ledger[date].salary = value;
+  if (value) route.weeklySalaries[weekFrom] = { amount: value, date };
+  else delete route.weeklySalaries[weekFrom];
+  return date;
+}
+
 /** Corrige gastos, otros gastos o salida de caja de un día. Hoy sin cerrar: va a la ruta viva. */
 function setDayField(route, dateISO, field, value) {
   if (!EDITABLE_FIELDS.includes(field)) return;
   ensureLedger(route);
-  const amount = Math.max(0, Math.round(Number(value) || 0));
+  // En la tabla «otros gastos» se ve con el sueldo incluido: se guarda sin él.
+  const salary = field === 'otherExpenses' ? Number(route.ledger[dateISO]?.salary || 0) : 0;
+  const amount = Math.max(0, Math.round(Number(value) || 0) - salary);
   if (dateISO === localDateISO() && !closedToday(route) && field !== 'cashOut') {
     route[field] = amount;
     return;
@@ -2265,6 +2316,7 @@ function renderAdminRoute(routeId) {
   document.querySelector('#metric-cash-delivered').value = route.cashDelivered;
   document.querySelector('#metric-other-expenses').value = route.otherExpenses;
   renderRouteOperations(route);
+  renderDayPayments(routeId);
   renderRouteEvidence(routeId);
   renderRouteReports(route);
   recalculateSettlement();
@@ -4071,6 +4123,49 @@ function editableCell(dateISO, key, value, disabled) {
   return cell;
 }
 
+/** Texto completo del comentario de otros gastos de un día (lo anotado + el sueldo). */
+function otherExpensesSummary(route, dateISO) {
+  const salary = daySalary(route, dateISO);
+  return [otherExpensesNote(route, dateISO), salary ? `Sueldo (${formatMoney(salary)})` : ''].filter(Boolean).join('\n');
+}
+
+/** Botón junto a «Otros gastos»: muestra de qué fueron y permite corregir el comentario. */
+function otherExpensesNoteButton(route, dateISO, disabled) {
+  const summary = otherExpensesSummary(route, dateISO);
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'expense-note-button';
+  button.classList.toggle('has-note', Boolean(summary));
+  button.dataset.noteDate = dateISO;
+  button.disabled = disabled;
+  button.textContent = '💬';
+  button.title = summary || 'Sin comentario: toca para agregar de qué fueron los otros gastos';
+  button.setAttribute('aria-label', `Comentario de otros gastos del ${dateISO}${summary ? `: ${summary.replace(/\n/g, '; ')}` : ''}`);
+  return button;
+}
+
+function openOtherExpensesNote(route, dateISO) {
+  const salary = daySalary(route, dateISO);
+  const day = new Date(`${dateISO}T12:00:00`).toLocaleDateString('es-CO', { weekday: 'long', day: '2-digit', month: '2-digit' });
+  openCustomModal({
+    title: `Otros gastos · ${day}`,
+    description: `Total del día: ${formatMoney(dayRecord(route, dateISO).otherExpenses)}.${salary ? ` Incluye el sueldo del trabajador (${formatMoney(salary)}), que se cambia en «Sueldo trabajador».` : ''}`,
+    fields: [{ name: 'note', label: '¿En qué se gastó?', type: 'textarea', rows: 4, value: otherExpensesNote(route, dateISO), placeholder: 'Ej. Pinchada $ 12.000, gasolina $ 20.000' }],
+    submitLabel: 'Guardar comentario',
+    onSubmit: values => {
+      setOtherExpensesNote(route, dateISO, values.note);
+      persistBusinessData();
+      renderRouteReports(route);
+      showToast('Comentario de otros gastos guardado.');
+    },
+  });
+}
+
+/** Día al que se suma el sueldo de la semana: el sábado, o hoy si la semana va en curso. */
+function salaryDate(week, today) {
+  return week.to <= today ? week.to : week.from <= today ? today : null;
+}
+
 function totalsRow(label, totals, className) {
   const row = document.createElement('tr');
   row.className = className;
@@ -4143,8 +4238,10 @@ function renderWeeklyAudit(route, monthValue) {
     }
     row.append(dateCell);
     COLUMNS.forEach(({ key, editable }) => {
-      if (editable) row.append(editableCell(iso, key, record[key], future));
-      else row.append(future ? moneyCell(null) : moneyCell(record[key]));
+      if (!editable) { row.append(future ? moneyCell(null) : moneyCell(record[key])); return; }
+      const cell = editableCell(iso, key, record[key], future);
+      if (key === 'otherExpenses') { cell.classList.add('has-note-button'); cell.append(otherExpensesNoteButton(route, iso, future)); }
+      row.append(cell);
     });
     row.append(moneyCell(future ? null : ledgerDifference(record), { negativeClass: true }));
     row.append(moneyCell(future ? null : cashBoxAt(route, iso, live)));
@@ -4166,8 +4263,16 @@ function renderWeeklyAudit(route, monthValue) {
   difference.textContent = formatMoney(weekTotals.difference);
   difference.classList.toggle('is-short', weekTotals.difference < 0);
   difference.classList.toggle('is-surplus', weekTotals.difference > 0);
-  rq('#weekly-salary').textContent = formatMoney(Math.round(weekTotals.collections * 0.06));
-  rq('#weekly-note').textContent = `Gastos, otros gastos y salida de caja se corrigen directamente en la tabla. El descuadre de la semana se reinicia cada sábado. Cada fecha queda guardada en el libro diario del cobro.${hasDemo ? ' Los días anteriores al primer cierre real son datos de demostración.' : ''}`;
+  // Sueldo del trabajador: lo escribe el admin y se suma a «otros gastos» con el comentario «Sueldo».
+  const salaryInput = rq('#weekly-salary');
+  const salary = route.weeklySalaries?.[week.from];
+  const payDay = salary?.date || salaryDate(week, today);
+  salaryInput.value = salary ? String(salary.amount) : '';
+  salaryInput.dataset.week = week.from;
+  salaryInput.dataset.date = payDay || '';
+  salaryInput.disabled = !payDay || state.userRole !== 'admin';
+  rq('#weekly-salary-hint').textContent = `${salary ? `Sumado a otros gastos del ${new Date(`${salary.date}T12:00:00`).toLocaleDateString('es-CO')} · ` : payDay ? '' : 'La semana aún no empieza · '}6 % del cobro: ${formatMoney(Math.round(weekTotals.collections * 0.06))}`;
+  rq('#weekly-note').textContent = `Gastos, otros gastos y salida de caja se corrigen directamente en la tabla; con 💬 ves y corriges en qué fueron los otros gastos. El descuadre de la semana se reinicia cada sábado. Cada fecha queda guardada en el libro diario del cobro.${hasDemo ? ' Los días anteriores al primer cierre real son datos de demostración.' : ''}`;
   targetDate = null;
 }
 
@@ -4357,6 +4462,21 @@ function __mount_reportsModule() {
     const label = COLUMNS.find(column => column.key === input.dataset.field).label;
     showToast(`${label} del ${new Date(`${input.dataset.date}T12:00:00`).toLocaleDateString('es-CO')} actualizado: ${formatMoney(Number(input.value) || 0)}.`);
   });
+  rq('#weekly-audit-body').addEventListener('click', event => {
+    const button = event.target.closest('.expense-note-button');
+    if (!button || state.userRole !== 'admin') return;
+    openOtherExpensesNote(state.activeSettlement, button.dataset.noteDate);
+  });
+  rq('#weekly-salary').addEventListener('change', event => {
+    const input = event.target;
+    if (state.userRole !== 'admin' || !input.dataset.week || !input.dataset.date) return;
+    const route = state.activeSettlement;
+    const amount = Math.round(Number(input.value) || 0);
+    const date = setWeekSalary(route, input.dataset.week, input.dataset.date, amount);
+    persistBusinessData();
+    window.setTimeout(() => renderRouteReports(route), 0);
+    showToast(amount ? `Sueldo de ${formatMoney(amount)} sumado a otros gastos del ${new Date(`${date}T12:00:00`).toLocaleDateString('es-CO')}.` : 'Sueldo quitado de otros gastos.');
+  });
   rq('#insurance-cut-button').addEventListener('click', () => cutInsuranceNow(state.activeSettlement));
   rq('#insurance-undo-button').addEventListener('click', () => undoInsuranceCut(state.activeSettlement));
   document.querySelectorAll('[data-report-tab]').forEach(button => button.addEventListener('click', () => {
@@ -4374,6 +4494,7 @@ function __mount_reportsModule() {
 /**
  * features/admin/settlement · Liquidación (cuadre de caja) y cierre de ruta con descuadre.
  */
+
 
 
 
@@ -4433,13 +4554,9 @@ function resetRouteDay(route, routeId) {
   route.expenses = 0;
   route.otherExpenses = 0;
   route.cashDelivered = 0;
+  // La base del día siguiente (la misma que ve el trabajador) arranca con ese efectivo.
   route.base = carried;
-  // La caja del trabajador de esa ruta arranca el día siguiente con ese efectivo como base.
-  const worker = workerForRoute(routeId);
-  if (worker) {
-    shared.workBases[worker.id] = { amount: carried, cash: carried, bank: 0, account: 'cash', updatedAt: new Date().toISOString() };
-    if (state.activeWorker?.id === worker.id) { state.workBaseCash = carried; state.workBaseBank = 0; state.workBaseAmount = carried; }
-  }
+  route.baseBank = 0;
   return { cash, carried, saturday };
 }
 
@@ -4457,16 +4574,49 @@ function applyCarriedBases(today = localDateISO()) {
     const carried = carriedBase(route, today);
     if (!carried) return;
     route.base = carried.amount;
+    route.baseBank = 0;
     route.baseCarriedOn = today;
     route.baseCarriedFrom = carried.date;
-    const worker = workerForRoute(routeId);
-    if (worker) {
-      shared.workBases[worker.id] = { amount: carried.amount, cash: carried.amount, bank: 0, account: 'cash', updatedAt: new Date().toISOString() };
-      if (state.activeWorker?.id === worker.id) { state.workBaseCash = carried.amount; state.workBaseBank = 0; state.workBaseAmount = carried.amount; }
-    }
     changed = true;
   });
   return changed;
+}
+
+/** Abonos ingresados hoy en la ruta: nombre de la cartulina y monto, del más reciente al más antiguo. */
+function renderDayPayments(routeId) {
+  const today = localDateISO();
+  const rows = Object.entries(clients)
+    .filter(([, client]) => client?.route === routeId)
+    .flatMap(([clientId, client]) => (client.payments || [])
+      .filter(payment => payment.date === today && Number(payment.amount) > 0)
+      .map(payment => ({ clientId, client, payment })));
+  const total = rows.reduce((sum, row) => sum + Number(row.payment.amount), 0);
+  const body = document.querySelector('#day-payments-body');
+  body.replaceChildren(...rows.map(({ clientId, client, payment }) => {
+    const row = document.createElement('tr');
+    const name = document.createElement('th');
+    name.scope = 'row';
+    const cards = personCardIds(clients, client.id);
+    name.textContent = cards.length > 1 ? `${client.name} · Cartulina ${cards.indexOf(clientId) + 1}` : client.name;
+    const method = document.createElement('td');
+    method.textContent = payment.method === 'transfer' ? 'Transferencia' : 'Efectivo';
+    const amount = document.createElement('td');
+    amount.className = 'numeric';
+    amount.textContent = formatMoney(payment.amount);
+    row.append(name, method, amount);
+    return row;
+  }));
+  const foot = document.querySelector('#day-payments-foot');
+  foot.replaceChildren();
+  if (rows.length) {
+    const row = document.createElement('tr');
+    row.innerHTML = '<th scope="row" colspan="2">Total abonos</th><td class="numeric"></td>';
+    row.lastElementChild.textContent = formatMoney(total);
+    foot.append(row);
+  }
+  document.querySelector('#day-payments-wrap').hidden = !rows.length;
+  document.querySelector('#day-payments-empty').hidden = Boolean(rows.length);
+  document.querySelector('#day-payments-summary').textContent = rows.length ? `${rows.length} abono${rows.length === 1 ? '' : 's'} · ${formatMoney(total)}` : 'Sin abonos hoy';
 }
 
 function renderRouteOperations(route) {
@@ -4889,7 +5039,6 @@ function enterApp(account, isAdmin) {
         || personnel[0] || { id: 'worker-unassigned', name: 'Trabajador', route: '', openingAmount: 0 };
       state.workerRoute = routeKey(state.activeWorker.route);
       resumeWorkerLocationSharing();
-      loadWorkBase(state.activeWorker);
       updateCashTotal();
       document.querySelector('#nav-daily-route').hidden = false;
       document.querySelector('#home-title').textContent = `Buen día, ${state.activeWorker.name.split(/\s+/)[0]}`;
@@ -6417,23 +6566,21 @@ function addNewClient(values, photoData = '', insurance, gps = null) {
     route: isAdmin ? route?.name : state.activeWorker.route, routeId: assignedRoute, createdAt: new Date().toISOString(), status: 'pending'
   }));
   if (route) {
-    if (!noBaseImpact) route.base -= principal;
+    // El préstamo se resta una sola vez, en «Préstamos». Si el admin lo registra «sin afectar
+    // la base del trabajador», ese dinero no salió de su efectivo: entra a la base y sale como préstamo.
     route.loans += principal;
+    if (noBaseImpact) route.base += principal;
     route.loansNew.unshift({ name, clientId, amount: principal });
     route.loansEntered.unshift({ name, clientId, amount: total });
     // Los seguros se reciben en efectivo al entregar el préstamo: entran a la base del día.
     route.base += insurance.amount;
     route.monthlyInsurance = (Number(route.monthlyInsurance) || 0) + insurance.amount;
-    if (!isAdmin && !noBaseImpact) {
-      deductWorkBase(principal);
-    }
-    if (!isAdmin) addToWorkBase(insurance.amount);
     if (routeSelect.value === assignedRoute) renderAdminRoute(assignedRoute);
     if (state.workerRoute === assignedRoute) renderRouteOperations(route);
   }
   persistBusinessData();
   renderPendingRequests();
-  renderWorkerDailyMetrics();
+  updateCashTotal();
   closeNewClientModal();
   const insuranceCopy = `Seguros ${formatMoney(insurance.amount)}${insurance.custom ? ' (valor especial)' : ''}.`;
   const lead = mode === 'renew' ? `Crédito renovado para ${name}.` : mode === 'extra' ? `Nueva cartulina creada para ${name}.` : isAdmin ? 'Cartulina creada para la ruta seleccionada.' : 'Cliente creado con el interés predeterminado del 20%.';
@@ -7053,8 +7200,7 @@ function __mount_paymentModule() {
 
 // ── js/features/worker/cash-box.js
 /**
- * features/worker/cash-box · Caja del trabajador: base de trabajo (efectivo/bancos)
- * y métricas del día.
+ * features/worker/cash-box · Caja del trabajador (efectivo/bancos) y métricas del día.
  */
 
 
@@ -7079,72 +7225,45 @@ function todayCollectionsByMethod() {
   }, { cash: 0, bank: 0 });
 }
 
+/**
+ * La base del día es una sola: la del cobro (`route.base`), la misma que ve el admin en
+ * Liquidación. Incluye los seguros cobrados hoy y lo que el trabajador agregue a la base;
+ * `route.baseBank` es la parte que agregó en bancos. Los préstamos no la cambian: se restan
+ * una sola vez al calcular el efectivo.
+ */
+function workerRoute() {
+  return routeSettlements[state.workerRoute] || null;
+}
+
+/** Efectivo que debería tener el trabajador ahora: base + cobros − préstamos − gastos − otros gastos. */
+function cashInHand(route, todayCash) {
+  const bankBase = Number(route.baseBank || 0);
+  return Number(route.base || 0) - bankBase + todayCash - Number(route.loans || 0) - Number(route.expenses || 0) - Number(route.otherExpenses || 0);
+}
+
 function updateCashTotal() {
   const balanceValues = document.querySelectorAll('.cash-balances .balance-item strong');
+  const route = workerRoute();
   const today = todayCollectionsByMethod();
-  // Tu caja hoy = base de trabajo + abonos recibidos hoy (efectivo y bancos por separado).
-  balanceValues[0].textContent = formatMoney(state.workBaseCash + today.cash);
-  balanceValues[1].textContent = formatMoney(state.workBaseBank + today.bank);
-  cashTotal.textContent = formatMoney(state.workBaseAmount + today.cash + today.bank);
+  const cash = route ? cashInHand(route, today.cash) : 0;
+  const bank = (route ? Number(route.baseBank || 0) : 0) + today.bank;
+  balanceValues[0].textContent = formatMoney(cash);
+  balanceValues[1].textContent = formatMoney(bank);
+  cashTotal.textContent = formatMoney(cash + bank);
   updateCashChip(cashTotal.textContent);
   renderWorkerDailyMetrics();
-}
-
-function persistWorkBase() {
-  const id = state.activeWorker?.id || 'default';
-  shared.workBases[id] = { amount: state.workBaseAmount, cash: state.workBaseCash, bank: state.workBaseBank, account: state.workBaseAccount, updatedAt: new Date().toISOString() };
-  persistBusinessData();
-}
-
-function loadWorkBase(worker) {
-  state.workBaseCash = 0; state.workBaseBank = 0; state.workBaseAmount = 0; state.workBaseAccount = 'cash';
-  try {
-    const saved = shared.workBases[worker?.id || 'default'] || null;
-    if (saved && typeof saved === 'object') {
-      state.workBaseCash = Math.max(0, Number(saved.cash) || 0);
-      state.workBaseBank = Math.max(0, Number(saved.bank) || 0);
-      if (!('cash' in saved) && !('bank' in saved)) {
-        const amount = Math.max(0, Number(saved.amount) || 0);
-        if (saved.account === 'bank') state.workBaseBank = amount; else state.workBaseCash = amount;
-      }
-      state.workBaseAccount = saved.account === 'bank' ? 'bank' : 'cash';
-    } else state.workBaseCash = Math.max(0, Number(worker?.openingAmount) || 0);
-  } catch { state.workBaseCash = Math.max(0, Number(worker?.openingAmount) || 0); }
-  state.workBaseAmount = state.workBaseCash + state.workBaseBank;
-  document.querySelector('#work-base-account').value = state.workBaseAccount;
-}
-
-function deductWorkBase(amount) {
-  let remaining = Math.max(0, Number(amount) || 0);
-  const cashDeduction = Math.min(state.workBaseCash, remaining);
-  state.workBaseCash -= cashDeduction;
-  remaining -= cashDeduction;
-  state.workBaseBank = Math.max(0, state.workBaseBank - remaining);
-  state.workBaseAmount = state.workBaseCash + state.workBaseBank;
-  updateCashTotal();
-  persistWorkBase();
-}
-
-/** Suma dinero cobrado en campo (p. ej. seguros) a la base en efectivo del trabajador. */
-function addToWorkBase(amount) {
-  const value = Math.max(0, Math.round(Number(amount) || 0));
-  if (!value) return;
-  state.workBaseCash += value;
-  state.workBaseAmount = state.workBaseCash + state.workBaseBank;
-  updateCashTotal();
-  persistWorkBase();
 }
 
 function renderWorkerDailyMetrics() {
   const route = routeSettlements[state.workerRoute];
   if (!route) return;
   document.querySelector('#worker-metrics-route').textContent = `Ruta ${route.name}`;
-  document.querySelector('#worker-day-base').textContent = formatMoney(state.workBaseAmount);
+  document.querySelector('#worker-day-base').textContent = formatMoney(route.base || 0);
   document.querySelector('#worker-day-collections').textContent = formatMoney(route.collections || 0);
   document.querySelector('#worker-day-expenses').textContent = formatMoney(route.expenses || 0);
   document.querySelector('#worker-day-other-expenses').textContent = formatMoney(route.otherExpenses || 0);
   document.querySelector('#worker-day-loans').textContent = formatMoney(route.loans || 0);
-  // Seguros cobrados hoy en la ruta: ya están sumados a la base del día (addToWorkBase).
+  // Seguros cobrados hoy en la ruta: ya están sumados a la base del día (new-client.js).
   // Tras «Verificar y cerrar ruta» el resumen arranca de cero: solo cuenta lo posterior al cierre.
   const closure = route.lastClosure?.date === localDateISO() ? Date.parse(route.lastClosure.submittedAt) : 0;
   const insurance = insuranceCollectedOn(clients, state.workerRoute, localDateISO(), closure);
@@ -7153,7 +7272,7 @@ function renderWorkerDailyMetrics() {
   const baseNote = document.querySelector('#worker-day-base-insurance');
   baseNote.hidden = !insurance.total;
   baseNote.textContent = insurance.total ? `Incluye ${formatMoney(insurance.total)} de seguros` : '';
-  document.querySelector('#worker-day-cash').textContent = formatMoney(route.cashDelivered || (state.workBaseCash + route.collections - route.loans - route.expenses - route.otherExpenses));
+  document.querySelector('#worker-day-cash').textContent = formatMoney(route.cashDelivered || (Number(route.base || 0) + Number(route.collections || 0) - Number(route.loans || 0) - Number(route.expenses || 0) - Number(route.otherExpenses || 0)));
 }
 
 /** Registra los listeners del módulo. Se invoca una sola vez desde app.js. */
@@ -7166,16 +7285,17 @@ function __mount_cashBoxModule() {
       baseInput.addEventListener('input', () => baseInput.setCustomValidity(''), { once: true });
       return;
     }
-    state.workBaseAccount = document.querySelector('#work-base-account').value;
-    if (state.workBaseAccount === 'bank') state.workBaseBank += Math.round(value);
-    else state.workBaseCash += Math.round(value);
-    state.workBaseAmount = state.workBaseCash + state.workBaseBank;
+    const route = workerRoute();
+    if (!route) return;
+    const amount = Math.round(value);
+    const toBank = document.querySelector('#work-base-account').value === 'bank';
+    route.base = Number(route.base || 0) + amount;
+    if (toBank) route.baseBank = Number(route.baseBank || 0) + amount;
     baseInput.value = '';
+    persistBusinessData();
     updateCashTotal();
-    persistWorkBase();
-    showToast(`${formatMoney(value)} agregado a la base de ${state.workBaseAccount === 'bank' ? 'bancos' : 'efectivo'}.`);
+    showToast(`${formatMoney(amount)} agregado a la base de ${toBank ? 'bancos' : 'efectivo'}.`);
   });
-  document.querySelector('#work-base-account').addEventListener('change', () => { state.workBaseAccount = document.querySelector('#work-base-account').value; persistWorkBase(); });
 }
 
 // ── js/features/worker/expenses.js
@@ -7255,7 +7375,7 @@ function __mount_expensesModule() {
       route.otherExpenseEntries ||= [];
       route.otherExpenseEntries.unshift({ id: `expense-${Date.now()}`, amount, note: form.elements.note.value.trim(), date: localDateISO(), createdAt: new Date().toISOString(), workerId: state.activeWorker.id, workerName: state.activeWorker.name, receiptName: file?.name || '', receiptData });
       persistBusinessData();
-      renderWorkerDailyMetrics();
+      updateCashTotal();
       if (routeSelect.value === state.workerRoute) renderAdminRoute(state.workerRoute);
       closeExpenseModal();
       showToast(file ? `Gasto de ${formatMoney(amount)} registrado con comprobante.` : `Gasto de ${formatMoney(amount)} registrado SIN comprobante: quedará marcado para el administrador.`);
@@ -9740,7 +9860,6 @@ function boot() {
   renderPendingRequests();
   applyTheme(savedTheme);
   renderAdminRoute(routeSelect.value);
-  loadWorkBase(state.activeWorker);
   updateCashTotal();
   updateNetworkStatus();
 }
@@ -9775,7 +9894,6 @@ function refreshFromServer() {
     if (routeSettlements[routeSelect.value]) renderAdminRoute(routeSelect.value);
     if (state.activeAdminPanel === 'personnel') renderPersonnel();
   } else {
-    if (state.activeWorker) loadWorkBase(state.activeWorker);
     updateCashTotal();
     renderRouteBuilder();
   }

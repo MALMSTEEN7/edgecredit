@@ -4,9 +4,10 @@
 
 import { adminFeedback, routeSelect, settlementInputs } from '../../core/dom.js';
 import { state } from '../../core/state.js';
-import { clients, persistBusinessData, routeSettlements, shared, workerForRoute } from '../../core/store.js';
+import { clients, persistBusinessData, routeSettlements } from '../../core/store.js';
 import { carriedBase, recordClosure } from '../../domain/ledger.js';
 import { insuranceCollectedOn } from '../../domain/insurance.js';
+import { personCardIds } from '../../domain/person-cards.js';
 import { localDateISO } from '../../shared/dates.js';
 import { formatMoney } from '../../shared/format.js';
 import { openCustomModal } from '../../ui/custom-modal.js';
@@ -61,13 +62,9 @@ function resetRouteDay(route, routeId) {
   route.expenses = 0;
   route.otherExpenses = 0;
   route.cashDelivered = 0;
+  // La base del día siguiente (la misma que ve el trabajador) arranca con ese efectivo.
   route.base = carried;
-  // La caja del trabajador de esa ruta arranca el día siguiente con ese efectivo como base.
-  const worker = workerForRoute(routeId);
-  if (worker) {
-    shared.workBases[worker.id] = { amount: carried, cash: carried, bank: 0, account: 'cash', updatedAt: new Date().toISOString() };
-    if (state.activeWorker?.id === worker.id) { state.workBaseCash = carried; state.workBaseBank = 0; state.workBaseAmount = carried; }
-  }
+  route.baseBank = 0;
   return { cash, carried, saturday };
 }
 
@@ -85,16 +82,49 @@ export function applyCarriedBases(today = localDateISO()) {
     const carried = carriedBase(route, today);
     if (!carried) return;
     route.base = carried.amount;
+    route.baseBank = 0;
     route.baseCarriedOn = today;
     route.baseCarriedFrom = carried.date;
-    const worker = workerForRoute(routeId);
-    if (worker) {
-      shared.workBases[worker.id] = { amount: carried.amount, cash: carried.amount, bank: 0, account: 'cash', updatedAt: new Date().toISOString() };
-      if (state.activeWorker?.id === worker.id) { state.workBaseCash = carried.amount; state.workBaseBank = 0; state.workBaseAmount = carried.amount; }
-    }
     changed = true;
   });
   return changed;
+}
+
+/** Abonos ingresados hoy en la ruta: nombre de la cartulina y monto, del más reciente al más antiguo. */
+export function renderDayPayments(routeId) {
+  const today = localDateISO();
+  const rows = Object.entries(clients)
+    .filter(([, client]) => client?.route === routeId)
+    .flatMap(([clientId, client]) => (client.payments || [])
+      .filter(payment => payment.date === today && Number(payment.amount) > 0)
+      .map(payment => ({ clientId, client, payment })));
+  const total = rows.reduce((sum, row) => sum + Number(row.payment.amount), 0);
+  const body = document.querySelector('#day-payments-body');
+  body.replaceChildren(...rows.map(({ clientId, client, payment }) => {
+    const row = document.createElement('tr');
+    const name = document.createElement('th');
+    name.scope = 'row';
+    const cards = personCardIds(clients, client.id);
+    name.textContent = cards.length > 1 ? `${client.name} · Cartulina ${cards.indexOf(clientId) + 1}` : client.name;
+    const method = document.createElement('td');
+    method.textContent = payment.method === 'transfer' ? 'Transferencia' : 'Efectivo';
+    const amount = document.createElement('td');
+    amount.className = 'numeric';
+    amount.textContent = formatMoney(payment.amount);
+    row.append(name, method, amount);
+    return row;
+  }));
+  const foot = document.querySelector('#day-payments-foot');
+  foot.replaceChildren();
+  if (rows.length) {
+    const row = document.createElement('tr');
+    row.innerHTML = '<th scope="row" colspan="2">Total abonos</th><td class="numeric"></td>';
+    row.lastElementChild.textContent = formatMoney(total);
+    foot.append(row);
+  }
+  document.querySelector('#day-payments-wrap').hidden = !rows.length;
+  document.querySelector('#day-payments-empty').hidden = Boolean(rows.length);
+  document.querySelector('#day-payments-summary').textContent = rows.length ? `${rows.length} abono${rows.length === 1 ? '' : 's'} · ${formatMoney(total)}` : 'Sin abonos hoy';
 }
 
 export function renderRouteOperations(route) {

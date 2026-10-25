@@ -28,18 +28,19 @@ export function updateClientLoanAccounting(client, clientId, oldState, newState)
   const moved = oldState.route !== newState.route;
   if (moved && oldRoute) {
     oldRoute.loans = Math.max(0, Number(oldRoute.loans || 0) - oldState.principal);
-    if (!client.noBaseImpact) oldRoute.base = Number(oldRoute.base || 0) + oldState.principal;
+    // Préstamo «sin afectar la base»: su capital también está en la base (new-client.js).
+    if (client.noBaseImpact) oldRoute.base = Number(oldRoute.base || 0) - oldState.principal;
     updateListRow(oldRoute, 'loansEntered', 0, true);
     updateListRow(oldRoute, 'loansNew', 0, true);
     newRoute.loans = Number(newRoute.loans || 0) + newState.principal;
-    if (!client.noBaseImpact) newRoute.base = Number(newRoute.base || 0) - newState.principal;
+    if (client.noBaseImpact) newRoute.base = Number(newRoute.base || 0) + newState.principal;
     updateListRow(newRoute, 'loansEntered', newState.total);
     updateListRow(newRoute, 'loansNew', newState.principal);
     return;
   }
   const delta = newState.principal - oldState.principal;
   newRoute.loans = Math.max(0, Number(newRoute.loans || 0) + delta);
-  if (!client.noBaseImpact) newRoute.base = Number(newRoute.base || 0) - delta;
+  if (client.noBaseImpact) newRoute.base = Number(newRoute.base || 0) + delta;
   updateListRow(newRoute, 'loansEntered', newState.total);
   updateListRow(newRoute, 'loansNew', newState.principal);
 }

@@ -8,7 +8,7 @@ import { routeSelect } from '../../core/dom.js';
 import { state } from '../../core/state.js';
 import { persistBusinessData, routeSettlements } from '../../core/store.js';
 import { renderAdminRoute } from '../admin/admin-shell.js';
-import { renderWorkerDailyMetrics } from './cash-box.js';
+import { updateCashTotal } from './cash-box.js';
 import { localDateISO } from '../../shared/dates.js';
 import { formatMoney } from '../../shared/format.js';
 import { compressClientPhoto } from '../../shared/media.js';
@@ -75,7 +75,7 @@ export function mount() {
       route.otherExpenseEntries ||= [];
       route.otherExpenseEntries.unshift({ id: `expense-${Date.now()}`, amount, note: form.elements.note.value.trim(), date: localDateISO(), createdAt: new Date().toISOString(), workerId: state.activeWorker.id, workerName: state.activeWorker.name, receiptName: file?.name || '', receiptData });
       persistBusinessData();
-      renderWorkerDailyMetrics();
+      updateCashTotal();
       if (routeSelect.value === state.workerRoute) renderAdminRoute(state.workerRoute);
       closeExpenseModal();
       showToast(file ? `Gasto de ${formatMoney(amount)} registrado con comprobante.` : `Gasto de ${formatMoney(amount)} registrado SIN comprobante: quedará marcado para el administrador.`);

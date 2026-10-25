@@ -11,7 +11,7 @@ import { renderAdminRoute } from '../admin/admin-shell.js';
 import { renderPendingRequests } from '../admin/pending.js';
 import { renderRouteOperations } from '../admin/settlement.js';
 import { appendClientCards, renderClientRows } from './directory.js';
-import { addToWorkBase, deductWorkBase, renderWorkerDailyMetrics } from '../worker/cash-box.js';
+import { updateCashTotal } from '../worker/cash-box.js';
 import { generalInsuranceAmount, resolveInsurance } from '../../domain/insurance.js';
 import { MAX_ACTIVE_CARDS_PER_PERSON, activeCardIds, canAddCard, personCardIds, personKey } from '../../domain/person-cards.js';
 import { localDateISO } from '../../shared/dates.js';
@@ -330,23 +330,21 @@ function addNewClient(values, photoData = '', insurance, gps = null) {
     route: isAdmin ? route?.name : state.activeWorker.route, routeId: assignedRoute, createdAt: new Date().toISOString(), status: 'pending'
   }));
   if (route) {
-    if (!noBaseImpact) route.base -= principal;
+    // El préstamo se resta una sola vez, en «Préstamos». Si el admin lo registra «sin afectar
+    // la base del trabajador», ese dinero no salió de su efectivo: entra a la base y sale como préstamo.
     route.loans += principal;
+    if (noBaseImpact) route.base += principal;
     route.loansNew.unshift({ name, clientId, amount: principal });
     route.loansEntered.unshift({ name, clientId, amount: total });
     // Los seguros se reciben en efectivo al entregar el préstamo: entran a la base del día.
     route.base += insurance.amount;
     route.monthlyInsurance = (Number(route.monthlyInsurance) || 0) + insurance.amount;
-    if (!isAdmin && !noBaseImpact) {
-      deductWorkBase(principal);
-    }
-    if (!isAdmin) addToWorkBase(insurance.amount);
     if (routeSelect.value === assignedRoute) renderAdminRoute(assignedRoute);
     if (state.workerRoute === assignedRoute) renderRouteOperations(route);
   }
   persistBusinessData();
   renderPendingRequests();
-  renderWorkerDailyMetrics();
+  updateCashTotal();
   closeNewClientModal();
   const insuranceCopy = `Seguros ${formatMoney(insurance.amount)}${insurance.custom ? ' (valor especial)' : ''}.`;
   const lead = mode === 'renew' ? `Crédito renovado para ${name}.` : mode === 'extra' ? `Nueva cartulina creada para ${name}.` : isAdmin ? 'Cartulina creada para la ruta seleccionada.' : 'Cliente creado con el interés predeterminado del 20%.';

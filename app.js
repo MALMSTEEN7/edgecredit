@@ -52,7 +52,7 @@ import { ensureLedger, pruneOldLedger } from './js/domain/ledger.js';
 import { renderAdminRoute, syncRouteSelect } from './js/features/admin/admin-shell.js';
 import { renderPendingRequests } from './js/features/admin/pending.js';
 import { appendClientCards, renderClientRows } from './js/features/clients/directory.js';
-import { loadWorkBase, updateCashTotal } from './js/features/worker/cash-box.js';
+import { updateCashTotal } from './js/features/worker/cash-box.js';
 import { localDateISO, shiftDateISO } from './js/shared/dates.js';
 import { routeKey } from './js/shared/format.js';
 import { updateNetworkStatus } from './js/ui/network.js';
@@ -143,7 +143,6 @@ function boot() {
   renderPendingRequests();
   applyTheme(savedTheme);
   renderAdminRoute(routeSelect.value);
-  loadWorkBase(state.activeWorker);
   updateCashTotal();
   updateNetworkStatus();
 }
@@ -178,7 +177,6 @@ function refreshFromServer() {
     if (routeSettlements[routeSelect.value]) renderAdminRoute(routeSelect.value);
     if (state.activeAdminPanel === 'personnel') renderPersonnel();
   } else {
-    if (state.activeWorker) loadWorkBase(state.activeWorker);
     updateCashTotal();
     renderRouteBuilder();
   }

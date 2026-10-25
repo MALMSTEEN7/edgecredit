@@ -34,7 +34,7 @@
   <link rel="icon" href="icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="icon-192.png">
   <meta name="apple-mobile-web-app-capable" content="yes">
-  <link rel="stylesheet" id="app-styles" href="dist/styles.bundle.css?v=6188836d6d">
+  <link rel="stylesheet" id="app-styles" href="dist/styles.bundle.css?v=f700e5b86c">
 </head>
 <body class="login-active">
   <section class="login-gateway" id="login-gateway" aria-labelledby="login-title">
@@ -236,6 +236,13 @@
           <section class="settlement-group expense-group"><header><span>EGRESOS (−)</span><small>Desembolsos y gastos de ruta</small></header><div class="settlement-fields"><article class="settlement-card card-finance expense-card"><h3 class="finance-label">Préstamos</h3><label class="editable-money"><span aria-hidden="true">$</span><input class="finance-amount" data-money data-money-thousands id="metric-loans" data-settlement-field="loans" type="number" min="0" step="1000" value="700000" aria-label="Préstamos"></label></article><article class="settlement-card card-finance expense-card"><h3 class="finance-label">Gastos</h3><label class="editable-money"><span aria-hidden="true">$</span><input class="finance-amount" data-money data-money-thousands id="metric-expenses" data-settlement-field="expenses" type="number" min="0" step="1000" value="200000" aria-label="Gastos"></label></article><article class="settlement-card card-finance expense-card"><h3 class="finance-label">Otros Gastos</h3><label class="editable-money"><span aria-hidden="true">$</span><input class="finance-amount" data-money data-money-thousands id="metric-other-expenses" data-settlement-field="otherExpenses" type="number" min="0" step="1000" value="0" aria-label="Otros Gastos"></label></article></div></section>
           <article class="settlement-card card-finance difference-card" id="difference-card"><span class="finance-label">CUADRE DE CAJA</span><h3 class="finance-label">Diferencia</h3><strong class="finance-amount" id="metric-difference">$ 0</strong><small id="difference-caption">Cuadre perfecto</small></article>
         </div>
+        <section class="day-payments" aria-labelledby="day-payments-title">
+          <header><h3 id="day-payments-title">Abonos del día</h3><small id="day-payments-summary">Sin abonos hoy</small></header>
+          <div class="day-payments-wrap" id="day-payments-wrap" role="region" aria-label="Abonos ingresados hoy" tabindex="0" hidden>
+            <table class="audit-table day-payments-table"><thead><tr><th scope="col">Cartulina</th><th scope="col">Forma de pago</th><th class="numeric" scope="col">Abono</th></tr></thead><tbody id="day-payments-body"></tbody><tfoot id="day-payments-foot"></tfoot></table>
+          </div>
+          <p class="day-payments-empty" id="day-payments-empty">Todavía no hay abonos ingresados hoy en esta ruta.</p>
+        </section>
         <div class="admin-actions"><p id="reconciliation-formula">Cobro + Base - Préstamos - Gastos - Efectivo - Otros Gastos</p><button class="primary-button close-route-button" id="verify-close-route" type="button">Verificar y Cerrar Ruta <span aria-hidden="true">→</span></button><p class="admin-feedback" id="admin-feedback" aria-live="polite"></p></div>
       </section>
       <section class="admin-content admin-section-panel client-map-panel" data-admin-panel="map" aria-labelledby="client-map-title" hidden>
@@ -309,7 +316,7 @@
           <div class="report-table-wrap" role="region" aria-label="Cuadre financiero semanal. Desplaza horizontalmente para ver todas las columnas." tabindex="0">
             <table class="audit-table ledger-table"><thead><tr><th scope="col">Fecha</th><th class="numeric" scope="col">Base</th><th class="numeric" scope="col">Cobro</th><th class="numeric" scope="col">Préstamos</th><th class="numeric editable-col" scope="col">Gastos <span aria-hidden="true">✎</span></th><th class="numeric editable-col" scope="col">Otros gastos <span aria-hidden="true">✎</span></th><th class="numeric editable-col" scope="col">Salida de caja <span aria-hidden="true">✎</span></th><th class="numeric" scope="col">Entrada a caja</th><th class="numeric" scope="col">Efectivo</th><th class="numeric" scope="col">Descuadre</th><th class="numeric" scope="col">Caja</th></tr></thead><tbody id="weekly-audit-body"></tbody><tfoot id="weekly-audit-foot"></tfoot></table>
           </div>
-          <div class="report-metrics"><article><span>Cobro de la semana</span><strong id="weekly-collections">$ 0</strong></article><article><span>Descuadre de la semana</span><strong id="weekly-difference">$ 0</strong><small>Se reinicia cada sábado</small></article><article><span>Sueldo trabajador</span><strong id="weekly-salary">$ 0</strong></article></div>
+          <div class="report-metrics"><article><span>Cobro de la semana</span><strong id="weekly-collections">$ 0</strong></article><article><span>Descuadre de la semana</span><strong id="weekly-difference">$ 0</strong><small>Se reinicia cada sábado</small></article><article class="salary-card"><label for="weekly-salary">Sueldo trabajador <span aria-hidden="true">✎</span></label><span class="salary-editor"><span aria-hidden="true">$</span><input data-money id="weekly-salary" type="number" min="0" step="1" inputmode="numeric" placeholder="0"></span><small id="weekly-salary-hint"></small></article></div>
           <p class="report-note" id="weekly-note">Gastos, otros gastos y salida de caja se pueden corregir directamente en la tabla. Cada fecha queda guardada en el libro diario del cobro.</p>
         </section>
         <section class="report-panel" data-report-panel="monthly" hidden>
@@ -472,7 +479,7 @@
     // al cambiar el sello, el navegador descarga el JS/CSS nuevo en vez de usar su caché.
     // Para desarrollar con los módulos sueltos, abre index.html?dev desde un servidor local.
     (() => {
-      const APP_VERSION = '6188836d6d';
+      const APP_VERSION = 'f700e5b86c';
       const dev = new URLSearchParams(location.search).has('dev') && location.protocol !== 'file:';
       if (dev) {
         document.getElementById('app-styles').href = 'styles.css';

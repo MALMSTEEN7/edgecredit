@@ -770,3 +770,81 @@
   color: var(--success);
   font-weight: 600;
 }
+
+/* «Otros gastos»: botón con el comentario de en qué se gastó (y el sueldo). */
+.ledger-table .has-note-button {
+  white-space: nowrap;
+}
+
+.expense-note-button {
+  width: 30px;
+  height: 30px;
+  margin-left: 6px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  font-size: 13px;
+  line-height: 1;
+  vertical-align: middle;
+  cursor: pointer;
+  filter: grayscale(1);
+  opacity: .55;
+}
+
+.expense-note-button.has-note {
+  border-color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 12%, var(--surface));
+  filter: none;
+  opacity: 1;
+}
+
+.expense-note-button:disabled {
+  cursor: default;
+  opacity: .25;
+}
+
+/* Sueldo del trabajador editable en el cierre semanal. */
+.salary-card>label {
+  color: var(--muted);
+  font-size: .875rem;
+}
+
+.salary-card>label span {
+  color: var(--primary);
+}
+
+.salary-editor {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--card);
+  color: var(--muted);
+}
+
+.salary-editor:focus-within {
+  border-color: var(--primary);
+}
+
+.salary-editor input {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text);
+  font: 700 19px Manrope, sans-serif;
+  text-align: right;
+}
+
+.salary-editor input:disabled {
+  opacity: .5;
+}
+
+.salary-card small {
+  color: var(--muted);
+  font-size: 11px;
+}

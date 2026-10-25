@@ -12,7 +12,7 @@ import { routeSelect } from '../../core/dom.js';
 import { state } from '../../core/state.js';
 import { clients, persistBusinessData } from '../../core/store.js';
 import { liveInsuranceEntries, insuranceCollectedOn } from '../../domain/insurance.js';
-import { LEDGER_MONTHS_KEPT, addCashEntry, cashBoxAt, ledgerCutoff, cutInsurance, dayRecord, ensureLedger, insuranceDueAt, insuranceEntries, insurancePeriod, ledgerDifference, setDayField, undoLastInsuranceCut } from '../../domain/ledger.js';
+import { LEDGER_MONTHS_KEPT, addCashEntry, cashBoxAt, ledgerCutoff, cutInsurance, dayRecord, daySalary, ensureLedger, insuranceDueAt, insuranceEntries, insurancePeriod, ledgerDifference, otherExpensesNote, setDayField, setOtherExpensesNote, setWeekSalary, undoLastInsuranceCut } from '../../domain/ledger.js';
 import { INSURANCE_CUT_TEST_MODE } from '../../core/config.js';
 import { localDateISO } from '../../shared/dates.js';
 import { formatMoney } from '../../shared/format.js';
@@ -188,6 +188,49 @@ function editableCell(dateISO, key, value, disabled) {
   return cell;
 }
 
+/** Texto completo del comentario de otros gastos de un día (lo anotado + el sueldo). */
+function otherExpensesSummary(route, dateISO) {
+  const salary = daySalary(route, dateISO);
+  return [otherExpensesNote(route, dateISO), salary ? `Sueldo (${formatMoney(salary)})` : ''].filter(Boolean).join('\n');
+}
+
+/** Botón junto a «Otros gastos»: muestra de qué fueron y permite corregir el comentario. */
+function otherExpensesNoteButton(route, dateISO, disabled) {
+  const summary = otherExpensesSummary(route, dateISO);
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'expense-note-button';
+  button.classList.toggle('has-note', Boolean(summary));
+  button.dataset.noteDate = dateISO;
+  button.disabled = disabled;
+  button.textContent = '💬';
+  button.title = summary || 'Sin comentario: toca para agregar de qué fueron los otros gastos';
+  button.setAttribute('aria-label', `Comentario de otros gastos del ${dateISO}${summary ? `: ${summary.replace(/\n/g, '; ')}` : ''}`);
+  return button;
+}
+
+function openOtherExpensesNote(route, dateISO) {
+  const salary = daySalary(route, dateISO);
+  const day = new Date(`${dateISO}T12:00:00`).toLocaleDateString('es-CO', { weekday: 'long', day: '2-digit', month: '2-digit' });
+  openCustomModal({
+    title: `Otros gastos · ${day}`,
+    description: `Total del día: ${formatMoney(dayRecord(route, dateISO).otherExpenses)}.${salary ? ` Incluye el sueldo del trabajador (${formatMoney(salary)}), que se cambia en «Sueldo trabajador».` : ''}`,
+    fields: [{ name: 'note', label: '¿En qué se gastó?', type: 'textarea', rows: 4, value: otherExpensesNote(route, dateISO), placeholder: 'Ej. Pinchada $ 12.000, gasolina $ 20.000' }],
+    submitLabel: 'Guardar comentario',
+    onSubmit: values => {
+      setOtherExpensesNote(route, dateISO, values.note);
+      persistBusinessData();
+      renderRouteReports(route);
+      showToast('Comentario de otros gastos guardado.');
+    },
+  });
+}
+
+/** Día al que se suma el sueldo de la semana: el sábado, o hoy si la semana va en curso. */
+function salaryDate(week, today) {
+  return week.to <= today ? week.to : week.from <= today ? today : null;
+}
+
 function totalsRow(label, totals, className) {
   const row = document.createElement('tr');
   row.className = className;
@@ -260,8 +303,10 @@ function renderWeeklyAudit(route, monthValue) {
     }
     row.append(dateCell);
     COLUMNS.forEach(({ key, editable }) => {
-      if (editable) row.append(editableCell(iso, key, record[key], future));
-      else row.append(future ? moneyCell(null) : moneyCell(record[key]));
+      if (!editable) { row.append(future ? moneyCell(null) : moneyCell(record[key])); return; }
+      const cell = editableCell(iso, key, record[key], future);
+      if (key === 'otherExpenses') { cell.classList.add('has-note-button'); cell.append(otherExpensesNoteButton(route, iso, future)); }
+      row.append(cell);
     });
     row.append(moneyCell(future ? null : ledgerDifference(record), { negativeClass: true }));
     row.append(moneyCell(future ? null : cashBoxAt(route, iso, live)));
@@ -283,8 +328,16 @@ function renderWeeklyAudit(route, monthValue) {
   difference.textContent = formatMoney(weekTotals.difference);
   difference.classList.toggle('is-short', weekTotals.difference < 0);
   difference.classList.toggle('is-surplus', weekTotals.difference > 0);
-  rq('#weekly-salary').textContent = formatMoney(Math.round(weekTotals.collections * 0.06));
-  rq('#weekly-note').textContent = `Gastos, otros gastos y salida de caja se corrigen directamente en la tabla. El descuadre de la semana se reinicia cada sábado. Cada fecha queda guardada en el libro diario del cobro.${hasDemo ? ' Los días anteriores al primer cierre real son datos de demostración.' : ''}`;
+  // Sueldo del trabajador: lo escribe el admin y se suma a «otros gastos» con el comentario «Sueldo».
+  const salaryInput = rq('#weekly-salary');
+  const salary = route.weeklySalaries?.[week.from];
+  const payDay = salary?.date || salaryDate(week, today);
+  salaryInput.value = salary ? String(salary.amount) : '';
+  salaryInput.dataset.week = week.from;
+  salaryInput.dataset.date = payDay || '';
+  salaryInput.disabled = !payDay || state.userRole !== 'admin';
+  rq('#weekly-salary-hint').textContent = `${salary ? `Sumado a otros gastos del ${new Date(`${salary.date}T12:00:00`).toLocaleDateString('es-CO')} · ` : payDay ? '' : 'La semana aún no empieza · '}6 % del cobro: ${formatMoney(Math.round(weekTotals.collections * 0.06))}`;
+  rq('#weekly-note').textContent = `Gastos, otros gastos y salida de caja se corrigen directamente en la tabla; con 💬 ves y corriges en qué fueron los otros gastos. El descuadre de la semana se reinicia cada sábado. Cada fecha queda guardada en el libro diario del cobro.${hasDemo ? ' Los días anteriores al primer cierre real son datos de demostración.' : ''}`;
   targetDate = null;
 }
 
@@ -473,6 +526,21 @@ export function mount() {
     window.setTimeout(() => renderRouteReports(route), 0);
     const label = COLUMNS.find(column => column.key === input.dataset.field).label;
     showToast(`${label} del ${new Date(`${input.dataset.date}T12:00:00`).toLocaleDateString('es-CO')} actualizado: ${formatMoney(Number(input.value) || 0)}.`);
+  });
+  rq('#weekly-audit-body').addEventListener('click', event => {
+    const button = event.target.closest('.expense-note-button');
+    if (!button || state.userRole !== 'admin') return;
+    openOtherExpensesNote(state.activeSettlement, button.dataset.noteDate);
+  });
+  rq('#weekly-salary').addEventListener('change', event => {
+    const input = event.target;
+    if (state.userRole !== 'admin' || !input.dataset.week || !input.dataset.date) return;
+    const route = state.activeSettlement;
+    const amount = Math.round(Number(input.value) || 0);
+    const date = setWeekSalary(route, input.dataset.week, input.dataset.date, amount);
+    persistBusinessData();
+    window.setTimeout(() => renderRouteReports(route), 0);
+    showToast(amount ? `Sueldo de ${formatMoney(amount)} sumado a otros gastos del ${new Date(`${date}T12:00:00`).toLocaleDateString('es-CO')}.` : 'Sueldo quitado de otros gastos.');
   });
   rq('#insurance-cut-button').addEventListener('click', () => cutInsuranceNow(state.activeSettlement));
   rq('#insurance-undo-button').addEventListener('click', () => undoInsuranceCut(state.activeSettlement));

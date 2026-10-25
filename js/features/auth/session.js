@@ -25,7 +25,7 @@ import { closeInterestModal } from '../clients/interest.js';
 import { closeNewClientModal } from '../clients/new-client.js';
 import { renderRouteBuilder } from '../daily-route/daily-route.js';
 import { closePayment } from '../payments/payment.js';
-import { loadWorkBase, renderWorkerDailyMetrics, updateCashTotal } from '../worker/cash-box.js';
+import { renderWorkerDailyMetrics, updateCashTotal } from '../worker/cash-box.js';
 import { hashCredential } from '../../shared/crypto.js';
 import { routeKey } from '../../shared/format.js';
 import { closeCustomModal } from '../../ui/custom-modal.js';
@@ -280,7 +280,6 @@ function enterApp(account, isAdmin) {
         || personnel[0] || { id: 'worker-unassigned', name: 'Trabajador', route: '', openingAmount: 0 };
       state.workerRoute = routeKey(state.activeWorker.route);
       resumeWorkerLocationSharing();
-      loadWorkBase(state.activeWorker);
       updateCashTotal();
       document.querySelector('#nav-daily-route').hidden = false;
       document.querySelector('#home-title').textContent = `Buen día, ${state.activeWorker.name.split(/\s+/)[0]}`;

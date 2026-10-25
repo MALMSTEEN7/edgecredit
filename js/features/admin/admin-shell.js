@@ -11,7 +11,7 @@ import { renderRouteEvidence } from './evidence.js';
 import { renderPendingRequests } from './pending.js';
 import { renderPersonnel } from './personnel.js';
 import { renderRouteReports } from './reports.js';
-import { recalculateSettlement, renderRouteOperations } from './settlement.js';
+import { recalculateSettlement, renderDayPayments, renderRouteOperations } from './settlement.js';
 import { filterClientCards } from '../clients/directory.js';
 import { renderOperationsModal } from '../operations/operations-list.js';
 import { showView } from '../../ui/navigation.js';
@@ -90,6 +90,7 @@ export function renderAdminRoute(routeId) {
   document.querySelector('#metric-cash-delivered').value = route.cashDelivered;
   document.querySelector('#metric-other-expenses').value = route.otherExpenses;
   renderRouteOperations(route);
+  renderDayPayments(routeId);
   renderRouteEvidence(routeId);
   renderRouteReports(route);
   recalculateSettlement();

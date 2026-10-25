@@ -7265,6 +7265,66 @@ button.evidence-link:active {
   width: auto;
 }
 
+/* Abonos del día (debajo de la liquidación). */
+.day-payments {
+  margin-top: 16px;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: linear-gradient(145deg,var(--card),rgba(41,121,255,.035));
+}
+
+.day-payments>header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px 12px;
+  margin-bottom: 12px;
+}
+
+.day-payments>header h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.day-payments>header small,
+.day-payments-empty {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.day-payments-empty {
+  margin: 0;
+}
+
+.day-payments-wrap {
+  max-height: 360px;
+  overflow: auto;
+}
+
+.day-payments-table {
+  width: 100%;
+  min-width: 0;
+}
+
+.day-payments-table tfoot th,
+.day-payments-table tfoot td {
+  font-weight: 800;
+}
+
+.day-payments-table {
+  font-size: 13px;
+}
+
+.day-payments-table td:not(.numeric) {
+  text-align: left;
+}
+
+.day-payments-table thead th:nth-child(2) {
+  text-align: left;
+}
+
 /* ── css/features/admin-reports.css */
 /* features/admin-reports · Reportes financieros y tablas de auditoría. */
 
@@ -8037,6 +8097,84 @@ button.evidence-link:active {
 .cashbox-side .cashbox-last-entry {
   color: var(--success);
   font-weight: 600;
+}
+
+/* «Otros gastos»: botón con el comentario de en qué se gastó (y el sueldo). */
+.ledger-table .has-note-button {
+  white-space: nowrap;
+}
+
+.expense-note-button {
+  width: 30px;
+  height: 30px;
+  margin-left: 6px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  font-size: 13px;
+  line-height: 1;
+  vertical-align: middle;
+  cursor: pointer;
+  filter: grayscale(1);
+  opacity: .55;
+}
+
+.expense-note-button.has-note {
+  border-color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 12%, var(--surface));
+  filter: none;
+  opacity: 1;
+}
+
+.expense-note-button:disabled {
+  cursor: default;
+  opacity: .25;
+}
+
+/* Sueldo del trabajador editable en el cierre semanal. */
+.salary-card>label {
+  color: var(--muted);
+  font-size: .875rem;
+}
+
+.salary-card>label span {
+  color: var(--primary);
+}
+
+.salary-editor {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--card);
+  color: var(--muted);
+}
+
+.salary-editor:focus-within {
+  border-color: var(--primary);
+}
+
+.salary-editor input {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text);
+  font: 700 19px Manrope, sans-serif;
+  text-align: right;
+}
+
+.salary-editor input:disabled {
+  opacity: .5;
+}
+
+.salary-card small {
+  color: var(--muted);
+  font-size: 11px;
 }
 
 /* ── css/features/admin-pending.css */

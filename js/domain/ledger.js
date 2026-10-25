@@ -20,6 +20,7 @@
  */
 
 import { localDateISO, shiftDateISO } from '../shared/dates.js';
+import { formatMoney } from '../shared/format.js';
 
 export const DAY_FIELDS = ['base', 'collections', 'loans', 'expenses', 'otherExpenses', 'cashDelivered', 'cashOut', 'cashIn', 'insurance'];
 const LIVE_FIELDS = ['base', 'collections', 'loans', 'expenses', 'otherExpenses', 'cashDelivered'];
@@ -38,27 +39,33 @@ function closedToday(route) {
   return route.lastClosure?.date === localDateISO();
 }
 
-/** Datos de un día. Hoy sin cerrar = valores vivos de la ruta (+ salida de caja anotada). */
+/**
+ * Datos de un día. Hoy sin cerrar = valores vivos de la ruta (+ salida de caja anotada).
+ * `otherExpenses` incluye el sueldo del trabajador que anotó el admin (`salary`): lo paga la
+ * caja del cobro, pero no hace parte de lo que entrega el trabajador (no genera descuadre).
+ */
 export function dayRecord(route, dateISO, liveInsurance = 0) {
   ensureLedger(route);
   const stored = route.ledger[dateISO];
   const today = localDateISO();
+  const salary = Number(stored?.salary || 0);
   if (dateISO === today && !closedToday(route)) {
     const live = Object.fromEntries(LIVE_FIELDS.map(field => [field, Number(route[field] || 0)]));
-    return { ...live, cashOut: Number(stored?.cashOut || 0), cashIn: Number(stored?.cashIn || 0), insurance: liveInsurance, closed: false, live: true };
+    return { ...live, otherExpenses: live.otherExpenses + salary, salary, cashOut: Number(stored?.cashOut || 0), cashIn: Number(stored?.cashIn || 0), insurance: liveInsurance, closed: false, live: true };
   }
-  if (!stored) return { ...Object.fromEntries(DAY_FIELDS.map(field => [field, 0])), closed: false, empty: true };
+  if (!stored) return { ...Object.fromEntries(DAY_FIELDS.map(field => [field, 0])), salary: 0, closed: false, empty: true };
+  const record = Object.fromEntries(DAY_FIELDS.map(field => [field, Number(stored[field] || 0)]));
   return {
-    ...Object.fromEntries(DAY_FIELDS.map(field => [field, Number(stored[field] || 0)])),
+    ...record, otherExpenses: record.otherExpenses + salary, salary,
     cashAdjustment: Number(stored.cashAdjustment || 0), adjustmentNote: stored.adjustmentNote || '',
     closed: Boolean(stored.closed), demo: Boolean(stored.demo),
   };
 }
 
-/** Descuadre del día (fórmula de la liquidación). Solo aplica a días cerrados. */
+/** Descuadre del día (fórmula de la liquidación). Solo aplica a días cerrados; el sueldo no cuenta. */
 export function ledgerDifference(record) {
   if (!record.closed) return null;
-  return record.collections + record.base - record.loans - record.expenses - record.otherExpenses - record.cashDelivered;
+  return record.collections + record.base - record.loans - record.expenses - (record.otherExpenses - Number(record.salary || 0)) - record.cashDelivered;
 }
 
 /** Movimiento de la caja del cobro en un día. */
@@ -109,6 +116,7 @@ export function pruneOldLedger(route, today = localDateISO()) {
   }
   old.forEach(date => { delete route.ledger[date]; });
   route.cashEntries = route.cashEntries.filter(entry => entry.date >= cutoff);
+  Object.entries(route.weeklySalaries || {}).forEach(([week, salary]) => { if (salary.date < cutoff) delete route.weeklySalaries[week]; });
   return true;
 }
 
@@ -144,7 +152,7 @@ export function recordClosure(route, dateISO, values, closedTs) {
 
 /** Efectivo con que terminó un día cerrado: el entregado o, si no se anotó, el calculado. */
 export function closedDayCash(record) {
-  const computed = record.collections + record.base - record.loans - record.expenses - record.otherExpenses;
+  const computed = record.collections + record.base - record.loans - record.expenses - (record.otherExpenses - Number(record.salary || 0));
   return Number(record.cashDelivered || 0) > 0 ? Number(record.cashDelivered) : Math.max(0, computed);
 }
 
@@ -162,11 +170,57 @@ export function carriedBase(route, today = localDateISO()) {
   return { date: last, amount: saturday ? 0 : closedDayCash(dayRecord(route, last)), saturday };
 }
 
+/**
+ * Comentario de «otros gastos» de un día: el que dejó el admin o, si no lo ha cambiado, lo que
+ * anotó el trabajador al registrar cada gasto («Pinchada ($ 12.000)»). El sueldo va aparte (daySalary).
+ */
+export function otherExpensesNote(route, dateISO) {
+  ensureLedger(route);
+  const stored = route.ledger[dateISO]?.otherExpensesNote;
+  if (typeof stored === 'string') return stored;
+  return (route.otherExpenseEntries || [])
+    .filter(entry => (entry.date || String(entry.createdAt || '').slice(0, 10)) === dateISO)
+    .map(entry => `${entry.note || 'Sin descripción'} (${formatMoney(entry.amount)})`)
+    .join('\n');
+}
+
+export function setOtherExpensesNote(route, dateISO, text) {
+  ensureLedger(route);
+  route.ledger[dateISO] ||= { closed: false };
+  route.ledger[dateISO].otherExpensesNote = String(text || '').trim();
+}
+
+/** Sueldo del trabajador anotado ese día (ya está sumado en «otros gastos»). */
+export function daySalary(route, dateISO) {
+  ensureLedger(route);
+  return Number(route.ledger[dateISO]?.salary || 0);
+}
+
+/**
+ * Sueldo de la semana que empieza en `weekFrom`. Queda en el día `dateISO` (el sábado, o hoy
+ * si la semana va en curso) y se ve sumado a «otros gastos» de ese día (dayRecord). Al
+ * cambiarlo se reemplaza en el mismo día. Devuelve la fecha donde quedó.
+ */
+export function setWeekSalary(route, weekFrom, dateISO, amount) {
+  ensureLedger(route);
+  route.weeklySalaries ||= {};
+  const previous = route.weeklySalaries[weekFrom];
+  const date = previous?.date || dateISO;
+  const value = Math.max(0, Math.round(Number(amount) || 0));
+  route.ledger[date] ||= { closed: false };
+  route.ledger[date].salary = value;
+  if (value) route.weeklySalaries[weekFrom] = { amount: value, date };
+  else delete route.weeklySalaries[weekFrom];
+  return date;
+}
+
 /** Corrige gastos, otros gastos o salida de caja de un día. Hoy sin cerrar: va a la ruta viva. */
 export function setDayField(route, dateISO, field, value) {
   if (!EDITABLE_FIELDS.includes(field)) return;
   ensureLedger(route);
-  const amount = Math.max(0, Math.round(Number(value) || 0));
+  // En la tabla «otros gastos» se ve con el sueldo incluido: se guarda sin él.
+  const salary = field === 'otherExpenses' ? Number(route.ledger[dateISO]?.salary || 0) : 0;
+  const amount = Math.max(0, Math.round(Number(value) || 0) - salary);
   if (dateISO === localDateISO() && !closedToday(route) && field !== 'cashOut') {
     route[field] = amount;
     return;

@@ -619,3 +619,63 @@
   flex: 1 1 0;
   width: auto;
 }
+
+/* Abonos del día (debajo de la liquidación). */
+.day-payments {
+  margin-top: 16px;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: linear-gradient(145deg,var(--card),rgba(41,121,255,.035));
+}
+
+.day-payments>header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px 12px;
+  margin-bottom: 12px;
+}
+
+.day-payments>header h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.day-payments>header small,
+.day-payments-empty {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.day-payments-empty {
+  margin: 0;
+}
+
+.day-payments-wrap {
+  max-height: 360px;
+  overflow: auto;
+}
+
+.day-payments-table {
+  width: 100%;
+  min-width: 0;
+}
+
+.day-payments-table tfoot th,
+.day-payments-table tfoot td {
+  font-weight: 800;
+}
+
+.day-payments-table {
+  font-size: 13px;
+}
+
+.day-payments-table td:not(.numeric) {
+  text-align: left;
+}
+
+.day-payments-table thead th:nth-child(2) {
+  text-align: left;
+}
