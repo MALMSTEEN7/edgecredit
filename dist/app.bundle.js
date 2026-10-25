@@ -1111,6 +1111,49 @@ function normalizeCancelledCards() {
   Object.entries(clients).forEach(([clientId, client]) => { if (Number(client.balance) <= 0) addCancelledCard(client, clientId, client.settledAt || localDateISO()); });
 }
 
+// ── js/domain/card-color.js
+/**
+ * domain/card-color · Color de cada cartulina, como en el sistema anterior.
+ *
+ * Las semanales se agrupan por el día de la semana en que pagan (el mismo día en que arrancó
+ * el crédito); las quincenales y mensuales tienen su propio color. Solo es un indicador:
+ * la tarjeta no se pinta completa.
+ */
+
+const WEEKDAY_COLORS = {
+  1: { key: 'monday', label: 'Lunes', color: '#7e57c2' }, // morado
+  2: { key: 'tuesday', label: 'Martes', color: '#ad1457' }, // rosado oscuro
+  3: { key: 'wednesday', label: 'Miércoles', color: '#8a8f98' }, // gris
+  4: { key: 'thursday', label: 'Jueves', color: '#1e63d6' }, // azul
+  5: { key: 'friday', label: 'Viernes', color: '#3eb489' }, // verde menta
+  6: { key: 'saturday', label: 'Sábado', color: '#e53935' }, // rojo
+};
+const FREQUENCY_COLORS = {
+  biweekly: { key: 'biweekly', label: 'Quincenal', color: '#f48fb1' }, // rosado
+  monthly: { key: 'monthly', label: 'Mensual', color: '#89cff0' }, // azul bebé
+};
+
+/** Color de la cartulina o null (diarias, o semanales que arrancaron un domingo). */
+function cardColor(client) {
+  if (!client) return null;
+  if (FREQUENCY_COLORS[client.frequency]) return FREQUENCY_COLORS[client.frequency];
+  if (client.frequency && client.frequency !== 'weekly') return null;
+  const [year, month, day] = String(client.creditStartDate || '').split('-').map(Number);
+  if (!year || !month || !day) return null;
+  return WEEKDAY_COLORS[new Date(year, month - 1, day).getDay()] || null;
+}
+
+/** Pinta (o quita) la etiqueta de color en `element`. */
+function paintCardColorTag(element, client) {
+  const color = cardColor(client);
+  element.hidden = !color;
+  if (!color) return;
+  element.dataset.cardColor = color.key;
+  element.style.setProperty('--card-color', color.color);
+  element.textContent = color.label;
+  element.title = color.key === 'biweekly' || color.key === 'monthly' ? `Cartulina ${color.label.toLocaleLowerCase('es')}` : `Cartulina semanal · paga los ${color.label.toLocaleLowerCase('es')}`;
+}
+
 // ── js/domain/insurance.js
 /**
  * domain/insurance · Seguros del crédito.
@@ -1162,24 +1205,40 @@ function collectedTs(client, clientId) {
 }
 
 /**
- * Seguros cobrados en una ruta en la fecha indicada (cartulinas entregadas ese día).
- * `sinceTs`: si el cobro ya se cerró hoy, solo cuenta lo cobrado después del cierre.
- * Las cartulinas migradas del sistema anterior no cuentan: ese seguro se cobró allá.
+ * Seguros cobrados en una cartulina en una fecha: los de la entrega y los de cada retanqueo
+ * (`extraInsurance`). Las cartulinas migradas del sistema anterior no cuentan su seguro de
+ * entrega (se cobró allá), pero sí los retanqueos hechos en EdgeCredit.
  */
-function insuranceCollectedOn(clients, routeId, dateISO, sinceTs = 0) {
-  return Object.entries(clients).reduce((sum, [clientId, client]) => {
-    if (!client || client.route !== routeId || client.insuranceCollectedAt !== dateISO || client.importedFrom) return sum;
-    if (sinceTs && collectedTs(client, clientId) <= sinceTs) return sum;
-    return { total: sum.total + (Number(client.insuranceAmount) || 0), count: sum.count + 1 };
-  }, { total: 0, count: 0 });
+function insuranceEntriesOf(client, clientId, dateISO) {
+  const entries = [];
+  if (client.insuranceCollectedAt === dateISO && !client.importedFrom) {
+    entries.push({ date: dateISO, ts: collectedTs(client, clientId) || Date.now(), amount: Number(client.insuranceAmount) || 0 });
+  }
+  (client.extraInsurance || []).forEach(extra => {
+    if (extra.date === dateISO && Number(extra.amount) > 0) entries.push({ date: dateISO, ts: Number(extra.ts) || Date.now(), amount: Number(extra.amount) });
+  });
+  return entries;
 }
 
-/** Seguros cobrados hoy (aún sin cierre) como movimientos individuales con su hora. */
-function liveInsuranceEntries(clients, routeId, dateISO, sinceTs = 0) {
+/**
+ * Seguros cobrados en una ruta en la fecha indicada (cartulinas entregadas o retanqueadas ese día).
+ * `sinceTs`: si el cobro ya se cerró hoy, solo cuenta lo cobrado después del cierre.
+ */
+function insuranceCollectedOn(clients, routeId, dateISO, sinceTs = 0) {
+  return routeInsuranceEntries(clients, routeId, dateISO, sinceTs)
+    .reduce((sum, entry) => ({ total: sum.total + entry.amount, count: sum.count + 1 }), { total: 0, count: 0 });
+}
+
+function routeInsuranceEntries(clients, routeId, dateISO, sinceTs) {
   return Object.entries(clients)
-    .filter(([, client]) => client && client.route === routeId && client.insuranceCollectedAt === dateISO && Number(client.insuranceAmount) > 0 && !client.importedFrom)
-    .map(([clientId, client]) => ({ date: dateISO, ts: collectedTs(client, clientId) || Date.now(), amount: Number(client.insuranceAmount) }))
+    .filter(([, client]) => client && client.route === routeId)
+    .flatMap(([clientId, client]) => insuranceEntriesOf(client, clientId, dateISO))
     .filter(entry => !sinceTs || entry.ts > sinceTs);
+}
+
+/** Seguros cobrados en la fecha (aún sin cierre) como movimientos individuales con su hora. */
+function liveInsuranceEntries(clients, routeId, dateISO, sinceTs = 0) {
+  return routeInsuranceEntries(clients, routeId, dateISO, sinceTs).filter(entry => entry.amount > 0);
 }
 
 // ── js/domain/ledger.js
@@ -1346,7 +1405,8 @@ function closedDayCash(record) {
  * Base que le toca hoy a la ruta: el efectivo del último día cerrado antes de hoy (sirve
  * también para los días traídos del Excel), sin los abonos de ese día que llegaron por
  * transferencia: esa plata está en el banco, no en la mano del trabajador. Si ese día fue
- * sábado el efectivo se entregó y la base arranca en 0, igual que al cerrar en Liquidación.
+ * sábado el efectivo se entregó y la base arranca en 0 (o en la base para el lunes que el
+ * admin asignó ese sábado), igual que al cerrar en Liquidación.
  * `transfersOn(fecha)` da las transferencias de un cierre que no las guardó. Devuelve null
  * sin cierres previos.
  */
@@ -1358,7 +1418,16 @@ function carriedBase(route, today = localDateISO(), transfersOn = () => 0) {
   const saturday = new Date(year, month - 1, day).getDay() === 6;
   const stored = route.ledger[last].transfers;
   const transfers = Number(stored ?? transfersOn(last)) || 0;
-  return { date: last, amount: saturday ? 0 : Math.max(0, closedDayCash(dayRecord(route, last)) - transfers), transfers, saturday };
+  const amount = saturday ? mondayBaseFor(route, last) : Math.max(0, closedDayCash(dayRecord(route, last)) - transfers);
+  return { date: last, amount, transfers, saturday };
+}
+
+/**
+ * Base para el lunes que el admin dejó asignada el sábado `saturdayISO` (0 si no dejó ninguna).
+ * Es la única forma de que un trabajador empiece la semana con base.
+ */
+function mondayBaseFor(route, saturdayISO) {
+  return route?.mondayBase?.date === saturdayISO ? Math.max(0, Number(route.mondayBase.amount) || 0) : 0;
 }
 
 /**
@@ -1963,6 +2032,101 @@ function canAddCard(clients, idNumber) {
   return activeCardIds(clients, idNumber).length < MAX_ACTIVE_CARDS_PER_PERSON;
 }
 
+// ── js/domain/restructure.js
+/**
+ * domain/restructure · Cambios a una cartulina con saldo, hechos por el admin.
+ *
+ * - Financiar: se le suman intereses por pasarse de los días acordados y se le da un plazo nuevo.
+ * - Retanqueo: se le presta más antes de terminar de pagar; al monto extra se le suman intereses
+ *   (20 % general) y se cobran seguros (10 % general), salvo que el admin ponga otro valor.
+ *
+ * En los dos casos el saldo nuevo arranca un calendario nuevo desde hoy (cuotas y plazo nuevos)
+ * y el total del crédito sube en lo agregado, así «abonado + saldo = total» sigue cuadrando.
+ * Los abonos anteriores siguen en el historial, pero ya no cuentan para las cuotas nuevas.
+ */
+
+
+
+
+
+const RETANQUEO_INTEREST_PERCENT = 20;
+const FINANCE_INTEREST_PERCENT = 20;
+/** Seguros generales sobre el monto extra de un retanqueo (los mismos 10 % de un préstamo). */
+const GENERAL_RETANQUEO = { insurancePercent: GENERAL_INSURANCE_PERCENT };
+
+/** Valor de un porcentaje o, si se escribió, el monto exacto. */
+function percentOrAmount(base, percent, exactAmount) {
+  const exact = Number(exactAmount);
+  if (String(exactAmount ?? '').trim() !== '' && Number.isFinite(exact) && exact >= 0) return Math.round(exact);
+  return Math.round((Number(base) || 0) * (Number(percent) || 0) / 100);
+}
+
+/**
+ * Inicio del calendario nuevo. Las semanales siguen pagando el mismo día de la semana
+ * (y conservan su color): arrancan el último día con ese día de la semana hasta hoy.
+ */
+function restartDate(client, today) {
+  const [year, month, day] = String(client.creditStartDate || '').split('-').map(Number);
+  if ((client.frequency || 'weekly') !== 'weekly' || !year) return today;
+  const [ty, tm, td] = today.split('-').map(Number);
+  const start = new Date(ty, tm - 1, td);
+  start.setDate(start.getDate() - ((start.getDay() - new Date(year, month - 1, day).getDay() + 7) % 7));
+  return localDateISO(start);
+}
+
+/** Calendario nuevo desde hoy para el saldo actual. */
+function restartSchedule(client, totalDays, today) {
+  const days = Math.max(1, Math.round(Number(totalDays) || Number(client.totalDays) || 30));
+  const frequencyDays = paymentFrequencyDays[client.frequency] || 7;
+  const startDate = restartDate(client, today);
+  const installments = Math.max(1, Math.ceil(days / frequencyDays));
+  // Los abonos anteriores quedan fuera de las cuotas nuevas (ciclo −1).
+  (client.payments || []).forEach(payment => { payment.cycleIndex = -1; payment.beforeRestructure = true; });
+  Object.assign(client, {
+    creditStartDate: startDate, totalDays: days, term: `${days} días`, routeDay: 1,
+    installments, installment: Math.ceil(Number(client.balance) / installments),
+    paid: 0, paidPeriodIndexes: [], schedulePaidBaseline: 0, late: false, status: 'Al día', settledAt: null,
+  });
+}
+
+/** Financiar: suma `interest` al saldo y da un plazo nuevo de `totalDays` días desde hoy. */
+function financeCard(client, { interest, totalDays, by = 'Administrador', today = localDateISO() }) {
+  const amount = Math.max(0, Math.round(Number(interest) || 0));
+  const before = { balance: Number(client.balance), total: Number(client.total), totalDays: client.totalDays, creditStartDate: client.creditStartDate };
+  client.balance = Number(client.balance) + amount;
+  client.total = Number(client.total) + amount;
+  client.interestHistory ||= [];
+  if (amount) client.interestHistory.unshift({ date: today, amount, type: 'financiacion' });
+  restartSchedule(client, totalDays, today);
+  client.restructures ||= [];
+  client.restructures.unshift({ type: 'financiacion', date: today, at: new Date().toISOString(), by, interest: amount, before });
+  return { interest: amount, balance: client.balance };
+}
+
+/**
+ * Retanqueo: presta `extra` más a la cartulina. El saldo sube en extra + intereses; los seguros
+ * se cobran en efectivo hoy (entran a la base del día, como al entregar un préstamo).
+ * Devuelve lo que hay que registrar en la liquidación del cobro.
+ */
+function retanqueoCard(client, { extra, interest, insurance, totalDays, by = 'Administrador', today = localDateISO(), now = Date.now() }) {
+  const amount = Math.max(0, Math.round(Number(extra) || 0));
+  const interestAmount = Math.max(0, Math.round(Number(interest) || 0));
+  const insuranceAmount = Math.max(0, Math.round(Number(insurance) || 0));
+  const before = { balance: Number(client.balance), total: Number(client.total), principal: Number(client.principal), totalDays: client.totalDays, creditStartDate: client.creditStartDate };
+  client.principal = Number(client.principal || 0) + amount;
+  client.balance = Number(client.balance) + amount + interestAmount;
+  client.total = Number(client.total) + amount + interestAmount;
+  client.breakdown = `${formatMoney(client.principal)} / ${formatMoney(client.total - client.principal)}`;
+  if (insuranceAmount) {
+    client.extraInsurance ||= [];
+    client.extraInsurance.push({ date: today, ts: now, amount: insuranceAmount, reason: 'Retanqueo' });
+  }
+  restartSchedule(client, totalDays, today);
+  client.restructures ||= [];
+  client.restructures.unshift({ type: 'retanqueo', date: today, at: new Date(now).toISOString(), by, extra: amount, interest: interestAmount, insurance: insuranceAmount, before });
+  return { extra: amount, interest: interestAmount, insurance: insuranceAmount, balance: client.balance };
+}
+
 // ── js/features/admin/access-hours.js
 /**
  * features/admin/access-hours · Tarjeta «Horario de acceso de trabajadores»
@@ -2324,6 +2488,7 @@ function renderAdminRoute(routeId) {
   document.querySelector('#metric-other-expenses').value = route.otherExpenses;
   renderRouteOperations(route);
   renderDayPayments(routeId);
+  renderMondayBase(routeId);
   renderRouteEvidence(routeId);
   renderRouteReports(route);
   recalculateSettlement();
@@ -4549,14 +4714,15 @@ function refreshRouteOptions() {
  * Reinicio del día al cerrar el cobro. Lo único que pasa al día siguiente es el efectivo:
  * se convierte en la base del nuevo día. Cobros, préstamos, gastos, otros gastos, seguros
  * y efectivo entregado vuelven a 0. El sábado el efectivo se entrega, así que la base
- * del lunes arranca en 0 (el admin puede asignarla en Liquidación).
+ * del lunes arranca en 0, salvo la «Base para el lunes» que el admin asigne ese sábado.
  */
 function resetRouteDay(route, routeId, transfers = 0) {
   const computedCash = Number(route.collections || 0) + Number(route.base || 0) - Number(route.loans || 0) - Number(route.expenses || 0) - Number(route.otherExpenses || 0);
   const cash = Number(route.cashDelivered || 0) > 0 ? Number(route.cashDelivered) : Math.max(0, computedCash);
   const saturday = new Date().getDay() === 6;
   // Lo que entró por transferencia está en el banco: no pasa a la base del día siguiente.
-  const carried = saturday ? 0 : Math.max(0, cash - transfers);
+  // El sábado solo pasa la base para el lunes que haya asignado el admin.
+  const carried = saturday ? mondayBaseFor(route, localDateISO()) : Math.max(0, cash - transfers);
   route.collections = 0;
   route.loans = 0;
   route.expenses = 0;
@@ -4635,6 +4801,51 @@ function renderDayPayments(routeId) {
   document.querySelector('#day-payments-summary').textContent = rows.length ? `${rows.length} abono${rows.length === 1 ? '' : 's'} · ${formatMoney(total)}` : 'Sin abonos hoy';
 }
 
+const isSaturday = () => new Date().getDay() === 6;
+
+/** Menú «Base para el lunes»: se ve siempre, pero solo se puede cambiar los sábados. */
+function renderMondayBase(routeId) {
+  const route = routeSettlements[routeId];
+  const panel = document.querySelector('#monday-base');
+  if (!route || !panel) return;
+  const editable = isSaturday();
+  const input = document.querySelector('#monday-base-amount');
+  // Fuera del sábado se muestra la que quedó asignada el último sábado (si ya no se usó).
+  const pending = route.mondayBase?.date && (editable ? route.mondayBase.date === localDateISO() : route.mondayBase.date >= lastSaturdayISO());
+  const amount = pending ? Number(route.mondayBase.amount) || 0 : 0;
+  if (document.activeElement !== input) input.value = pending ? String(amount) : '';
+  input.disabled = !editable;
+  document.querySelector('#monday-base-save').disabled = !editable;
+  document.querySelector('#monday-base-summary').textContent = pending && amount ? formatMoney(amount) : editable ? 'Sin asignar' : 'Solo los sábados';
+}
+
+function lastSaturdayISO() {
+  const date = new Date();
+  date.setDate(date.getDate() - ((date.getDay() + 1) % 7));
+  return localDateISO(date);
+}
+
+/** Guarda la base del lunes. Si el sábado ya se cerró, la base que dejó el cierre se ajusta ya. */
+function saveMondayBase() {
+  const routeId = routeSelect.value;
+  const route = routeSettlements[routeId];
+  if (!route || !isSaturday()) { showToast('La base para el lunes solo se puede asignar los sábados.'); return; }
+  const today = localDateISO();
+  const amount = Math.max(0, Math.round(Number(document.querySelector('#monday-base-amount').value) || 0));
+  route.mondayBase = { amount, date: today, setAt: new Date().toISOString() };
+  const closedToday = route.lastClosure?.date === today && route.ledger?.[today]?.closed;
+  if (closedToday) {
+    route.base = amount;
+    route.baseBank = 0;
+    route.lastClosure.carriedBase = amount;
+    if (route.lastClosure.after) route.lastClosure.after.base = amount;
+  }
+  persistBusinessData();
+  renderAdminRoute(routeId);
+  refreshRouteOptions();
+  showToast(amount ? `Base para el lunes de ${route.name}: ${formatMoney(amount)}.` : `${route.name} arranca el lunes en ${formatMoney(0)}.`);
+}
+
 function renderRouteOperations(route) {
   if (!route) return;
   document.querySelector('#report-route-name').textContent = route.name.toLocaleUpperCase('es');
@@ -4658,6 +4869,7 @@ function recalculateSettlement() {
 
 /** Registra los listeners del módulo. Se invoca una sola vez desde app.js. */
 function __mount_settlementModule() {
+  document.querySelector('#monday-base-save').addEventListener('click', saveMondayBase);
   settlementInputs.forEach(input => input.addEventListener('input', () => {
     const field = input.dataset.settlementField;
     const amount = Number(input.value);
@@ -4699,7 +4911,7 @@ function __mount_settlementModule() {
       renderAdminRoute(routeId);
       refreshRouteOptions();
       const nextBase = reset.saturday
-        ? `Sábado: el efectivo (${formatMoney(reset.cash)}) se entrega y la base del lunes arranca en ${formatMoney(0)}.`
+        ? `Sábado: el efectivo (${formatMoney(reset.cash)}) se entrega y la base del lunes arranca en ${formatMoney(reset.carried)}.`
         : transfers
           ? `El efectivo del día (${formatMoney(reset.cash)}) menos ${formatMoney(transfers)} de transferencias pasa como base del día siguiente: ${formatMoney(reset.carried)}. El resto del resumen quedó en 0.`
           : `El efectivo del día (${formatMoney(reset.cash)}) pasa como base del día siguiente; el resto del resumen quedó en 0.`;
@@ -5363,6 +5575,8 @@ function __mount_twoFactorModule() {
 
 
 
+
+
 /** Dentro de la ficha: la «cicatriz» del historial de pagos de la cartulina. */
 function updatePaymentBehaviorUI(client) {
   const indicator = document.querySelector('#payment-behavior-indicator');
@@ -5621,6 +5835,7 @@ function openClient(clientId) {
   state.activeClient = clientId;
   document.querySelector('#detail-name').textContent = client.name;
     setClientAvatar(document.querySelector('#detail-avatar'), client);
+  paintCardColorTag(document.querySelector('#detail-card-color'), client);
   // Estado actual: si hay períodos vencidos sin pagar se muestran como «Pagos atrasados N».
   const status = document.querySelector('#detail-status');
   const current = paymentBehavior(client);
@@ -5746,6 +5961,10 @@ function renderCardActions(client) {
   const notes = [];
   if (renewed) notes.push('Esta cartulina ya fue renovada.');
   if (!room) notes.push(`La persona ya tiene ${MAX_ACTIVE_CARDS_PER_PERSON} cartulinas activas (máximo).`);
+  // Financiar y retanqueo: solo el admin y solo mientras la cartulina tenga saldo.
+  const restructurable = state.userRole === 'admin' && !cancelled;
+  document.querySelector('#finance-client').hidden = !restructurable;
+  document.querySelector('#retanqueo-client').hidden = !restructurable;
   hint.textContent = notes.join(' ');
   hint.hidden = !notes.length;
   document.querySelector('.detail-profile .eyebrow').textContent = cancelled ? 'CARTULINA CANCELADA' : 'CRÉDITO ACTIVO';
@@ -5777,7 +5996,86 @@ function renderPersonCards(clientId) {
   });
 }
 
+/** Repinta la ficha, el directorio y la liquidación después de cambiar la cartulina. */
+function afterRestructure(clientId) {
+  persistBusinessData();
+  renderClientRows(clientId);
+  filterClientCards();
+  if (routeSelect.value === clients[clientId]?.route) renderAdminRoute(routeSelect.value);
+  openClient(clientId);
+}
+
+/** Financiar: intereses por pasar los días acordados (20 % del saldo si no se escribe otro valor) y plazo nuevo. */
+function openFinanceModal() {
+  const clientId = state.activeClient;
+  const client = clients[clientId];
+  if (!client || state.userRole !== 'admin' || Number(client.balance) <= 0) return;
+  openCustomModal({
+    title: `Financiar · ${client.name}`,
+    description: `Saldo actual ${formatMoney(client.balance)}. Se le suman los intereses de financiación y arranca un plazo nuevo desde hoy. Si no cambias nada: ${FINANCE_INTEREST_PERCENT} % del saldo = ${formatMoney(percentOrAmount(client.balance, FINANCE_INTEREST_PERCENT))}.`,
+    fields: [
+      { name: 'percent', label: 'Interés de financiación (%) sobre el saldo', type: 'number', min: 0, step: 0.1, value: FINANCE_INTEREST_PERCENT, required: true },
+      { name: 'amount', label: 'O un monto exacto de interés (opcional, reemplaza el %)', money: true, thousands: true, type: 'number', min: 0, step: 1, value: '' },
+      { name: 'totalDays', label: 'Plazo nuevo (días) desde hoy', type: 'number', min: 1, step: 1, value: client.totalDays || 30, required: true },
+    ],
+    submitLabel: 'Financiar',
+    onSubmit: values => {
+      const interest = percentOrAmount(client.balance, values.percent, values.amount);
+      if (!(interest > 0)) { customModalError.textContent = 'Escribe un porcentaje o un monto mayor que cero.'; return false; }
+      financeCard(client, { interest, totalDays: values.totalDays });
+      afterRestructure(clientId);
+      showToast(`Cartulina financiada: +${formatMoney(interest)} de intereses. Saldo nuevo ${formatMoney(client.balance)}, ${client.installments} cuotas de ${formatMoney(client.installment)}.`);
+    },
+  });
+}
+
+/**
+ * Retanqueo: se le presta un monto extra antes de terminar de pagar. Al extra se le suman
+ * intereses (20 %) y se cobran seguros (10 %), salvo que se escriba otro % o un monto exacto.
+ * El préstamo sale de la liquidación de hoy y los seguros entran a la base del día.
+ */
+function openRetanqueoModal() {
+  const clientId = state.activeClient;
+  const client = clients[clientId];
+  if (!client || state.userRole !== 'admin' || Number(client.balance) <= 0) return;
+  openCustomModal({
+    title: `Retanqueo · ${client.name}`,
+    description: `Saldo actual ${formatMoney(client.balance)}. Al monto extra se le suman intereses (${RETANQUEO_INTEREST_PERCENT} %) y se cobran seguros (${GENERAL_RETANQUEO.insurancePercent} %) si no escribes otro valor. El saldo nuevo arranca un plazo nuevo desde hoy.`,
+    fields: [
+      { name: 'extra', label: 'Monto extra que se le presta', money: true, thousands: true, type: 'number', min: 1, step: 1, value: '', required: true },
+      { name: 'interestPercent', label: 'Interés sobre el extra (%)', type: 'number', min: 0, step: 0.1, value: RETANQUEO_INTEREST_PERCENT, required: true },
+      { name: 'interestAmount', label: 'O un monto exacto de interés (opcional, reemplaza el %)', money: true, thousands: true, type: 'number', min: 0, step: 1, value: '' },
+      { name: 'insurancePercent', label: 'Seguros sobre el extra (%)', type: 'number', min: 0, step: 0.1, value: GENERAL_RETANQUEO.insurancePercent, required: true },
+      { name: 'insuranceAmount', label: 'O un monto exacto de seguros (opcional, reemplaza el %)', money: true, thousands: true, type: 'number', min: 0, step: 1, value: '' },
+      { name: 'totalDays', label: 'Plazo nuevo (días) desde hoy', type: 'number', min: 1, step: 1, value: client.totalDays || 30, required: true },
+    ],
+    submitLabel: 'Hacer retanqueo',
+    onSubmit: values => {
+      const extra = Math.round(Number(values.extra) || 0);
+      if (extra <= 0) { customModalError.textContent = 'Escribe el monto extra que se le presta.'; return false; }
+      const interest = percentOrAmount(extra, values.interestPercent, values.interestAmount);
+      const insurance = percentOrAmount(extra, values.insurancePercent, values.insuranceAmount);
+      if (insurance > extra) { customModalError.textContent = 'Los seguros no pueden superar el monto extra.'; return false; }
+      retanqueoCard(client, { extra, interest, insurance, totalDays: values.totalDays });
+      // Liquidación del cobro: el extra sale hoy como préstamo y los seguros entran a la base.
+      const route = routeSettlements[client.route];
+      if (route) {
+        route.loans = Number(route.loans || 0) + extra;
+        route.base = Number(route.base || 0) + insurance;
+        route.monthlyInsurance = (Number(route.monthlyInsurance) || 0) + insurance;
+        route.loansNew ||= []; route.loansEntered ||= [];
+        route.loansNew.unshift({ name: `${client.name} (retanqueo)`, clientId, amount: extra });
+        route.loansEntered.unshift({ name: `${client.name} (retanqueo)`, clientId, amount: extra + interest });
+      }
+      afterRestructure(clientId);
+      showToast(`Retanqueo de ${formatMoney(extra)}: intereses ${formatMoney(interest)}, seguros ${formatMoney(insurance)}. Saldo nuevo ${formatMoney(client.balance)}.`);
+    },
+  });
+}
+
 function __mount_clientDetailModule() {
+  document.querySelector('#finance-client').addEventListener('click', openFinanceModal);
+  document.querySelector('#retanqueo-client').addEventListener('click', openRetanqueoModal);
   document.querySelector('#client-capture-location').addEventListener('click', captureClientLocation);
   // La ubicación llegó tarde (reintento tras crear la cartulina): se actualiza la ficha abierta.
   document.addEventListener('edgecredit:client-location', event => {
@@ -5959,6 +6257,7 @@ function __mount_clientDetailModule() {
 
 
 
+
 /**
  * Agrega las filas del cliente en el Inicio y el directorio. Al cargar muchos clientes de una vez
  * se pasa `{ refresh: false }` y se filtra una sola vez al final (filtrar por cada uno es muy lento).
@@ -6017,7 +6316,12 @@ function setClientAvatar(element, client) {
 
 function renderClientRows(clientId) {
   const client = clients[clientId];
-  document.querySelectorAll(`.client-row[data-client="${clientId}"] .client-main strong`).forEach(node => { node.textContent = client.name; });
+  document.querySelectorAll(`.client-row[data-client="${clientId}"] .client-main > strong`).forEach(node => {
+    // Indicador del color de la cartulina (día de pago / quincenal / mensual) junto al nombre.
+    const tag = node.querySelector('.card-color-tag') || Object.assign(document.createElement('span'), { className: 'card-color-tag' });
+    paintCardColorTag(tag, client);
+    node.replaceChildren(document.createTextNode(client.name), tag);
+  });
   document.querySelectorAll(`.client-row[data-client="${clientId}"] .client-avatar`).forEach(node => setClientAvatar(node, client));
   document.querySelectorAll(`.client-row[data-client="${clientId}"]`).forEach(row => {
     row.dataset.route = client.route;

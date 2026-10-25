@@ -35,6 +35,36 @@
   font-weight: 600;
 }
 
+/* Color de la cartulina (día de pago / quincenal / mensual): solo un indicador, no pinta la tarjeta. */
+.card-color-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: 8px;
+  padding: 1px 8px 1px 6px;
+  border: 1px solid color-mix(in srgb, var(--card-color) 55%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--card-color) 14%, transparent);
+  color: var(--text, inherit);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.5;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+.card-color-tag::before {
+  content: '';
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--card-color);
+}
+
+.card-color-tag[hidden] {
+  display: none;
+}
+
 .client-main>span {
   overflow: hidden;
   color: var(--muted);

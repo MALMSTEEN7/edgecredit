@@ -21,6 +21,8 @@ import { LOCATION_FAILURE_LABELS, hasCoordinates, isApproximateLocation, locateD
 import { clientInsurance, generalInsuranceAmount, resolveInsurance } from '../../domain/insurance.js';
 import { canRenew, onClientRenewed } from './new-client.js';
 import { MAX_ACTIVE_CARDS_PER_PERSON, activeCardIds, canAddCard, personCardIds } from '../../domain/person-cards.js';
+import { paintCardColorTag } from '../../domain/card-color.js';
+import { FINANCE_INTEREST_PERCENT, GENERAL_RETANQUEO, RETANQUEO_INTEREST_PERCENT, financeCard, percentOrAmount, retanqueoCard } from '../../domain/restructure.js';
 
 /** Dentro de la ficha: la «cicatriz» del historial de pagos de la cartulina. */
 function updatePaymentBehaviorUI(client) {
@@ -280,6 +282,7 @@ export function openClient(clientId) {
   state.activeClient = clientId;
   document.querySelector('#detail-name').textContent = client.name;
     setClientAvatar(document.querySelector('#detail-avatar'), client);
+  paintCardColorTag(document.querySelector('#detail-card-color'), client);
   // Estado actual: si hay períodos vencidos sin pagar se muestran como «Pagos atrasados N».
   const status = document.querySelector('#detail-status');
   const current = paymentBehavior(client);
@@ -405,6 +408,10 @@ function renderCardActions(client) {
   const notes = [];
   if (renewed) notes.push('Esta cartulina ya fue renovada.');
   if (!room) notes.push(`La persona ya tiene ${MAX_ACTIVE_CARDS_PER_PERSON} cartulinas activas (máximo).`);
+  // Financiar y retanqueo: solo el admin y solo mientras la cartulina tenga saldo.
+  const restructurable = state.userRole === 'admin' && !cancelled;
+  document.querySelector('#finance-client').hidden = !restructurable;
+  document.querySelector('#retanqueo-client').hidden = !restructurable;
   hint.textContent = notes.join(' ');
   hint.hidden = !notes.length;
   document.querySelector('.detail-profile .eyebrow').textContent = cancelled ? 'CARTULINA CANCELADA' : 'CRÉDITO ACTIVO';
@@ -436,7 +443,86 @@ function renderPersonCards(clientId) {
   });
 }
 
+/** Repinta la ficha, el directorio y la liquidación después de cambiar la cartulina. */
+function afterRestructure(clientId) {
+  persistBusinessData();
+  renderClientRows(clientId);
+  filterClientCards();
+  if (routeSelect.value === clients[clientId]?.route) renderAdminRoute(routeSelect.value);
+  openClient(clientId);
+}
+
+/** Financiar: intereses por pasar los días acordados (20 % del saldo si no se escribe otro valor) y plazo nuevo. */
+function openFinanceModal() {
+  const clientId = state.activeClient;
+  const client = clients[clientId];
+  if (!client || state.userRole !== 'admin' || Number(client.balance) <= 0) return;
+  openCustomModal({
+    title: `Financiar · ${client.name}`,
+    description: `Saldo actual ${formatMoney(client.balance)}. Se le suman los intereses de financiación y arranca un plazo nuevo desde hoy. Si no cambias nada: ${FINANCE_INTEREST_PERCENT} % del saldo = ${formatMoney(percentOrAmount(client.balance, FINANCE_INTEREST_PERCENT))}.`,
+    fields: [
+      { name: 'percent', label: 'Interés de financiación (%) sobre el saldo', type: 'number', min: 0, step: 0.1, value: FINANCE_INTEREST_PERCENT, required: true },
+      { name: 'amount', label: 'O un monto exacto de interés (opcional, reemplaza el %)', money: true, thousands: true, type: 'number', min: 0, step: 1, value: '' },
+      { name: 'totalDays', label: 'Plazo nuevo (días) desde hoy', type: 'number', min: 1, step: 1, value: client.totalDays || 30, required: true },
+    ],
+    submitLabel: 'Financiar',
+    onSubmit: values => {
+      const interest = percentOrAmount(client.balance, values.percent, values.amount);
+      if (!(interest > 0)) { customModalError.textContent = 'Escribe un porcentaje o un monto mayor que cero.'; return false; }
+      financeCard(client, { interest, totalDays: values.totalDays });
+      afterRestructure(clientId);
+      showToast(`Cartulina financiada: +${formatMoney(interest)} de intereses. Saldo nuevo ${formatMoney(client.balance)}, ${client.installments} cuotas de ${formatMoney(client.installment)}.`);
+    },
+  });
+}
+
+/**
+ * Retanqueo: se le presta un monto extra antes de terminar de pagar. Al extra se le suman
+ * intereses (20 %) y se cobran seguros (10 %), salvo que se escriba otro % o un monto exacto.
+ * El préstamo sale de la liquidación de hoy y los seguros entran a la base del día.
+ */
+function openRetanqueoModal() {
+  const clientId = state.activeClient;
+  const client = clients[clientId];
+  if (!client || state.userRole !== 'admin' || Number(client.balance) <= 0) return;
+  openCustomModal({
+    title: `Retanqueo · ${client.name}`,
+    description: `Saldo actual ${formatMoney(client.balance)}. Al monto extra se le suman intereses (${RETANQUEO_INTEREST_PERCENT} %) y se cobran seguros (${GENERAL_RETANQUEO.insurancePercent} %) si no escribes otro valor. El saldo nuevo arranca un plazo nuevo desde hoy.`,
+    fields: [
+      { name: 'extra', label: 'Monto extra que se le presta', money: true, thousands: true, type: 'number', min: 1, step: 1, value: '', required: true },
+      { name: 'interestPercent', label: 'Interés sobre el extra (%)', type: 'number', min: 0, step: 0.1, value: RETANQUEO_INTEREST_PERCENT, required: true },
+      { name: 'interestAmount', label: 'O un monto exacto de interés (opcional, reemplaza el %)', money: true, thousands: true, type: 'number', min: 0, step: 1, value: '' },
+      { name: 'insurancePercent', label: 'Seguros sobre el extra (%)', type: 'number', min: 0, step: 0.1, value: GENERAL_RETANQUEO.insurancePercent, required: true },
+      { name: 'insuranceAmount', label: 'O un monto exacto de seguros (opcional, reemplaza el %)', money: true, thousands: true, type: 'number', min: 0, step: 1, value: '' },
+      { name: 'totalDays', label: 'Plazo nuevo (días) desde hoy', type: 'number', min: 1, step: 1, value: client.totalDays || 30, required: true },
+    ],
+    submitLabel: 'Hacer retanqueo',
+    onSubmit: values => {
+      const extra = Math.round(Number(values.extra) || 0);
+      if (extra <= 0) { customModalError.textContent = 'Escribe el monto extra que se le presta.'; return false; }
+      const interest = percentOrAmount(extra, values.interestPercent, values.interestAmount);
+      const insurance = percentOrAmount(extra, values.insurancePercent, values.insuranceAmount);
+      if (insurance > extra) { customModalError.textContent = 'Los seguros no pueden superar el monto extra.'; return false; }
+      retanqueoCard(client, { extra, interest, insurance, totalDays: values.totalDays });
+      // Liquidación del cobro: el extra sale hoy como préstamo y los seguros entran a la base.
+      const route = routeSettlements[client.route];
+      if (route) {
+        route.loans = Number(route.loans || 0) + extra;
+        route.base = Number(route.base || 0) + insurance;
+        route.monthlyInsurance = (Number(route.monthlyInsurance) || 0) + insurance;
+        route.loansNew ||= []; route.loansEntered ||= [];
+        route.loansNew.unshift({ name: `${client.name} (retanqueo)`, clientId, amount: extra });
+        route.loansEntered.unshift({ name: `${client.name} (retanqueo)`, clientId, amount: extra + interest });
+      }
+      afterRestructure(clientId);
+      showToast(`Retanqueo de ${formatMoney(extra)}: intereses ${formatMoney(interest)}, seguros ${formatMoney(insurance)}. Saldo nuevo ${formatMoney(client.balance)}.`);
+    },
+  });
+}
+
 export function mount() {
+  document.querySelector('#finance-client').addEventListener('click', openFinanceModal);
+  document.querySelector('#retanqueo-client').addEventListener('click', openRetanqueoModal);
   document.querySelector('#client-capture-location').addEventListener('click', captureClientLocation);
   // La ubicación llegó tarde (reintento tras crear la cartulina): se actualiza la ficha abierta.
   document.addEventListener('edgecredit:client-location', event => {

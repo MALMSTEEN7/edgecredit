@@ -5,7 +5,7 @@
 import { adminFeedback, routeSelect, settlementInputs } from '../../core/dom.js';
 import { state } from '../../core/state.js';
 import { clients, persistBusinessData, routeSettlements } from '../../core/store.js';
-import { carriedBase, recordClosure } from '../../domain/ledger.js';
+import { carriedBase, mondayBaseFor, recordClosure } from '../../domain/ledger.js';
 import { insuranceCollectedOn } from '../../domain/insurance.js';
 import { personCardIds } from '../../domain/person-cards.js';
 import { localDateISO } from '../../shared/dates.js';
@@ -50,14 +50,15 @@ export function refreshRouteOptions() {
  * Reinicio del día al cerrar el cobro. Lo único que pasa al día siguiente es el efectivo:
  * se convierte en la base del nuevo día. Cobros, préstamos, gastos, otros gastos, seguros
  * y efectivo entregado vuelven a 0. El sábado el efectivo se entrega, así que la base
- * del lunes arranca en 0 (el admin puede asignarla en Liquidación).
+ * del lunes arranca en 0, salvo la «Base para el lunes» que el admin asigne ese sábado.
  */
 function resetRouteDay(route, routeId, transfers = 0) {
   const computedCash = Number(route.collections || 0) + Number(route.base || 0) - Number(route.loans || 0) - Number(route.expenses || 0) - Number(route.otherExpenses || 0);
   const cash = Number(route.cashDelivered || 0) > 0 ? Number(route.cashDelivered) : Math.max(0, computedCash);
   const saturday = new Date().getDay() === 6;
   // Lo que entró por transferencia está en el banco: no pasa a la base del día siguiente.
-  const carried = saturday ? 0 : Math.max(0, cash - transfers);
+  // El sábado solo pasa la base para el lunes que haya asignado el admin.
+  const carried = saturday ? mondayBaseFor(route, localDateISO()) : Math.max(0, cash - transfers);
   route.collections = 0;
   route.loans = 0;
   route.expenses = 0;
@@ -136,6 +137,51 @@ export function renderDayPayments(routeId) {
   document.querySelector('#day-payments-summary').textContent = rows.length ? `${rows.length} abono${rows.length === 1 ? '' : 's'} · ${formatMoney(total)}` : 'Sin abonos hoy';
 }
 
+const isSaturday = () => new Date().getDay() === 6;
+
+/** Menú «Base para el lunes»: se ve siempre, pero solo se puede cambiar los sábados. */
+export function renderMondayBase(routeId) {
+  const route = routeSettlements[routeId];
+  const panel = document.querySelector('#monday-base');
+  if (!route || !panel) return;
+  const editable = isSaturday();
+  const input = document.querySelector('#monday-base-amount');
+  // Fuera del sábado se muestra la que quedó asignada el último sábado (si ya no se usó).
+  const pending = route.mondayBase?.date && (editable ? route.mondayBase.date === localDateISO() : route.mondayBase.date >= lastSaturdayISO());
+  const amount = pending ? Number(route.mondayBase.amount) || 0 : 0;
+  if (document.activeElement !== input) input.value = pending ? String(amount) : '';
+  input.disabled = !editable;
+  document.querySelector('#monday-base-save').disabled = !editable;
+  document.querySelector('#monday-base-summary').textContent = pending && amount ? formatMoney(amount) : editable ? 'Sin asignar' : 'Solo los sábados';
+}
+
+function lastSaturdayISO() {
+  const date = new Date();
+  date.setDate(date.getDate() - ((date.getDay() + 1) % 7));
+  return localDateISO(date);
+}
+
+/** Guarda la base del lunes. Si el sábado ya se cerró, la base que dejó el cierre se ajusta ya. */
+function saveMondayBase() {
+  const routeId = routeSelect.value;
+  const route = routeSettlements[routeId];
+  if (!route || !isSaturday()) { showToast('La base para el lunes solo se puede asignar los sábados.'); return; }
+  const today = localDateISO();
+  const amount = Math.max(0, Math.round(Number(document.querySelector('#monday-base-amount').value) || 0));
+  route.mondayBase = { amount, date: today, setAt: new Date().toISOString() };
+  const closedToday = route.lastClosure?.date === today && route.ledger?.[today]?.closed;
+  if (closedToday) {
+    route.base = amount;
+    route.baseBank = 0;
+    route.lastClosure.carriedBase = amount;
+    if (route.lastClosure.after) route.lastClosure.after.base = amount;
+  }
+  persistBusinessData();
+  renderAdminRoute(routeId);
+  refreshRouteOptions();
+  showToast(amount ? `Base para el lunes de ${route.name}: ${formatMoney(amount)}.` : `${route.name} arranca el lunes en ${formatMoney(0)}.`);
+}
+
 export function renderRouteOperations(route) {
   if (!route) return;
   document.querySelector('#report-route-name').textContent = route.name.toLocaleUpperCase('es');
@@ -159,6 +205,7 @@ export function recalculateSettlement() {
 
 /** Registra los listeners del módulo. Se invoca una sola vez desde app.js. */
 export function mount() {
+  document.querySelector('#monday-base-save').addEventListener('click', saveMondayBase);
   settlementInputs.forEach(input => input.addEventListener('input', () => {
     const field = input.dataset.settlementField;
     const amount = Number(input.value);
@@ -200,7 +247,7 @@ export function mount() {
       renderAdminRoute(routeId);
       refreshRouteOptions();
       const nextBase = reset.saturday
-        ? `Sábado: el efectivo (${formatMoney(reset.cash)}) se entrega y la base del lunes arranca en ${formatMoney(0)}.`
+        ? `Sábado: el efectivo (${formatMoney(reset.cash)}) se entrega y la base del lunes arranca en ${formatMoney(reset.carried)}.`
         : transfers
           ? `El efectivo del día (${formatMoney(reset.cash)}) menos ${formatMoney(transfers)} de transferencias pasa como base del día siguiente: ${formatMoney(reset.carried)}. El resto del resumen quedó en 0.`
           : `El efectivo del día (${formatMoney(reset.cash)}) pasa como base del día siguiente; el resto del resumen quedó en 0.`;

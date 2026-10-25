@@ -48,22 +48,38 @@ function collectedTs(client, clientId) {
 }
 
 /**
- * Seguros cobrados en una ruta en la fecha indicada (cartulinas entregadas ese día).
- * `sinceTs`: si el cobro ya se cerró hoy, solo cuenta lo cobrado después del cierre.
- * Las cartulinas migradas del sistema anterior no cuentan: ese seguro se cobró allá.
+ * Seguros cobrados en una cartulina en una fecha: los de la entrega y los de cada retanqueo
+ * (`extraInsurance`). Las cartulinas migradas del sistema anterior no cuentan su seguro de
+ * entrega (se cobró allá), pero sí los retanqueos hechos en EdgeCredit.
  */
-export function insuranceCollectedOn(clients, routeId, dateISO, sinceTs = 0) {
-  return Object.entries(clients).reduce((sum, [clientId, client]) => {
-    if (!client || client.route !== routeId || client.insuranceCollectedAt !== dateISO || client.importedFrom) return sum;
-    if (sinceTs && collectedTs(client, clientId) <= sinceTs) return sum;
-    return { total: sum.total + (Number(client.insuranceAmount) || 0), count: sum.count + 1 };
-  }, { total: 0, count: 0 });
+function insuranceEntriesOf(client, clientId, dateISO) {
+  const entries = [];
+  if (client.insuranceCollectedAt === dateISO && !client.importedFrom) {
+    entries.push({ date: dateISO, ts: collectedTs(client, clientId) || Date.now(), amount: Number(client.insuranceAmount) || 0 });
+  }
+  (client.extraInsurance || []).forEach(extra => {
+    if (extra.date === dateISO && Number(extra.amount) > 0) entries.push({ date: dateISO, ts: Number(extra.ts) || Date.now(), amount: Number(extra.amount) });
+  });
+  return entries;
 }
 
-/** Seguros cobrados hoy (aún sin cierre) como movimientos individuales con su hora. */
-export function liveInsuranceEntries(clients, routeId, dateISO, sinceTs = 0) {
+/**
+ * Seguros cobrados en una ruta en la fecha indicada (cartulinas entregadas o retanqueadas ese día).
+ * `sinceTs`: si el cobro ya se cerró hoy, solo cuenta lo cobrado después del cierre.
+ */
+export function insuranceCollectedOn(clients, routeId, dateISO, sinceTs = 0) {
+  return routeInsuranceEntries(clients, routeId, dateISO, sinceTs)
+    .reduce((sum, entry) => ({ total: sum.total + entry.amount, count: sum.count + 1 }), { total: 0, count: 0 });
+}
+
+function routeInsuranceEntries(clients, routeId, dateISO, sinceTs) {
   return Object.entries(clients)
-    .filter(([, client]) => client && client.route === routeId && client.insuranceCollectedAt === dateISO && Number(client.insuranceAmount) > 0 && !client.importedFrom)
-    .map(([clientId, client]) => ({ date: dateISO, ts: collectedTs(client, clientId) || Date.now(), amount: Number(client.insuranceAmount) }))
+    .filter(([, client]) => client && client.route === routeId)
+    .flatMap(([clientId, client]) => insuranceEntriesOf(client, clientId, dateISO))
     .filter(entry => !sinceTs || entry.ts > sinceTs);
+}
+
+/** Seguros cobrados en la fecha (aún sin cierre) como movimientos individuales con su hora. */
+export function liveInsuranceEntries(clients, routeId, dateISO, sinceTs = 0) {
+  return routeInsuranceEntries(clients, routeId, dateISO, sinceTs).filter(entry => entry.amount > 0);
 }

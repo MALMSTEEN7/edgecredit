@@ -162,7 +162,8 @@ export function closedDayCash(record) {
  * Base que le toca hoy a la ruta: el efectivo del último día cerrado antes de hoy (sirve
  * también para los días traídos del Excel), sin los abonos de ese día que llegaron por
  * transferencia: esa plata está en el banco, no en la mano del trabajador. Si ese día fue
- * sábado el efectivo se entregó y la base arranca en 0, igual que al cerrar en Liquidación.
+ * sábado el efectivo se entregó y la base arranca en 0 (o en la base para el lunes que el
+ * admin asignó ese sábado), igual que al cerrar en Liquidación.
  * `transfersOn(fecha)` da las transferencias de un cierre que no las guardó. Devuelve null
  * sin cierres previos.
  */
@@ -174,7 +175,16 @@ export function carriedBase(route, today = localDateISO(), transfersOn = () => 0
   const saturday = new Date(year, month - 1, day).getDay() === 6;
   const stored = route.ledger[last].transfers;
   const transfers = Number(stored ?? transfersOn(last)) || 0;
-  return { date: last, amount: saturday ? 0 : Math.max(0, closedDayCash(dayRecord(route, last)) - transfers), transfers, saturday };
+  const amount = saturday ? mondayBaseFor(route, last) : Math.max(0, closedDayCash(dayRecord(route, last)) - transfers);
+  return { date: last, amount, transfers, saturday };
+}
+
+/**
+ * Base para el lunes que el admin dejó asignada el sábado `saturdayISO` (0 si no dejó ninguna).
+ * Es la única forma de que un trabajador empiece la semana con base.
+ */
+export function mondayBaseFor(route, saturdayISO) {
+  return route?.mondayBase?.date === saturdayISO ? Math.max(0, Number(route.mondayBase.amount) || 0) : 0;
 }
 
 /**

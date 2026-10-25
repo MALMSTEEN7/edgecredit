@@ -34,7 +34,7 @@
   <link rel="icon" href="icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="icon-192.png">
   <meta name="apple-mobile-web-app-capable" content="yes">
-  <link rel="stylesheet" id="app-styles" href="dist/styles.bundle.css?v=ab4148f913">
+  <link rel="stylesheet" id="app-styles" href="dist/styles.bundle.css?v=2efdf15571">
 </head>
 <body class="login-active">
   <section class="login-gateway" id="login-gateway" aria-labelledby="login-title">
@@ -158,11 +158,13 @@
       <section class="view client-detail" id="detalle-cliente" aria-labelledby="detail-name" hidden>
         <button class="back-button" type="button" data-back>‹ <span>Volver a clientes</span></button>
         <div class="detail-header">
-          <div class="detail-profile"><span class="client-avatar avatar-violet" id="detail-avatar">MR</span><div><p class="eyebrow">CRÉDITO ACTIVO</p><h1 id="detail-name">Cliente</h1><span class="status status-current" id="detail-status">Al día</span><span class="payment-behavior" id="payment-behavior-indicator"><i class="behavior-dot"></i><span>Buen pagador</span></span></div></div>
+          <div class="detail-profile"><span class="client-avatar avatar-violet" id="detail-avatar">MR</span><div><p class="eyebrow">CRÉDITO ACTIVO</p><h1 id="detail-name">Cliente</h1><span class="status status-current" id="detail-status">Al día</span><span class="card-color-tag" id="detail-card-color" hidden></span><span class="payment-behavior" id="payment-behavior-indicator"><i class="behavior-dot"></i><span>Buen pagador</span></span></div></div>
           <div class="detail-quick-actions" role="group" aria-label="Acciones de la cartulina">
             <button class="primary-button detail-pay-button" type="button" data-open-payment>Registrar Pago <span aria-hidden="true">→</span></button>
             <button class="secondary-button detail-action-button detail-renew-button" id="renew-client" type="button" aria-describedby="renew-hint"><span class="detail-action-label"><span aria-hidden="true">↻</span> Renovar crédito</span><small class="detail-action-sub" id="renew-pending" hidden></small></button>
             <button class="secondary-button detail-action-button" id="extra-card-client" type="button"><span class="detail-action-label"><span aria-hidden="true">＋</span> Otra cartulina</span></button>
+            <button class="secondary-button detail-action-button" id="finance-client" type="button" hidden><span class="detail-action-label"><span aria-hidden="true">%</span> Financiar</span><small class="detail-action-sub">Intereses por pasar el plazo</small></button>
+            <button class="secondary-button detail-action-button" id="retanqueo-client" type="button" hidden><span class="detail-action-label"><span aria-hidden="true">⇡</span> Retanqueo</span><small class="detail-action-sub">Prestar más sobre esta cartulina</small></button>
             <p class="detail-actions-hint" id="renew-hint"></p>
           </div>
         </div>
@@ -243,6 +245,17 @@
           </div>
           <p class="day-payments-empty" id="day-payments-empty">Todavía no hay abonos ingresados hoy en esta ruta.</p>
         </section>
+        <details class="monday-base" id="monday-base">
+          <summary><span>Base para el lunes</span><small id="monday-base-summary">Sin asignar</small></summary>
+          <div class="monday-base-body">
+            <p id="monday-base-note">El sábado se entrega el efectivo de la semana y el lunes arranca en $ 0. Si el trabajador se queda con base del sábado al lunes, asígnala aquí. Solo se puede cambiar los sábados.</p>
+            <div class="monday-base-row">
+              <label for="monday-base-amount">Base del lunes</label>
+              <div class="amount-input-wrap"><span>$</span><input data-money data-money-thousands id="monday-base-amount" type="number" inputmode="decimal" min="0" step="1" placeholder="0"></div>
+              <button class="primary-button" id="monday-base-save" type="button">Guardar base</button>
+            </div>
+          </div>
+        </details>
         <div class="admin-actions"><p id="reconciliation-formula">Cobro + Base - Préstamos - Gastos - Efectivo - Otros Gastos</p><button class="primary-button close-route-button" id="verify-close-route" type="button">Verificar y Cerrar Ruta <span aria-hidden="true">→</span></button><p class="admin-feedback" id="admin-feedback" aria-live="polite"></p></div>
       </section>
       <section class="admin-content admin-section-panel client-map-panel" data-admin-panel="map" aria-labelledby="client-map-title" hidden>
@@ -479,7 +492,7 @@
     // al cambiar el sello, el navegador descarga el JS/CSS nuevo en vez de usar su caché.
     // Para desarrollar con los módulos sueltos, abre index.html?dev desde un servidor local.
     (() => {
-      const APP_VERSION = 'ab4148f913';
+      const APP_VERSION = '2efdf15571';
       const dev = new URLSearchParams(location.search).has('dev') && location.protocol !== 'file:';
       if (dev) {
         document.getElementById('app-styles').href = 'styles.css';

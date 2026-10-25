@@ -16,6 +16,7 @@ import { openCustomModal } from '../../ui/custom-modal.js';
 import { showView } from '../../ui/navigation.js';
 import { renderHomeHeader, renderHomeRowActions } from '../worker/home.js';
 import { personCardIds } from '../../domain/person-cards.js';
+import { paintCardColorTag } from '../../domain/card-color.js';
 
 /**
  * Agrega las filas del cliente en el Inicio y el directorio. Al cargar muchos clientes de una vez
@@ -75,7 +76,12 @@ export function setClientAvatar(element, client) {
 
 export function renderClientRows(clientId) {
   const client = clients[clientId];
-  document.querySelectorAll(`.client-row[data-client="${clientId}"] .client-main strong`).forEach(node => { node.textContent = client.name; });
+  document.querySelectorAll(`.client-row[data-client="${clientId}"] .client-main > strong`).forEach(node => {
+    // Indicador del color de la cartulina (día de pago / quincenal / mensual) junto al nombre.
+    const tag = node.querySelector('.card-color-tag') || Object.assign(document.createElement('span'), { className: 'card-color-tag' });
+    paintCardColorTag(tag, client);
+    node.replaceChildren(document.createTextNode(client.name), tag);
+  });
   document.querySelectorAll(`.client-row[data-client="${clientId}"] .client-avatar`).forEach(node => setClientAvatar(node, client));
   document.querySelectorAll(`.client-row[data-client="${clientId}"]`).forEach(row => {
     row.dataset.route = client.route;
