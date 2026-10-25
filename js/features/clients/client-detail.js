@@ -310,8 +310,11 @@ export function openClient(clientId) {
   const day = creditDay(client);
   document.querySelector('#route-day').textContent = `Día ${day} / ${client.totalDays} días`;
   const overdueDays = Math.max(0, day - client.totalDays);
-  document.querySelector('#route-days-label').textContent = state.userRole === 'admin' ? 'Días de mora' : 'Días restantes para finalizar';
-  document.querySelector('#route-days-left').textContent = state.userRole === 'admin' ? `${overdueDays} ${overdueDays === 1 ? 'día' : 'días'}` : `Faltan ${Math.max(0, client.totalDays - day)} días`;
+  // Admin y trabajador ven lo mismo: los días que faltan o, ya vencida, los días de mora.
+  const settled = Number(client.balance) <= 0;
+  document.querySelector('#route-days-label').textContent = settled ? 'Cartulina pagada' : overdueDays > 0 ? 'Días de mora' : 'Días restantes para finalizar';
+  document.querySelector('#route-days-left').textContent = settled ? `Pagada en ${day} ${day === 1 ? 'día' : 'días'}` : overdueDays > 0 ? `${overdueDays} ${overdueDays === 1 ? 'día' : 'días'}` : `Faltan ${Math.max(0, client.totalDays - day)} días`;
+  document.querySelector('#route-days-left').classList.toggle('is-overdue', !settled && overdueDays > 0);
   document.querySelector('#detail-installment').textContent = formatMoney(client.installment);
   document.querySelector('#detail-id').textContent = client.id;
   document.querySelector('#detail-address').textContent = client.address;
@@ -336,9 +339,43 @@ export function openClient(clientId) {
   document.querySelector('#admin-client-actions').hidden = state.userRole !== 'admin';
   refreshClientBalance();
   renderHistory(client);
+  // Al abrir desde una lista se guarda su orden para moverse con Anterior / Siguiente.
+  if (state.currentView !== 'detalle-cliente') state.cardSequence = visibleCardSequence(state.currentView);
   state.previousView = ['directorio', 'ruta-diaria', 'mapa'].includes(state.currentView) ? state.currentView : 'inicio';
+  renderCardNav(clientId);
   closeDisclosure();
   showView('detalle-cliente');
+}
+
+/** Cartulinas que se ven en la lista de la pantalla actual, en su orden. */
+function visibleCardSequence(view) {
+  const selector = view === 'ruta-diaria' ? '#route-daily-list [data-route-client]'
+    : view === 'inicio' ? '#inicio .client-row[data-client]:not([hidden])'
+      : '#directorio .client-row[data-client]:not([hidden])';
+  const ids = [...document.querySelectorAll(selector)].map(node => node.dataset.client || node.dataset.routeClient);
+  return [...new Set(ids)].filter(id => clients[id]);
+}
+
+function renderCardNav(clientId) {
+  const ids = state.cardSequence || [];
+  const position = ids.indexOf(clientId);
+  const nav = document.querySelector('#card-nav');
+  nav.hidden = position < 0 || ids.length < 2;
+  if (nav.hidden) return;
+  document.querySelector('#card-nav-position').textContent = `${position + 1} de ${ids.length}`;
+  document.querySelector('#card-prev').disabled = position === 0;
+  document.querySelector('#card-next').disabled = position === ids.length - 1;
+}
+
+/** Abre la cartulina anterior o siguiente de la lista sin volver atrás. */
+function moveToCard(step) {
+  const ids = state.cardSequence || [];
+  const next = ids[ids.indexOf(state.activeClient) + step];
+  if (!next || !clients[next]) return;
+  const back = state.previousView;
+  openClient(next);
+  state.previousView = back;
+  window.scrollTo({ top: 0 });
 }
 
 function closeDisclosure() {
@@ -586,6 +623,8 @@ function openRetanqueoModal() {
 }
 
 export function mount() {
+  document.querySelector('#card-prev').addEventListener('click', () => moveToCard(-1));
+  document.querySelector('#card-next').addEventListener('click', () => moveToCard(1));
   document.querySelector('#finance-client').addEventListener('click', openFinanceModal);
   document.querySelector('#retanqueo-client').addEventListener('click', openRetanqueoModal);
   document.querySelector('#client-capture-location').addEventListener('click', captureClientLocation);

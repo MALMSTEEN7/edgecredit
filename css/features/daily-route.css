@@ -441,3 +441,15 @@
   font-weight: 700;
   overflow-wrap: anywhere;
 }
+
+/* Aviso cuando la ruta se arma por adelantado para el siguiente día de cobro. */
+.route-plan-note {
+  margin: 4px 0 8px;
+  padding: 9px 12px;
+  border: 1px solid color-mix(in srgb, var(--primary) 45%, var(--line));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--primary) 10%, transparent);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+}

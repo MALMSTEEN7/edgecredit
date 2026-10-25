@@ -1109,3 +1109,53 @@ button.evidence-link:active {
   text-align: right;
   white-space: nowrap;
 }
+
+/* Días de mora (admin y trabajador). */
+#route-days-left.is-overdue {
+  color: var(--danger, #e53935);
+}
+
+/* Anterior / Siguiente: moverse entre las cartulinas de la lista sin volver atrás. */
+.card-nav {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: 10px;
+  margin: -12px 0 16px;
+}
+
+.card-nav[hidden] {
+  display: none;
+}
+
+.card-nav-button {
+  min-height: 40px;
+  padding: 0 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--card);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.card-nav-button:last-child {
+  justify-self: end;
+}
+
+.card-nav-button:first-child {
+  justify-self: start;
+}
+
+.card-nav-button:disabled {
+  opacity: .4;
+  cursor: default;
+}
+
+.card-nav-position {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}

@@ -20,6 +20,7 @@ export const state = {
   directoryPointerDrag: null,
   currentView: 'inicio',
   previousView: 'inicio',
+  cardSequence: [], // cartulinas de la lista desde la que se abrió la ficha (Anterior / Siguiente)
   activeClient: null,
   activeWorker: null,
   activeSettlement: null,

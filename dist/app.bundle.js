@@ -265,6 +265,7 @@ const state = {
   directoryPointerDrag: null,
   currentView: 'inicio',
   previousView: 'inicio',
+  cardSequence: [], // cartulinas de la lista desde la que se abrió la ficha (Anterior / Siguiente)
   activeClient: null,
   activeWorker: null,
   activeSettlement: null,
@@ -1916,11 +1917,18 @@ function normalizeClientSchedules() {
 
 /**
  * Días que lleva la cartulina: hoy − fecha de inicio (como el sistema anterior, que lo
- * calculaba al abrirla). Va subiendo solo cada día.
+ * calculaba al abrirla). Va subiendo solo cada día y se detiene el día en que la cartulina
+ * quedó pagada (settledAt o, si no está, el último abono).
  */
 function creditDay(client, today = localDateISO()) {
   if (!client?.creditStartDate) return Math.max(0, Number(client?.routeDay) || 0);
-  return Math.max(0, dayDifference(client.creditStartDate, today));
+  let end = today;
+  if (Number(client.balance) <= 0) {
+    const lastPayment = (client.payments || []).map(payment => String(payment.date || '')).sort().at(-1);
+    const settled = client.settledAt || lastPayment;
+    if (settled && settled < end) end = settled;
+  }
+  return Math.max(0, dayDifference(client.creditStartDate, end));
 }
 
 /** Fecha de inicio para que la cartulina lleve `day` días hoy (al corregirlo a mano). */
@@ -6144,8 +6152,11 @@ function openClient(clientId) {
   const day = creditDay(client);
   document.querySelector('#route-day').textContent = `Día ${day} / ${client.totalDays} días`;
   const overdueDays = Math.max(0, day - client.totalDays);
-  document.querySelector('#route-days-label').textContent = state.userRole === 'admin' ? 'Días de mora' : 'Días restantes para finalizar';
-  document.querySelector('#route-days-left').textContent = state.userRole === 'admin' ? `${overdueDays} ${overdueDays === 1 ? 'día' : 'días'}` : `Faltan ${Math.max(0, client.totalDays - day)} días`;
+  // Admin y trabajador ven lo mismo: los días que faltan o, ya vencida, los días de mora.
+  const settled = Number(client.balance) <= 0;
+  document.querySelector('#route-days-label').textContent = settled ? 'Cartulina pagada' : overdueDays > 0 ? 'Días de mora' : 'Días restantes para finalizar';
+  document.querySelector('#route-days-left').textContent = settled ? `Pagada en ${day} ${day === 1 ? 'día' : 'días'}` : overdueDays > 0 ? `${overdueDays} ${overdueDays === 1 ? 'día' : 'días'}` : `Faltan ${Math.max(0, client.totalDays - day)} días`;
+  document.querySelector('#route-days-left').classList.toggle('is-overdue', !settled && overdueDays > 0);
   document.querySelector('#detail-installment').textContent = formatMoney(client.installment);
   document.querySelector('#detail-id').textContent = client.id;
   document.querySelector('#detail-address').textContent = client.address;
@@ -6170,9 +6181,43 @@ function openClient(clientId) {
   document.querySelector('#admin-client-actions').hidden = state.userRole !== 'admin';
   refreshClientBalance();
   renderHistory(client);
+  // Al abrir desde una lista se guarda su orden para moverse con Anterior / Siguiente.
+  if (state.currentView !== 'detalle-cliente') state.cardSequence = visibleCardSequence(state.currentView);
   state.previousView = ['directorio', 'ruta-diaria', 'mapa'].includes(state.currentView) ? state.currentView : 'inicio';
+  renderCardNav(clientId);
   closeDisclosure();
   showView('detalle-cliente');
+}
+
+/** Cartulinas que se ven en la lista de la pantalla actual, en su orden. */
+function visibleCardSequence(view) {
+  const selector = view === 'ruta-diaria' ? '#route-daily-list [data-route-client]'
+    : view === 'inicio' ? '#inicio .client-row[data-client]:not([hidden])'
+      : '#directorio .client-row[data-client]:not([hidden])';
+  const ids = [...document.querySelectorAll(selector)].map(node => node.dataset.client || node.dataset.routeClient);
+  return [...new Set(ids)].filter(id => clients[id]);
+}
+
+function renderCardNav(clientId) {
+  const ids = state.cardSequence || [];
+  const position = ids.indexOf(clientId);
+  const nav = document.querySelector('#card-nav');
+  nav.hidden = position < 0 || ids.length < 2;
+  if (nav.hidden) return;
+  document.querySelector('#card-nav-position').textContent = `${position + 1} de ${ids.length}`;
+  document.querySelector('#card-prev').disabled = position === 0;
+  document.querySelector('#card-next').disabled = position === ids.length - 1;
+}
+
+/** Abre la cartulina anterior o siguiente de la lista sin volver atrás. */
+function moveToCard(step) {
+  const ids = state.cardSequence || [];
+  const next = ids[ids.indexOf(state.activeClient) + step];
+  if (!next || !clients[next]) return;
+  const back = state.previousView;
+  openClient(next);
+  state.previousView = back;
+  window.scrollTo({ top: 0 });
 }
 
 function closeDisclosure() {
@@ -6420,6 +6465,8 @@ function openRetanqueoModal() {
 }
 
 function __mount_clientDetailModule() {
+  document.querySelector('#card-prev').addEventListener('click', () => moveToCard(-1));
+  document.querySelector('#card-next').addEventListener('click', () => moveToCard(1));
   document.querySelector('#finance-client').addEventListener('click', openFinanceModal);
   document.querySelector('#retanqueo-client').addEventListener('click', openRetanqueoModal);
   document.querySelector('#client-capture-location').addEventListener('click', captureClientLocation);
@@ -7509,24 +7556,44 @@ function routeCardInfo(clientId) {
 }
 
 /**
- * Ruta del día: solo vale el día en que se armó. Al día siguiente queda vacía y hay que armarla
- * de nuevo. Una ruta guardada antes de que se anotara la fecha cuenta como armada hoy.
+ * Día para el que se arma la ruta: hoy, o el siguiente día de cobro si hoy es domingo o el
+ * cobro de hoy ya se verificó y cerró (así se deja lista la ruta de mañana). El domingo no se cobra.
+ */
+function routePlanDate(route = state.workerRoute, now = new Date()) {
+  const today = localDateISO(now);
+  if (now.getDay() !== 0 && routeSettlements[route]?.lastClosure?.date !== today) return today;
+  const next = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+  if (next.getDay() === 0) next.setDate(next.getDate() + 1);
+  return localDateISO(next);
+}
+
+/**
+ * Ruta del día: vale para el día en que se armó. La de un día que ya pasó se borra; la armada
+ * por adelantado para mañana se conserva al cambiar de día. Una ruta guardada antes de que se
+ * anotara la fecha cuenta como armada hoy.
  */
 function todayRouteOrder(route = state.workerRoute) {
   const order = state.dailyRouteOrder[route] || [];
   if (!order.length) return order;
   const today = localDateISO();
   state.dailyRouteDates[route] ||= today;
-  if (state.dailyRouteDates[route] === today) return order;
-  state.dailyRouteOrder[route] = [];
-  delete state.dailyRouteDates[route];
-  return state.dailyRouteOrder[route];
+  const date = state.dailyRouteDates[route];
+  if (date < today) {
+    state.dailyRouteOrder[route] = [];
+    delete state.dailyRouteDates[route];
+    return state.dailyRouteOrder[route];
+  }
+  // Con el cobro de hoy cerrado se arma la de mañana: la de hoy ya no se muestra.
+  return date === routePlanDate(route) ? order : [];
 }
 
 function setTodayRouteOrder(order, route = state.workerRoute) {
   state.dailyRouteOrder[route] = order;
-  state.dailyRouteDates[route] = localDateISO();
+  state.dailyRouteDates[route] = routePlanDate(route);
 }
+
+/** ¿Se está armando la ruta de un día que todavía no llega? */
+const planningAhead = (route = state.workerRoute) => routePlanDate(route) > localDateISO();
 
 function routeDayKey(route = state.workerRoute) {
   const date = localDateISO();
@@ -7598,7 +7665,8 @@ function statusChip(status, client) {
 function routeClientCard(clientId, mode, routeOrder = []) {
   const client = clients[clientId];
   const isDaily = mode === 'daily';
-  const status = visitStatus(clientId);
+  // En la ruta armada para mañana todavía no hay visitas: todo queda pendiente.
+  const status = planningAhead() ? 'pending' : visitStatus(clientId);
   const card = document.createElement('article');
   card.className = 'route-sort-item';
   card.classList.toggle('is-visited', isDaily && status !== 'pending');
@@ -7675,6 +7743,13 @@ function renderRouteBuilder() {
   daily.replaceChildren(...dailyOrder.map(id => routeClientCard(id, 'daily', dailyOrder)));
   if (!library.children.length) library.append(Object.assign(document.createElement('p'), { className: 'route-empty', textContent: query || routeLibraryFilter !== 'all' ? 'No se encontraron clientes.' : 'No hay cartulinas activas en esta ruta.' }));
   if (!daily.children.length) daily.append(Object.assign(document.createElement('p'), { className: 'route-empty', textContent: 'Agrega clientes desde la biblioteca para armar la ruta.' }));
+  // Título según el día que se está armando: hoy o el siguiente día de cobro.
+  const ahead = planningAhead();
+  const planDay = new Date(`${routePlanDate()}T12:00:00`).toLocaleDateString('es-CO', { weekday: 'long', day: 'numeric', month: 'short' });
+  document.querySelector('#route-daily-title').textContent = ahead ? `Ruta del ${planDay}` : 'Clientes de hoy';
+  const note = document.querySelector('#route-plan-note');
+  note.hidden = !ahead;
+  note.textContent = ahead ? `${new Date().getDay() === 0 ? 'Hoy es domingo' : 'El cobro de hoy ya se cerró'}: la ruta que armes queda lista para el ${planDay} y no se borra a medianoche.` : '';
 }
 
 function commitRouteDrop(id, sourceMode, targetMode, beforeId) {

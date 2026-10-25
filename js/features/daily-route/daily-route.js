@@ -5,7 +5,7 @@
  */
 
 import { state } from '../../core/state.js';
-import { clients, pendingRequests, persistBusinessData } from '../../core/store.js';
+import { clients, pendingRequests, persistBusinessData, routeSettlements } from '../../core/store.js';
 import { renderPendingRequests } from '../admin/pending.js';
 import { filterClientCards, renderClientRows } from '../clients/directory.js';
 import { localDate, localDateISO } from '../../shared/dates.js';
@@ -134,24 +134,44 @@ function routeCardInfo(clientId) {
 }
 
 /**
- * Ruta del día: solo vale el día en que se armó. Al día siguiente queda vacía y hay que armarla
- * de nuevo. Una ruta guardada antes de que se anotara la fecha cuenta como armada hoy.
+ * Día para el que se arma la ruta: hoy, o el siguiente día de cobro si hoy es domingo o el
+ * cobro de hoy ya se verificó y cerró (así se deja lista la ruta de mañana). El domingo no se cobra.
+ */
+export function routePlanDate(route = state.workerRoute, now = new Date()) {
+  const today = localDateISO(now);
+  if (now.getDay() !== 0 && routeSettlements[route]?.lastClosure?.date !== today) return today;
+  const next = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+  if (next.getDay() === 0) next.setDate(next.getDate() + 1);
+  return localDateISO(next);
+}
+
+/**
+ * Ruta del día: vale para el día en que se armó. La de un día que ya pasó se borra; la armada
+ * por adelantado para mañana se conserva al cambiar de día. Una ruta guardada antes de que se
+ * anotara la fecha cuenta como armada hoy.
  */
 export function todayRouteOrder(route = state.workerRoute) {
   const order = state.dailyRouteOrder[route] || [];
   if (!order.length) return order;
   const today = localDateISO();
   state.dailyRouteDates[route] ||= today;
-  if (state.dailyRouteDates[route] === today) return order;
-  state.dailyRouteOrder[route] = [];
-  delete state.dailyRouteDates[route];
-  return state.dailyRouteOrder[route];
+  const date = state.dailyRouteDates[route];
+  if (date < today) {
+    state.dailyRouteOrder[route] = [];
+    delete state.dailyRouteDates[route];
+    return state.dailyRouteOrder[route];
+  }
+  // Con el cobro de hoy cerrado se arma la de mañana: la de hoy ya no se muestra.
+  return date === routePlanDate(route) ? order : [];
 }
 
 function setTodayRouteOrder(order, route = state.workerRoute) {
   state.dailyRouteOrder[route] = order;
-  state.dailyRouteDates[route] = localDateISO();
+  state.dailyRouteDates[route] = routePlanDate(route);
 }
+
+/** ¿Se está armando la ruta de un día que todavía no llega? */
+const planningAhead = (route = state.workerRoute) => routePlanDate(route) > localDateISO();
 
 export function routeDayKey(route = state.workerRoute) {
   const date = localDateISO();
@@ -223,7 +243,8 @@ function statusChip(status, client) {
 function routeClientCard(clientId, mode, routeOrder = []) {
   const client = clients[clientId];
   const isDaily = mode === 'daily';
-  const status = visitStatus(clientId);
+  // En la ruta armada para mañana todavía no hay visitas: todo queda pendiente.
+  const status = planningAhead() ? 'pending' : visitStatus(clientId);
   const card = document.createElement('article');
   card.className = 'route-sort-item';
   card.classList.toggle('is-visited', isDaily && status !== 'pending');
@@ -300,6 +321,13 @@ export function renderRouteBuilder() {
   daily.replaceChildren(...dailyOrder.map(id => routeClientCard(id, 'daily', dailyOrder)));
   if (!library.children.length) library.append(Object.assign(document.createElement('p'), { className: 'route-empty', textContent: query || routeLibraryFilter !== 'all' ? 'No se encontraron clientes.' : 'No hay cartulinas activas en esta ruta.' }));
   if (!daily.children.length) daily.append(Object.assign(document.createElement('p'), { className: 'route-empty', textContent: 'Agrega clientes desde la biblioteca para armar la ruta.' }));
+  // Título según el día que se está armando: hoy o el siguiente día de cobro.
+  const ahead = planningAhead();
+  const planDay = new Date(`${routePlanDate()}T12:00:00`).toLocaleDateString('es-CO', { weekday: 'long', day: 'numeric', month: 'short' });
+  document.querySelector('#route-daily-title').textContent = ahead ? `Ruta del ${planDay}` : 'Clientes de hoy';
+  const note = document.querySelector('#route-plan-note');
+  note.hidden = !ahead;
+  note.textContent = ahead ? `${new Date().getDay() === 0 ? 'Hoy es domingo' : 'El cobro de hoy ya se cerró'}: la ruta que armes queda lista para el ${planDay} y no se borra a medianoche.` : '';
 }
 
 function commitRouteDrop(id, sourceMode, targetMode, beforeId) {

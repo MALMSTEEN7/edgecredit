@@ -79,11 +79,18 @@ export function normalizeClientSchedules() {
 
 /**
  * Días que lleva la cartulina: hoy − fecha de inicio (como el sistema anterior, que lo
- * calculaba al abrirla). Va subiendo solo cada día.
+ * calculaba al abrirla). Va subiendo solo cada día y se detiene el día en que la cartulina
+ * quedó pagada (settledAt o, si no está, el último abono).
  */
 export function creditDay(client, today = localDateISO()) {
   if (!client?.creditStartDate) return Math.max(0, Number(client?.routeDay) || 0);
-  return Math.max(0, dayDifference(client.creditStartDate, today));
+  let end = today;
+  if (Number(client.balance) <= 0) {
+    const lastPayment = (client.payments || []).map(payment => String(payment.date || '')).sort().at(-1);
+    const settled = client.settledAt || lastPayment;
+    if (settled && settled < end) end = settled;
+  }
+  return Math.max(0, dayDifference(client.creditStartDate, end));
 }
 
 /** Fecha de inicio para que la cartulina lleve `day` días hoy (al corregirlo a mano). */
