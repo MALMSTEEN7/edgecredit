@@ -2310,6 +2310,26 @@ function retanqueoCard(client, { extra, interest, insurance, totalDays, by = 'Ad
   return { extra: amount, interest: interestAmount, insurance: insuranceAmount, balance: client.balance };
 }
 
+/**
+ * Liquidación del cobro al hacer un retanqueo: el extra sale hoy como préstamo y los seguros
+ * entran a la base del día (como al entregar un préstamo nuevo).
+ */
+function recordRetanqueoInRoute(route, client, clientId, { extra, interest, insurance }) {
+  if (!route) return;
+  route.loans = Number(route.loans || 0) + extra;
+  route.base = Number(route.base || 0) + insurance;
+  route.monthlyInsurance = (Number(route.monthlyInsurance) || 0) + insurance;
+  route.loansNew ||= [];
+  route.loansEntered ||= [];
+  route.loansNew.unshift({ name: `${client.name} (retanqueo)`, clientId, amount: extra });
+  route.loansEntered.unshift({ name: `${client.name} (retanqueo)`, clientId, amount: extra + interest });
+}
+
+/** Solicitud pendiente de financiar o retanquear esta cartulina (o undefined). */
+function pendingRestructure(requests, clientId) {
+  return requests.find(request => request.status === 'pending' && request.clientId === clientId && (request.type === 'finance' || request.type === 'retanqueo'));
+}
+
 // ── js/features/admin/access-hours.js
 /**
  * features/admin/access-hours · Tarjeta «Horario de acceso de trabajadores»
@@ -3746,6 +3766,31 @@ function __mount_legacyImportModule() {
 
 
 
+
+const REQUEST_TITLES = { interest: 'Excepción de interés', insurance: 'Excepción de seguros', 'route-correction': 'Corrección de visita o pago', finance: 'Solicitud de financiación', retanqueo: 'Solicitud de retanqueo' };
+
+/** Lo que pidió el trabajador al financiar o retanquear, en una línea. */
+function restructureSummary(request) {
+  const p = request.params || {};
+  if (request.type === 'finance') return `Saldo ${formatMoney(p.balance)} · interés de financiación ${formatMoney(p.interest)}${p.percent != null ? ` (${p.percent} %)` : ''} · plazo nuevo ${p.totalDays} días · saldo nuevo ${formatMoney(Number(p.balance) + Number(p.interest))}`;
+  return `Saldo ${formatMoney(p.balance)} · prestar ${formatMoney(p.extra)} más · intereses ${formatMoney(p.interest)} · seguros ${formatMoney(p.insurance)} · plazo nuevo ${p.totalDays} días · saldo nuevo ${formatMoney(Number(p.balance) + Number(p.extra) + Number(p.interest))}`;
+}
+
+/** Aplica una financiación o un retanqueo aprobado con los parámetros del trabajador. */
+function applyRestructureRequest(request) {
+  const client = clients[request.clientId];
+  const p = request.params || {};
+  if (!client || Number(client.balance) <= 0) return 'La cartulina ya no tiene saldo: no se puede aplicar.';
+  const by = `Administrador (solicitó ${request.workerName})`;
+  if (request.type === 'finance') financeCard(client, { interest: Number(p.interest), totalDays: Number(p.totalDays), by });
+  else {
+    const values = { extra: Number(p.extra), interest: Number(p.interest), insurance: Number(p.insurance) };
+    retanqueoCard(client, { ...values, totalDays: Number(p.totalDays), by });
+    recordRetanqueoInRoute(routeSettlements[client.route], client, request.clientId, values);
+  }
+  return '';
+}
+
 function renderPendingRequests() {
   pendingList.replaceChildren();
   const selectedRoute = routeSelect.value;
@@ -3763,12 +3808,12 @@ function renderPendingRequests() {
     card.className = 'pending-card';
     const copy = document.createElement('div');
     const title = document.createElement('h3');
-    title.textContent = request.type === 'interest' ? 'Excepción de interés' : request.type === 'insurance' ? 'Excepción de seguros' : 'Corrección de visita o pago';
+    title.textContent = REQUEST_TITLES[request.type] || 'Solicitud';
     const details = document.createElement('p');
     details.textContent = `${request.clientName} · ${routeSettlements[request.routeId || routeKey(request.route)]?.name || request.route} · Solicitó ${request.workerName}`;
     const value = document.createElement('p');
     value.className = 'pending-comment';
-    value.textContent = `${request.type === 'route-correction' ? 'Motivo enviado' : 'Acuerdo informado'}: ${request.comment || 'Sin comentario'}`;
+    value.textContent = request.type === 'finance' || request.type === 'retanqueo' ? restructureSummary(request) : `${request.type === 'route-correction' ? 'Motivo enviado' : 'Acuerdo informado'}: ${request.comment || 'Sin comentario'}`;
     copy.append(title, details, value);
     const actions = document.createElement('div');
     actions.className = 'pending-actions';
@@ -3789,7 +3834,12 @@ function renderPendingRequests() {
 function resolvePendingRequest(requestId, approved, approvedValue) {
   const request = pendingRequests.find(item => item.id === requestId && item.status === 'pending');
   if (!request) return;
-  if (approved && request.type === 'route-correction') {
+  if (approved && (request.type === 'finance' || request.type === 'retanqueo')) {
+    const error = applyRestructureRequest(request);
+    if (error) { showToast(error); return; }
+    request.status = 'approved';
+    request.resolvedAt = new Date().toISOString();
+  } else if (approved && request.type === 'route-correction') {
     const client = clients[request.clientId];
     if (client) {
       const key = `${routeKey(request.routeId || client.route)}:${request.visitDate}`;
@@ -3832,6 +3882,11 @@ function resolvePendingRequest(requestId, approved, approvedValue) {
   } else request.status = 'rejected';
   persistBusinessData();
   renderPendingRequests();
+  if (request.type === 'finance' || request.type === 'retanqueo') {
+    renderClientRows(request.clientId);
+    if (request.clientId === state.activeClient && state.currentView === 'detalle-cliente') openClient(request.clientId);
+    renderAdminRoute(routeSelect.value);
+  }
   if (request.type === 'route-correction') {
     renderRouteBuilder();
     renderClientRows(request.clientId);
@@ -3853,6 +3908,15 @@ function __mount_pendingModule() {
     if (pendingAction === 'approve') {
       const request = pendingRequests.find(item => item.id === pendingId);
       if (!request) return;
+      if (request.type === 'finance' || request.type === 'retanqueo') {
+        openCustomModal({
+          title: `Aprobar ${request.type === 'finance' ? 'financiación' : 'retanqueo'} · ${request.clientName}`,
+          description: `${request.workerName} lo solicitó con estos valores: ${restructureSummary(request)}.${request.type === 'retanqueo' ? ' El monto extra entra hoy como préstamo en la liquidación y los seguros a la base.' : ''}`,
+          submitLabel: 'Aprobar y aplicar',
+          onSubmit: () => resolvePendingRequest(pendingId, true),
+        });
+        return;
+      }
       if (request.type === 'route-correction') {
         openCustomModal({
           title: 'Revisar visita o pago',
@@ -3885,7 +3949,7 @@ function __mount_pendingModule() {
     else {
       const request = pendingRequests.find(item => item.id === pendingId);
       if (!request) return;
-      openCustomModal({ title: 'Rechazar solicitud', description: request.type === 'route-correction' ? `¿Deseas rechazar la corrección solicitada para ${request.clientName}?` : `¿Deseas rechazar la solicitud de ${request.clientName}? El cliente conservará los valores generales.`, submitLabel: 'Rechazar solicitud', onSubmit: () => resolvePendingRequest(pendingId, false) });
+      openCustomModal({ title: 'Rechazar solicitud', description: request.type === 'route-correction' ? `¿Deseas rechazar la corrección solicitada para ${request.clientName}?` : request.type === 'finance' || request.type === 'retanqueo' ? `¿Deseas rechazar la solicitud de ${request.workerName} para ${request.clientName}? La cartulina queda como está.` : `¿Deseas rechazar la solicitud de ${request.clientName}? El cliente conservará los valores generales.`, submitLabel: 'Rechazar solicitud', onSubmit: () => resolvePendingRequest(pendingId, false) });
     }
   });
 }
@@ -6186,10 +6250,18 @@ function renderCardActions(client) {
   const notes = [];
   if (renewed) notes.push('Esta cartulina ya fue renovada.');
   if (!room) notes.push(`La persona ya tiene ${MAX_ACTIVE_CARDS_PER_PERSON} cartulinas activas (máximo).`);
-  // Financiar y retanqueo: solo el admin y solo mientras la cartulina tenga saldo.
-  const restructurable = state.userRole === 'admin' && !cancelled;
-  document.querySelector('#finance-client').hidden = !restructurable;
-  document.querySelector('#retanqueo-client').hidden = !restructurable;
+  // Financiar y retanqueo mientras la cartulina tenga saldo. El admin lo aplica; el
+  // trabajador llena lo mismo y le llega al admin como solicitud para aprobar o rechazar.
+  const openRequest = pendingRestructure(pendingRequests, state.activeClient);
+  const isWorker = state.userRole !== 'admin';
+  [['#finance-client', 'finance', 'Financiar', 'Intereses por pasar el plazo'], ['#retanqueo-client', 'retanqueo', 'Retanqueo', 'Prestar más sobre esta cartulina']].forEach(([selector, type, label, sub]) => {
+    const button = document.querySelector(selector);
+    button.hidden = cancelled;
+    const waiting = isWorker && openRequest?.type === type;
+    button.disabled = isWorker && Boolean(openRequest);
+    button.querySelector('.detail-action-label').lastChild.textContent = ` ${isWorker ? `Solicitar ${label.toLocaleLowerCase('es')}` : label}`;
+    button.querySelector('.detail-action-sub').textContent = waiting ? 'Solicitud enviada: esperando al admin' : isWorker && openRequest ? 'Hay otra solicitud pendiente' : sub;
+  });
   hint.textContent = notes.join(' ');
   hint.hidden = !notes.length;
   document.querySelector('.detail-profile .eyebrow').textContent = cancelled ? 'CARTULINA CANCELADA' : 'CRÉDITO ACTIVO';
@@ -6230,23 +6302,45 @@ function afterRestructure(clientId) {
   openClient(clientId);
 }
 
+/**
+ * Solicitud del trabajador al admin con los parámetros que él mismo puso. El admin la aprueba
+ * (se aplica tal cual) o la rechaza desde Solicitudes.
+ */
+function sendRestructureRequest(clientId, type, params) {
+  const client = clients[clientId];
+  pendingRequests.unshift({
+    id: `request-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, type, routeId: routeKey(client.route), route: client.route,
+    workerId: state.activeWorker?.id, workerName: state.activeWorker?.name || 'Trabajador', clientId, clientName: client.name,
+    params, createdAt: new Date().toISOString(), status: 'pending',
+  });
+  persistBusinessData();
+  renderCardActions(client);
+  showToast(`Solicitud de ${type === 'finance' ? 'financiación' : 'retanqueo'} enviada al administrador.`);
+}
+
 /** Financiar: intereses por pasar los días acordados (20 % del saldo si no se escribe otro valor) y plazo nuevo. */
 function openFinanceModal() {
   const clientId = state.activeClient;
   const client = clients[clientId];
-  if (!client || state.userRole !== 'admin' || Number(client.balance) <= 0) return;
+  if (!client || Number(client.balance) <= 0) return;
+  const isWorker = state.userRole !== 'admin';
+  if (isWorker && pendingRestructure(pendingRequests, clientId)) { showToast('Esta cartulina ya tiene una solicitud pendiente con el administrador.'); return; }
   openCustomModal({
-    title: `Financiar · ${client.name}`,
+    title: `${isWorker ? 'Solicitar financiar' : 'Financiar'} · ${client.name}`,
     description: `Saldo actual ${formatMoney(client.balance)}. Se le suman los intereses de financiación y arranca un plazo nuevo desde hoy. Si no cambias nada: ${FINANCE_INTEREST_PERCENT} % del saldo = ${formatMoney(percentOrAmount(client.balance, FINANCE_INTEREST_PERCENT))}.`,
     fields: [
       { name: 'percent', label: 'Interés de financiación (%) sobre el saldo', type: 'number', min: 0, step: 0.1, value: FINANCE_INTEREST_PERCENT, required: true },
       { name: 'amount', label: 'O un monto exacto de interés (opcional, reemplaza el %)', money: true, thousands: true, type: 'number', min: 0, step: 1, value: '' },
       { name: 'totalDays', label: 'Plazo nuevo (días) desde hoy', type: 'number', min: 1, step: 1, value: client.totalDays || 30, required: true },
     ],
-    submitLabel: 'Financiar',
+    submitLabel: isWorker ? 'Enviar solicitud al admin' : 'Financiar',
     onSubmit: values => {
       const interest = percentOrAmount(client.balance, values.percent, values.amount);
       if (!(interest > 0)) { customModalError.textContent = 'Escribe un porcentaje o un monto mayor que cero.'; return false; }
+      if (isWorker) {
+        sendRestructureRequest(clientId, 'finance', { interest, totalDays: Math.round(Number(values.totalDays)), percent: String(values.amount ?? '').trim() ? null : Number(values.percent), balance: Number(client.balance) });
+        return;
+      }
       financeCard(client, { interest, totalDays: values.totalDays });
       afterRestructure(clientId);
       showToast(`Cartulina financiada: +${formatMoney(interest)} de intereses. Saldo nuevo ${formatMoney(client.balance)}, ${client.installments} cuotas de ${formatMoney(client.installment)}.`);
@@ -6262,9 +6356,11 @@ function openFinanceModal() {
 function openRetanqueoModal() {
   const clientId = state.activeClient;
   const client = clients[clientId];
-  if (!client || state.userRole !== 'admin' || Number(client.balance) <= 0) return;
+  if (!client || Number(client.balance) <= 0) return;
+  const isWorker = state.userRole !== 'admin';
+  if (isWorker && pendingRestructure(pendingRequests, clientId)) { showToast('Esta cartulina ya tiene una solicitud pendiente con el administrador.'); return; }
   openCustomModal({
-    title: `Retanqueo · ${client.name}`,
+    title: `${isWorker ? 'Solicitar retanqueo' : 'Retanqueo'} · ${client.name}`,
     description: `Saldo actual ${formatMoney(client.balance)}. Al monto extra se le suman intereses (${RETANQUEO_INTEREST_PERCENT} %) y se cobran seguros (${GENERAL_RETANQUEO.insurancePercent} %) si no escribes otro valor. El saldo nuevo arranca un plazo nuevo desde hoy.`,
     fields: [
       { name: 'extra', label: 'Monto extra que se le presta', money: true, thousands: true, type: 'number', min: 1, step: 1, value: '', required: true },
@@ -6274,24 +6370,19 @@ function openRetanqueoModal() {
       { name: 'insuranceAmount', label: 'O un monto exacto de seguros (opcional, reemplaza el %)', money: true, thousands: true, type: 'number', min: 0, step: 1, value: '' },
       { name: 'totalDays', label: 'Plazo nuevo (días) desde hoy', type: 'number', min: 1, step: 1, value: client.totalDays || 30, required: true },
     ],
-    submitLabel: 'Hacer retanqueo',
+    submitLabel: isWorker ? 'Enviar solicitud al admin' : 'Hacer retanqueo',
     onSubmit: values => {
       const extra = Math.round(Number(values.extra) || 0);
       if (extra <= 0) { customModalError.textContent = 'Escribe el monto extra que se le presta.'; return false; }
       const interest = percentOrAmount(extra, values.interestPercent, values.interestAmount);
       const insurance = percentOrAmount(extra, values.insurancePercent, values.insuranceAmount);
       if (insurance > extra) { customModalError.textContent = 'Los seguros no pueden superar el monto extra.'; return false; }
-      retanqueoCard(client, { extra, interest, insurance, totalDays: values.totalDays });
-      // Liquidación del cobro: el extra sale hoy como préstamo y los seguros entran a la base.
-      const route = routeSettlements[client.route];
-      if (route) {
-        route.loans = Number(route.loans || 0) + extra;
-        route.base = Number(route.base || 0) + insurance;
-        route.monthlyInsurance = (Number(route.monthlyInsurance) || 0) + insurance;
-        route.loansNew ||= []; route.loansEntered ||= [];
-        route.loansNew.unshift({ name: `${client.name} (retanqueo)`, clientId, amount: extra });
-        route.loansEntered.unshift({ name: `${client.name} (retanqueo)`, clientId, amount: extra + interest });
+      if (isWorker) {
+        sendRestructureRequest(clientId, 'retanqueo', { extra, interest, insurance, totalDays: Math.round(Number(values.totalDays)), balance: Number(client.balance) });
+        return;
       }
+      retanqueoCard(client, { extra, interest, insurance, totalDays: values.totalDays });
+      recordRetanqueoInRoute(routeSettlements[client.route], client, clientId, { extra, interest, insurance });
       afterRestructure(clientId);
       showToast(`Retanqueo de ${formatMoney(extra)}: intereses ${formatMoney(interest)}, seguros ${formatMoney(insurance)}. Saldo nuevo ${formatMoney(client.balance)}.`);
     },

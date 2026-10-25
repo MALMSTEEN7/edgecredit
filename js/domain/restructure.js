@@ -92,3 +92,23 @@ export function retanqueoCard(client, { extra, interest, insurance, totalDays, b
   client.restructures.unshift({ type: 'retanqueo', date: today, at: new Date(now).toISOString(), by, extra: amount, interest: interestAmount, insurance: insuranceAmount, before });
   return { extra: amount, interest: interestAmount, insurance: insuranceAmount, balance: client.balance };
 }
+
+/**
+ * Liquidación del cobro al hacer un retanqueo: el extra sale hoy como préstamo y los seguros
+ * entran a la base del día (como al entregar un préstamo nuevo).
+ */
+export function recordRetanqueoInRoute(route, client, clientId, { extra, interest, insurance }) {
+  if (!route) return;
+  route.loans = Number(route.loans || 0) + extra;
+  route.base = Number(route.base || 0) + insurance;
+  route.monthlyInsurance = (Number(route.monthlyInsurance) || 0) + insurance;
+  route.loansNew ||= [];
+  route.loansEntered ||= [];
+  route.loansNew.unshift({ name: `${client.name} (retanqueo)`, clientId, amount: extra });
+  route.loansEntered.unshift({ name: `${client.name} (retanqueo)`, clientId, amount: extra + interest });
+}
+
+/** Solicitud pendiente de financiar o retanquear esta cartulina (o undefined). */
+export function pendingRestructure(requests, clientId) {
+  return requests.find(request => request.status === 'pending' && request.clientId === clientId && (request.type === 'finance' || request.type === 'retanqueo'));
+}

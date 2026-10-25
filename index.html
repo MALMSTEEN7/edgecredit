@@ -34,7 +34,7 @@
   <link rel="icon" href="icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="icon-192.png">
   <meta name="apple-mobile-web-app-capable" content="yes">
-  <link rel="stylesheet" id="app-styles" href="dist/styles.bundle.css?v=e49e121b10">
+  <link rel="stylesheet" id="app-styles" href="dist/styles.bundle.css?v=13448bd96b">
 </head>
 <body class="login-active">
   <section class="login-gateway" id="login-gateway" aria-labelledby="login-title">
@@ -127,7 +127,7 @@
       </section>
 
       <section class="view" id="directorio" aria-labelledby="directory-title" hidden>
-        <button class="admin-return-button" id="admin-directory-back" type="button">‹ <span>Volver al panel de administración</span></button>
+        <button class="admin-return-button" id="admin-directory-back" type="button"><span aria-hidden="true">←</span> <span>Volver al panel de administración</span></button>
         <div class="page-heading"><p class="eyebrow">TU CARTERA</p><h1 id="directory-title">Directorio</h1><p>Encuentra y consulta tus clientes.</p></div>
         <div class="directory-toolbar">
           <label class="search-field"><span aria-hidden="true">⌕</span><input id="directory-search" type="search" placeholder="Buscar por nombre o cédula" aria-label="Buscar por nombre o cédula"></label>
@@ -493,7 +493,7 @@
     // al cambiar el sello, el navegador descarga el JS/CSS nuevo en vez de usar su caché.
     // Para desarrollar con los módulos sueltos, abre index.html?dev desde un servidor local.
     (() => {
-      const APP_VERSION = 'e49e121b10';
+      const APP_VERSION = '13448bd96b';
       const dev = new URLSearchParams(location.search).has('dev') && location.protocol !== 'file:';
       if (dev) {
         document.getElementById('app-styles').href = 'styles.css';

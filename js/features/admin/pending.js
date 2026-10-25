@@ -7,6 +7,7 @@ import { state } from '../../core/state.js';
 import { clients, pendingRequests, persistBusinessData, routeSettlements } from '../../core/store.js';
 import { syncCancelledCard } from '../../domain/accounting.js';
 import { paymentCycleIndex, updatePaidAmountTotal } from '../../domain/loan-schedule.js';
+import { financeCard, recordRetanqueoInRoute, retanqueoCard } from '../../domain/restructure.js';
 import { renderAdminRoute } from './admin-shell.js';
 import { openClient, renderHistory } from '../clients/client-detail.js';
 import { renderClientRows } from '../clients/directory.js';
@@ -14,6 +15,30 @@ import { renderRouteBuilder } from '../daily-route/daily-route.js';
 import { formatDate, formatMoney, routeKey } from '../../shared/format.js';
 import { openCustomModal } from '../../ui/custom-modal.js';
 import { showToast } from '../../ui/toast.js';
+
+const REQUEST_TITLES = { interest: 'Excepción de interés', insurance: 'Excepción de seguros', 'route-correction': 'Corrección de visita o pago', finance: 'Solicitud de financiación', retanqueo: 'Solicitud de retanqueo' };
+
+/** Lo que pidió el trabajador al financiar o retanquear, en una línea. */
+function restructureSummary(request) {
+  const p = request.params || {};
+  if (request.type === 'finance') return `Saldo ${formatMoney(p.balance)} · interés de financiación ${formatMoney(p.interest)}${p.percent != null ? ` (${p.percent} %)` : ''} · plazo nuevo ${p.totalDays} días · saldo nuevo ${formatMoney(Number(p.balance) + Number(p.interest))}`;
+  return `Saldo ${formatMoney(p.balance)} · prestar ${formatMoney(p.extra)} más · intereses ${formatMoney(p.interest)} · seguros ${formatMoney(p.insurance)} · plazo nuevo ${p.totalDays} días · saldo nuevo ${formatMoney(Number(p.balance) + Number(p.extra) + Number(p.interest))}`;
+}
+
+/** Aplica una financiación o un retanqueo aprobado con los parámetros del trabajador. */
+function applyRestructureRequest(request) {
+  const client = clients[request.clientId];
+  const p = request.params || {};
+  if (!client || Number(client.balance) <= 0) return 'La cartulina ya no tiene saldo: no se puede aplicar.';
+  const by = `Administrador (solicitó ${request.workerName})`;
+  if (request.type === 'finance') financeCard(client, { interest: Number(p.interest), totalDays: Number(p.totalDays), by });
+  else {
+    const values = { extra: Number(p.extra), interest: Number(p.interest), insurance: Number(p.insurance) };
+    retanqueoCard(client, { ...values, totalDays: Number(p.totalDays), by });
+    recordRetanqueoInRoute(routeSettlements[client.route], client, request.clientId, values);
+  }
+  return '';
+}
 
 export function renderPendingRequests() {
   pendingList.replaceChildren();
@@ -32,12 +57,12 @@ export function renderPendingRequests() {
     card.className = 'pending-card';
     const copy = document.createElement('div');
     const title = document.createElement('h3');
-    title.textContent = request.type === 'interest' ? 'Excepción de interés' : request.type === 'insurance' ? 'Excepción de seguros' : 'Corrección de visita o pago';
+    title.textContent = REQUEST_TITLES[request.type] || 'Solicitud';
     const details = document.createElement('p');
     details.textContent = `${request.clientName} · ${routeSettlements[request.routeId || routeKey(request.route)]?.name || request.route} · Solicitó ${request.workerName}`;
     const value = document.createElement('p');
     value.className = 'pending-comment';
-    value.textContent = `${request.type === 'route-correction' ? 'Motivo enviado' : 'Acuerdo informado'}: ${request.comment || 'Sin comentario'}`;
+    value.textContent = request.type === 'finance' || request.type === 'retanqueo' ? restructureSummary(request) : `${request.type === 'route-correction' ? 'Motivo enviado' : 'Acuerdo informado'}: ${request.comment || 'Sin comentario'}`;
     copy.append(title, details, value);
     const actions = document.createElement('div');
     actions.className = 'pending-actions';
@@ -58,7 +83,12 @@ export function renderPendingRequests() {
 function resolvePendingRequest(requestId, approved, approvedValue) {
   const request = pendingRequests.find(item => item.id === requestId && item.status === 'pending');
   if (!request) return;
-  if (approved && request.type === 'route-correction') {
+  if (approved && (request.type === 'finance' || request.type === 'retanqueo')) {
+    const error = applyRestructureRequest(request);
+    if (error) { showToast(error); return; }
+    request.status = 'approved';
+    request.resolvedAt = new Date().toISOString();
+  } else if (approved && request.type === 'route-correction') {
     const client = clients[request.clientId];
     if (client) {
       const key = `${routeKey(request.routeId || client.route)}:${request.visitDate}`;
@@ -101,6 +131,11 @@ function resolvePendingRequest(requestId, approved, approvedValue) {
   } else request.status = 'rejected';
   persistBusinessData();
   renderPendingRequests();
+  if (request.type === 'finance' || request.type === 'retanqueo') {
+    renderClientRows(request.clientId);
+    if (request.clientId === state.activeClient && state.currentView === 'detalle-cliente') openClient(request.clientId);
+    renderAdminRoute(routeSelect.value);
+  }
   if (request.type === 'route-correction') {
     renderRouteBuilder();
     renderClientRows(request.clientId);
@@ -122,6 +157,15 @@ export function mount() {
     if (pendingAction === 'approve') {
       const request = pendingRequests.find(item => item.id === pendingId);
       if (!request) return;
+      if (request.type === 'finance' || request.type === 'retanqueo') {
+        openCustomModal({
+          title: `Aprobar ${request.type === 'finance' ? 'financiación' : 'retanqueo'} · ${request.clientName}`,
+          description: `${request.workerName} lo solicitó con estos valores: ${restructureSummary(request)}.${request.type === 'retanqueo' ? ' El monto extra entra hoy como préstamo en la liquidación y los seguros a la base.' : ''}`,
+          submitLabel: 'Aprobar y aplicar',
+          onSubmit: () => resolvePendingRequest(pendingId, true),
+        });
+        return;
+      }
       if (request.type === 'route-correction') {
         openCustomModal({
           title: 'Revisar visita o pago',
@@ -154,7 +198,7 @@ export function mount() {
     else {
       const request = pendingRequests.find(item => item.id === pendingId);
       if (!request) return;
-      openCustomModal({ title: 'Rechazar solicitud', description: request.type === 'route-correction' ? `¿Deseas rechazar la corrección solicitada para ${request.clientName}?` : `¿Deseas rechazar la solicitud de ${request.clientName}? El cliente conservará los valores generales.`, submitLabel: 'Rechazar solicitud', onSubmit: () => resolvePendingRequest(pendingId, false) });
+      openCustomModal({ title: 'Rechazar solicitud', description: request.type === 'route-correction' ? `¿Deseas rechazar la corrección solicitada para ${request.clientName}?` : request.type === 'finance' || request.type === 'retanqueo' ? `¿Deseas rechazar la solicitud de ${request.workerName} para ${request.clientName}? La cartulina queda como está.` : `¿Deseas rechazar la solicitud de ${request.clientName}? El cliente conservará los valores generales.`, submitLabel: 'Rechazar solicitud', onSubmit: () => resolvePendingRequest(pendingId, false) });
     }
   });
 }
