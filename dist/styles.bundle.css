@@ -4518,34 +4518,49 @@ button {
   font-weight: 600;
 }
 
-/* Color de la cartulina (día de pago / quincenal / mensual): solo un indicador, no pinta la tarjeta. */
-.card-color-tag {
-  display: inline-flex;
+/*
+ * Color de la cartulina (día de pago / quincenal / mensual): franja en el borde superior,
+ * como la pestaña de una carpeta, con el día escrito.
+ */
+.client-row.has-card-color,
+.detail-header.has-card-color {
+  position: relative;
+  overflow: hidden;
+  border-top-color: var(--card-color);
+}
+
+.client-row.has-card-color {
+  padding-top: 30px;
+}
+
+.card-color-band {
+  position: absolute;
+  inset: 0 0 auto 0;
+  display: flex;
   align-items: center;
-  gap: 5px;
-  margin-left: 8px;
-  padding: 1px 8px 1px 6px;
-  border: 1px solid color-mix(in srgb, var(--card-color) 55%, transparent);
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--card-color) 14%, transparent);
-  color: var(--text, inherit);
-  font-size: 11px;
-  font-weight: 700;
-  line-height: 1.5;
-  vertical-align: middle;
-  white-space: nowrap;
-}
-
-.card-color-tag::before {
-  content: '';
-  width: 9px;
-  height: 9px;
-  border-radius: 50%;
+  height: 20px;
+  padding: 0 12px;
   background: var(--card-color);
+  color: var(--card-color-ink, #fff);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: .6px;
+  line-height: 1;
+  text-transform: uppercase;
+  pointer-events: none;
 }
 
-.card-color-tag[hidden] {
+.card-color-band[hidden] {
   display: none;
+}
+
+/* En la ficha la franja va arriba del encabezado, de borde a borde. */
+.detail-header.has-card-color {
+  padding: 30px 14px 14px;
+  border: 1px solid #292929;
+  border-top: 2px solid var(--card-color);
+  border-radius: 15px;
+  background: var(--card);
 }
 
 .client-main>span {

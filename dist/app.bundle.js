@@ -1116,21 +1116,21 @@ function normalizeCancelledCards() {
  * domain/card-color · Color de cada cartulina, como en el sistema anterior.
  *
  * Las semanales se agrupan por el día de la semana en que pagan (el mismo día en que arrancó
- * el crédito); las quincenales y mensuales tienen su propio color. Solo es un indicador:
- * la tarjeta no se pinta completa.
+ * el crédito); las quincenales y mensuales tienen su propio color. Se muestra como una franja
+ * en el borde superior de la tarjeta (como la pestaña de una carpeta) con el día escrito.
  */
 
 const WEEKDAY_COLORS = {
-  1: { key: 'monday', label: 'Lunes', color: '#7e57c2' }, // morado
-  2: { key: 'tuesday', label: 'Martes', color: '#ad1457' }, // rosado oscuro
-  3: { key: 'wednesday', label: 'Miércoles', color: '#8a8f98' }, // gris
-  4: { key: 'thursday', label: 'Jueves', color: '#1e63d6' }, // azul
-  5: { key: 'friday', label: 'Viernes', color: '#3eb489' }, // verde menta
-  6: { key: 'saturday', label: 'Sábado', color: '#e53935' }, // rojo
+  1: { key: 'monday', label: 'Lunes', color: '#7e57c2', ink: '#fff' }, // morado
+  2: { key: 'tuesday', label: 'Martes', color: '#ad1457', ink: '#fff' }, // rosado oscuro
+  3: { key: 'wednesday', label: 'Miércoles', color: '#8a8f98', ink: '#111' }, // gris
+  4: { key: 'thursday', label: 'Jueves', color: '#1e63d6', ink: '#fff' }, // azul
+  5: { key: 'friday', label: 'Viernes', color: '#3eb489', ink: '#0b2a1f' }, // verde menta
+  6: { key: 'saturday', label: 'Sábado', color: '#e53935', ink: '#fff' }, // rojo
 };
 const FREQUENCY_COLORS = {
-  biweekly: { key: 'biweekly', label: 'Quincenal', color: '#f48fb1' }, // rosado
-  monthly: { key: 'monthly', label: 'Mensual', color: '#89cff0' }, // azul bebé
+  biweekly: { key: 'biweekly', label: 'Quincenal', color: '#f48fb1', ink: '#3b0a1e' }, // rosado
+  monthly: { key: 'monthly', label: 'Mensual', color: '#89cff0', ink: '#0a2a3b' }, // azul bebé
 };
 
 /** Color de la cartulina o null (diarias, o semanales que arrancaron un domingo). */
@@ -1143,15 +1143,20 @@ function cardColor(client) {
   return WEEKDAY_COLORS[new Date(year, month - 1, day).getDay()] || null;
 }
 
-/** Pinta (o quita) la etiqueta de color en `element`. */
-function paintCardColorTag(element, client) {
+/** Pinta (o quita) la franja de color en `band`; `card` (opcional) recibe la clase y el color del borde. */
+function paintCardColorBand(band, client, card = null) {
   const color = cardColor(client);
-  element.hidden = !color;
+  band.hidden = !color;
+  card?.classList.toggle('has-card-color', Boolean(color));
   if (!color) return;
-  element.dataset.cardColor = color.key;
-  element.style.setProperty('--card-color', color.color);
-  element.textContent = color.label;
-  element.title = color.key === 'biweekly' || color.key === 'monthly' ? `Cartulina ${color.label.toLocaleLowerCase('es')}` : `Cartulina semanal · paga los ${color.label.toLocaleLowerCase('es')}`;
+  [band, card].forEach(node => {
+    if (!node) return;
+    node.dataset.cardColor = color.key;
+    node.style.setProperty('--card-color', color.color);
+    node.style.setProperty('--card-color-ink', color.ink);
+  });
+  band.textContent = color.label;
+  band.title = color.key === 'biweekly' || color.key === 'monthly' ? `Cartulina ${color.label.toLocaleLowerCase('es')}` : `Cartulina semanal · paga los ${color.label.toLocaleLowerCase('es')}`;
 }
 
 // ── js/domain/insurance.js
@@ -5835,7 +5840,7 @@ function openClient(clientId) {
   state.activeClient = clientId;
   document.querySelector('#detail-name').textContent = client.name;
     setClientAvatar(document.querySelector('#detail-avatar'), client);
-  paintCardColorTag(document.querySelector('#detail-card-color'), client);
+  paintCardColorBand(document.querySelector('#detail-card-color'), client, document.querySelector('#detalle-cliente .detail-header'));
   // Estado actual: si hay períodos vencidos sin pagar se muestran como «Pagos atrasados N».
   const status = document.querySelector('#detail-status');
   const current = paymentBehavior(client);
@@ -6316,15 +6321,14 @@ function setClientAvatar(element, client) {
 
 function renderClientRows(clientId) {
   const client = clients[clientId];
-  document.querySelectorAll(`.client-row[data-client="${clientId}"] .client-main > strong`).forEach(node => {
-    // Indicador del color de la cartulina (día de pago / quincenal / mensual) junto al nombre.
-    const tag = node.querySelector('.card-color-tag') || Object.assign(document.createElement('span'), { className: 'card-color-tag' });
-    paintCardColorTag(tag, client);
-    node.replaceChildren(document.createTextNode(client.name), tag);
-  });
+  document.querySelectorAll(`.client-row[data-client="${clientId}"] .client-main strong`).forEach(node => { node.textContent = client.name; });
   document.querySelectorAll(`.client-row[data-client="${clientId}"] .client-avatar`).forEach(node => setClientAvatar(node, client));
   document.querySelectorAll(`.client-row[data-client="${clientId}"]`).forEach(row => {
     row.dataset.route = client.route;
+    // Franja de color en el borde superior (día de pago / quincenal / mensual).
+    let band = row.querySelector(':scope > .card-color-band');
+    if (!band) { band = document.createElement('span'); band.className = 'card-color-band'; row.prepend(band); }
+    paintCardColorBand(band, client, row);
     const main = row.querySelector('.client-main');
     const description = main?.querySelector(':scope > span:not(.client-risk-line)');
     // Si la persona tiene varias cartulinas, cada fila indica cuál es.

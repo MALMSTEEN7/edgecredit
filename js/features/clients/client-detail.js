@@ -21,7 +21,7 @@ import { LOCATION_FAILURE_LABELS, hasCoordinates, isApproximateLocation, locateD
 import { clientInsurance, generalInsuranceAmount, resolveInsurance } from '../../domain/insurance.js';
 import { canRenew, onClientRenewed } from './new-client.js';
 import { MAX_ACTIVE_CARDS_PER_PERSON, activeCardIds, canAddCard, personCardIds } from '../../domain/person-cards.js';
-import { paintCardColorTag } from '../../domain/card-color.js';
+import { paintCardColorBand } from '../../domain/card-color.js';
 import { FINANCE_INTEREST_PERCENT, GENERAL_RETANQUEO, RETANQUEO_INTEREST_PERCENT, financeCard, percentOrAmount, retanqueoCard } from '../../domain/restructure.js';
 
 /** Dentro de la ficha: la «cicatriz» del historial de pagos de la cartulina. */
@@ -282,7 +282,7 @@ export function openClient(clientId) {
   state.activeClient = clientId;
   document.querySelector('#detail-name').textContent = client.name;
     setClientAvatar(document.querySelector('#detail-avatar'), client);
-  paintCardColorTag(document.querySelector('#detail-card-color'), client);
+  paintCardColorBand(document.querySelector('#detail-card-color'), client, document.querySelector('#detalle-cliente .detail-header'));
   // Estado actual: si hay períodos vencidos sin pagar se muestran como «Pagos atrasados N».
   const status = document.querySelector('#detail-status');
   const current = paymentBehavior(client);
