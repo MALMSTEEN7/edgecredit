@@ -7087,7 +7087,32 @@ function routeCardInfo(client) {
     item.append(term, detail);
     list.append(item);
   });
-  return list;
+  // Historial de abonos: otro desplegable dentro de la información, del más reciente al más antiguo.
+  const history = document.createElement('details');
+  history.className = 'route-card-payments';
+  const summary = document.createElement('summary');
+  summary.textContent = `Historial de abonos (${payments.length})`;
+  history.append(summary);
+  const ordered = [...payments].sort((a, b) => String(b.date).localeCompare(String(a.date)) || (Number(b.ts) || 0) - (Number(a.ts) || 0));
+  if (ordered.length) {
+    const items = document.createElement('ol');
+    items.replaceChildren(...ordered.map(payment => {
+      const item = document.createElement('li');
+      const date = document.createElement('span');
+      date.textContent = `${formatDate(payment.date)} · ${payment.method === 'transfer' ? 'Transferencia' : 'Efectivo'}`;
+      const amount = document.createElement('strong');
+      amount.textContent = formatMoney(payment.amount);
+      item.append(date, amount);
+      return item;
+    }));
+    history.append(items);
+  } else {
+    history.append(Object.assign(document.createElement('p'), { textContent: 'Aún no tiene abonos registrados.' }));
+  }
+  const wrap = document.createElement('div');
+  wrap.className = 'route-card-details';
+  wrap.append(list, history);
+  return wrap;
 }
 
 function routeDayKey(route = state.workerRoute) {

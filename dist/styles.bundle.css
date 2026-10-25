@@ -6422,16 +6422,62 @@ button.evidence-link:active {
   color: var(--text);
 }
 
+.route-card-details {
+  display: grid;
+  gap: 8px;
+  flex: 1 0 100%;
+  margin-top: 4px;
+  cursor: default;
+}
+
 .route-card-info {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
   gap: 8px 14px;
-  flex: 1 0 100%;
-  margin: 4px 0 0;
+  margin: 0;
   padding: 12px;
   border-radius: 9px;
   background: var(--card);
-  cursor: default;
+}
+
+.route-card-payments {
+  border-radius: 9px;
+  background: var(--card);
+}
+
+.route-card-payments summary {
+  padding: 11px 12px;
+  font-size: 13px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.route-card-payments ol {
+  max-height: 260px;
+  margin: 0;
+  padding: 0 12px 10px;
+  overflow: auto;
+  list-style: none;
+}
+
+.route-card-payments li {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 7px 0;
+  border-top: 1px solid var(--line);
+  font-size: 12px;
+}
+
+.route-card-payments li span {
+  color: var(--muted);
+}
+
+.route-card-payments p {
+  margin: 0;
+  padding: 0 12px 12px;
+  color: var(--muted);
+  font-size: 12px;
 }
 
 .route-card-info div {
