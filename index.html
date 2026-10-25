@@ -34,7 +34,7 @@
   <link rel="icon" href="icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="icon-192.png">
   <meta name="apple-mobile-web-app-capable" content="yes">
-  <link rel="stylesheet" id="app-styles" href="dist/styles.bundle.css?v=50b604f218">
+  <link rel="stylesheet" id="app-styles" href="dist/styles.bundle.css?v=b129d53fe7">
 </head>
 <body class="login-active">
   <section class="login-gateway" id="login-gateway" aria-labelledby="login-title">
@@ -123,7 +123,7 @@
 
       <section class="view" id="ruta-diaria" aria-labelledby="daily-route-title" hidden>
         <div class="page-heading"><p class="eyebrow">ORGANIZA TU JORNADA</p><h1 id="daily-route-title">Ruta diaria</h1><p>Agrega clientes con un toque y ordénalos según tu recorrido.</p></div>
-        <div class="route-builder-grid"><section class="route-builder-panel"><h2>Biblioteca de clientes</h2><p>Busca clientes y agrégalos a la ruta de hoy.</p><label class="search-field route-library-search"><span aria-hidden="true">⌕</span><input id="route-library-search" type="search" placeholder="Buscar en la biblioteca" aria-label="Buscar en la biblioteca de clientes"></label><div id="route-library-list" class="route-drag-list" aria-label="Biblioteca de clientes"></div></section><section class="route-builder-panel"><h2>Clientes de hoy</h2><p>Arrastra desde el asa para cambiar el orden. Los abonos se registran desde el Inicio; aquí ves el estado de cada visita.</p><div id="route-daily-list" class="route-drag-list route-daily-list" aria-label="Orden de la ruta diaria"></div></section></div>
+        <div class="route-builder-grid"><section class="route-builder-panel"><h2>Biblioteca de clientes</h2><p>Busca clientes y agrégalos a la ruta de hoy.</p><label class="search-field route-library-search"><span aria-hidden="true">⌕</span><input id="route-library-search" type="search" placeholder="Buscar en la biblioteca" aria-label="Buscar en la biblioteca de clientes"></label><div class="directory-filters route-library-filters" id="route-library-filters" role="radiogroup" aria-label="Filtrar biblioteca por calificación"><button type="button" class="directory-filter is-active" data-route-filter="all" role="radio" aria-checked="true">Todos <span data-route-filter-count="all">0</span></button><button type="button" class="directory-filter filter-good" data-route-filter="good" role="radio" aria-checked="false"><i aria-hidden="true"></i>Buenos <span data-route-filter-count="good">0</span></button><button type="button" class="directory-filter filter-irregular" data-route-filter="irregular" role="radio" aria-checked="false"><i aria-hidden="true"></i>Regulares <span data-route-filter-count="irregular">0</span></button><button type="button" class="directory-filter filter-bad" data-route-filter="bad" role="radio" aria-checked="false"><i aria-hidden="true"></i>Malos <span data-route-filter-count="bad">0</span></button></div><div id="route-library-list" class="route-drag-list" aria-label="Biblioteca de clientes"></div></section><section class="route-builder-panel"><h2>Clientes de hoy</h2><p>Arrastra desde el asa para cambiar el orden. Los abonos se registran desde el Inicio; aquí ves el estado de cada visita.</p><div id="route-daily-list" class="route-drag-list route-daily-list" aria-label="Orden de la ruta diaria"></div></section></div>
       </section>
 
       <section class="view" id="directorio" aria-labelledby="directory-title" hidden>
@@ -493,7 +493,7 @@
     // al cambiar el sello, el navegador descarga el JS/CSS nuevo en vez de usar su caché.
     // Para desarrollar con los módulos sueltos, abre index.html?dev desde un servidor local.
     (() => {
-      const APP_VERSION = '50b604f218';
+      const APP_VERSION = 'b129d53fe7';
       const dev = new URLSearchParams(location.search).has('dev') && location.protocol !== 'file:';
       if (dev) {
         document.getElementById('app-styles').href = 'styles.css';

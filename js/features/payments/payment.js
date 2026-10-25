@@ -6,7 +6,7 @@ import { amountInput, customModal, interestModal, modal, newClientModal, payment
 import { state } from '../../core/state.js';
 import { clients, persistBusinessData, routeSettlements } from '../../core/store.js';
 import { addCancelledCard } from '../../domain/accounting.js';
-import { paymentAmountForCycle, paymentBehavior, paymentCycleIndex, updatePaidAmountTotal } from '../../domain/loan-schedule.js';
+import { paymentAmountForCycle, paymentBehavior, paymentCycleIndex, ratingSystemActive, updatePaidAmountTotal } from '../../domain/loan-schedule.js';
 import { openClient, renderHistory } from '../clients/client-detail.js';
 import { filterClientCards, renderClientRows } from '../clients/directory.js';
 import { renderRouteBuilder, routeDayKey } from '../daily-route/daily-route.js';
@@ -111,7 +111,8 @@ export function mount() {
       client.visitHistory.push({ date: paidDate, outcome: 'partial' });
     }
     const paymentRisk = paymentBehavior(client);
-    client.paymentWarning ||= paymentRisk.overdueDays > 0 || paymentRisk.explicitlyMissed || paymentRisk.latePaid;
+    // Con la calificación por puntos la demora la mide el calendario (domain/loan-schedule).
+    if (!ratingSystemActive()) client.paymentWarning ||= paymentRisk.overdueDays > 0 || paymentRisk.explicitlyMissed || paymentRisk.latePaid;
     const route = routeSettlements[client.route];
     if (route) route.collections += amount;
     // Cualquier abono de hoy cierra la visita: el cliente sale del Inicio y queda con

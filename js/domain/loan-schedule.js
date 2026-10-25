@@ -92,8 +92,7 @@ export function currentCyclePaymentAmount(client) {
  * Foto del calendario de pagos: cuántas cuotas ya vencieron, cuántas están pagadas y
  * cuántos períodos van atrasados (según la frecuencia: diaria, semanal, quincenal o mensual).
  */
-function scheduleSnapshot(client) {
-  const today = localDateISO();
+function scheduleSnapshot(client, today = localDateISO()) {
   const installments = Number(client.installments || 0) || Infinity;
   let dueCount = 0;        // cuotas con fecha <= hoy (incluye la que vence hoy)
   let overdueDueCount = 0; // cuotas con fecha < hoy (ya vencidas)
@@ -148,16 +147,115 @@ export function paymentBehavior(client) {
 const HISTORY_RANK = { good: 0, irregular: 1, bad: 2 };
 
 /**
+ * Desde este día rige la calificación por puntos. Lo que pasó antes queda calificado como
+ * estaba (con las reglas anteriores, congeladas al día previo).
+ */
+export const RATING_SYSTEM_START = '2026-10-26';
+const RATING_LEGACY_UNTIL = '2026-10-25';
+export const ratingSystemActive = (today = localDateISO()) => today >= RATING_SYSTEM_START;
+
+/** Puntos que resta cada cosa. Con 3 puntos baja a irregular y con 8 a malo. */
+const RATING_POINTS = { shortDelay: 1, longDelay: 2, noPayment: 3, legacyIncident: 3 };
+const SHORT_DELAY_DAYS = 3;
+const levelFromPoints = points => (points >= 8 ? 'bad' : points >= 3 ? 'irregular' : 'good');
+
+/** Reglas anteriores (incidentes): cuotas pagadas tarde, visitas sin pago y períodos atrasados. */
+function legacyHistory(snap, client, overduePeriods = snap.overduePeriods) {
+  const incidents = snap.latePaidCycles + snap.missedVisits + overduePeriods;
+  const level = overduePeriods >= 2 || incidents >= 3 ? 'bad' : incidents >= 1 || client.paymentWarning ? 'irregular' : 'good';
+  return { level, incidents };
+}
+
+/** La cartulina tal como estaba al cerrar el último día con las reglas anteriores. */
+function legacyView(client) {
+  return {
+    ...client,
+    payments: (client.payments || []).filter(payment => String(payment.date) <= RATING_LEGACY_UNTIL),
+    visitHistory: (client.visitHistory || []).filter(visit => String(visit.date) <= RATING_LEGACY_UNTIL),
+  };
+}
+
+/**
+ * Puntos por demora de las cuotas que vencen desde RATING_SYSTEM_START:
+ *  - Pagó el día de la cuota (o antes): 0.
+ *  - Pagó unos días tarde, antes de la cuota siguiente: 1 punto (hasta 3 días) o 2 (más días).
+ *    Mientras no paga, se ve como pago atrasado y ya cuenta esa demora.
+ *  - Llegó la cuota siguiente sin pagar la anterior: no pago, 3 puntos. Si después la paga
+ *    (por ejemplo dos en uno) se le quita el no pago, pero quedan los 2 puntos de demora.
+ * Una cuota se da por pagada cuando lo abonado desde el inicio del crédito alcanza esa cuota.
+ * Las cuotas de antes del cambio que ya estaban pagadas el último día de las reglas anteriores
+ * quedan con esas reglas; las que seguían sin pagar (`oldOpen`) se miden con estas, y `oldUnpaid`
+ * cuenta las que todavía no se pagan.
+ */
+function delayPoints(client, today = localDateISO()) {
+  const installment = Number(client.installment) || 0;
+  if (!installment) return { points: 0, delays: 0, noPayments: 0, oldUnpaid: 0, oldOpen: 0 };
+  const installments = Number(client.installments || 0) || Infinity;
+  const baselineAmount = Number(client.schedulePaidBaseline || 0) * installment;
+  const payments = (client.payments || [])
+    .filter(payment => !payment.beforeRestructure && payment.date)
+    .sort((a, b) => String(a.date).localeCompare(String(b.date)));
+  /** Fecha en que lo abonado llegó a `amount` (null si todavía no llega). */
+  const coveredOn = amount => {
+    if (baselineAmount >= amount) return '';
+    let total = 0;
+    for (const payment of payments) {
+      total += Number(payment.amount) || 0;
+      if (Math.max(total, baselineAmount) >= amount) return payment.date;
+    }
+    return null;
+  };
+  const result = { points: 0, delays: 0, noPayments: 0, oldUnpaid: 0, oldOpen: 0 };
+  for (let cycle = 0; cycle < installments && cycle < 10000; cycle += 1) {
+    const due = paymentDueDate(client, cycle);
+    if (due >= today) break; // la cuota de hoy todavía se puede pagar hoy
+    const covered = coveredOn((cycle + 1) * installment);
+    if (due < RATING_SYSTEM_START) {
+      if (covered !== null && covered <= RATING_LEGACY_UNTIL) continue;
+      result.oldOpen += 1;
+      if (covered === null) result.oldUnpaid += 1;
+    }
+    if (covered !== null && covered <= due) continue;
+    const next = paymentDueDate(client, cycle + 1);
+    if (covered === null && today >= next) { result.points += RATING_POINTS.noPayment; result.noPayments += 1; continue; }
+    const late = dayDifference(due, covered || today);
+    result.points += late <= SHORT_DELAY_DAYS ? RATING_POINTS.shortDelay : RATING_POINTS.longDelay;
+    result.delays += 1;
+  }
+  return result;
+}
+
+/**
  * HISTORIAL de la cartulina (la «cicatriz» que se ve al entrar a la ficha).
- * Se queda aunque la deuda llegue a cero: un atraso pasado no se borra.
- *  - Historial bueno: nunca se atrasó.
- *  - Historial irregular: 1 o 2 incidentes (cuota pagada tarde, visita sin pago o 1 período atrasado).
- *  - Historial malo: 3 o más incidentes, o 2 o más períodos atrasados a la vez.
+ *  - Hasta RATING_LEGACY_UNTIL: incidentes (1 → irregular, 3 o 2 períodos atrasados → malo).
+ *  - Desde RATING_SYSTEM_START: puntos por demora (ver delayPoints). Cada incidente anterior
+ *    vale 3 puntos, así nadie mejora ni empeora por el cambio de reglas.
+ * Nunca queda mejor que el peor nivel guardado antes del cambio (client.worstHistory).
  */
 export function paymentHistory(client) {
-  const snap = scheduleSnapshot(client);
-  const incidents = snap.latePaidCycles + snap.missedVisits + snap.overduePeriods;
-  let level = snap.overduePeriods >= 2 || incidents >= 3 ? 'bad' : incidents >= 1 || client.paymentWarning ? 'irregular' : 'good';
+  const today = localDateISO();
+  let level;
+  let incidents;
+  let points = 0;
+  if (!ratingSystemActive(today)) {
+    ({ level, incidents } = legacyHistory(scheduleSnapshot(client, today), client));
+  } else {
+    const recent = delayPoints(client, today);
+    let legacy = { level: client.paymentWarning ? 'irregular' : 'good', incidents: 0 };
+    let legacyPoints = 0;
+    if (String(client.creditStartDate || '') <= RATING_LEGACY_UNTIL) {
+      const snap = scheduleSnapshot(legacyView(client), RATING_LEGACY_UNTIL);
+      // El nivel de antes se conserva mientras sigan sin pagar las cuotas atrasadas de entonces.
+      // Cada una que paga después del cambio le quita un período atrasado de entonces.
+      legacy = legacyHistory(snap, client, Math.max(0, snap.overduePeriods - (recent.oldOpen - recent.oldUnpaid)));
+      // Esas cuotas atrasadas ya las mide delayPoints: aquí solo valen los incidentes cerrados.
+      legacyPoints = (snap.latePaidCycles + snap.missedVisits) * RATING_POINTS.legacyIncident;
+    }
+    points = legacyPoints + recent.points;
+    incidents = legacy.incidents + recent.delays + recent.noPayments;
+    const byPoints = levelFromPoints(points);
+    level = HISTORY_RANK[legacy.level] > HISTORY_RANK[byPoints] ? legacy.level : byPoints;
+  }
   // La cicatriz nunca mejora: se conserva el peor nivel alcanzado.
   if (HISTORY_RANK[client.worstHistory] > HISTORY_RANK[level]) level = client.worstHistory;
   const meta = {
@@ -165,12 +263,16 @@ export function paymentHistory(client) {
     irregular: { color: '#F9A825', label: 'Historial irregular', detail: 'Tuvo atrasos o pagos tardíos en esta cartulina.' },
     bad: { color: '#E53935', label: 'Historial malo', detail: 'Acumuló varios atrasos en esta cartulina.' },
   }[level];
-  return { level, incidents, ...meta };
+  return { level, incidents, points, ...meta };
 }
 
-/** Guarda el peor nivel de historial alcanzado (la cicatriz persiste). */
+/**
+ * Guarda el peor nivel de historial alcanzado (la cicatriz persiste). Con las reglas por
+ * puntos ya no se guarda: los puntos de demora son la cicatriz y el no pago se quita al pagar.
+ */
 export function rememberWorstHistory(client) {
   const { level } = paymentHistory(client);
+  if (ratingSystemActive()) return level;
   if (HISTORY_RANK[level] > (HISTORY_RANK[client.worstHistory] ?? -1)) client.worstHistory = level;
   if (level !== 'good') client.paymentWarning = true;
   return level;

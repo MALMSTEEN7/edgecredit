@@ -15,10 +15,12 @@ import { openCustomModal } from '../../ui/custom-modal.js';
 import { showToast } from '../../ui/toast.js';
 import { paymentFrequencyLabels } from '../../core/config.js';
 import { paintCardColorBand } from '../../domain/card-color.js';
-import { paymentBehavior, paymentHistory } from '../../domain/loan-schedule.js';
+import { paymentBehavior, paymentHistory, ratingSystemActive } from '../../domain/loan-schedule.js';
 
 /** Tarjeta con «Más información» abierta (`modo:id`). Solo una a la vez. */
 let openRouteInfo = null;
+/** Filtro de la biblioteca por calificación: all | good | irregular | bad. */
+let routeLibraryFilter = 'all';
 
 /** Información completa de la cartulina, para desplegar debajo de la tarjeta. */
 function routeCardInfo(client) {
@@ -131,7 +133,8 @@ export function markNoPayment(clientId) {
   if (paidTodayAmount(client) > 0) { showToast('Este cliente ya tiene un abono hoy; no se puede marcar como “No pagó”.'); return; }
   const today = localDateISO();
   closeVisit(clientId, 'no-payment');
-  client.paymentWarning = true;
+  // Con la calificación por puntos el «No pagó hoy» solo cierra la visita; la demora la mide el calendario.
+  if (!ratingSystemActive(today)) client.paymentWarning = true;
   client.visitHistory = (client.visitHistory || []).filter(item => item.date !== today);
   client.visitHistory.push({ date: today, outcome: 'no-payment' });
   persistBusinessData(); renderRouteBuilder(); filterClientCards(); renderClientRows(clientId);
@@ -216,10 +219,15 @@ export function renderRouteBuilder() {
   // La lista del día se conserva tal como se armó, aunque los clientes ya hayan sido visitados.
   const dailyOrder = (state.dailyRouteOrder[state.workerRoute] || []).filter(id => routeIds.includes(id));
   const query = document.querySelector('#route-library-search').value.trim().toLocaleLowerCase('es');
-  const visibleLibrary = libraryOrder.filter(id => !query || `${clients[id].name} ${clients[id].id}`.toLocaleLowerCase('es').includes(query));
+  const matchesQuery = id => !query || `${clients[id].name} ${clients[id].id}`.toLocaleLowerCase('es').includes(query);
+  const levels = Object.fromEntries(libraryOrder.map(id => [id, paymentHistory(clients[id]).level]));
+  const counts = { all: 0, good: 0, irregular: 0, bad: 0 };
+  libraryOrder.filter(matchesQuery).forEach(id => { counts.all += 1; counts[levels[id]] += 1; });
+  Object.entries(counts).forEach(([key, value]) => { const node = document.querySelector(`[data-route-filter-count="${key}"]`); if (node) node.textContent = String(value); });
+  const visibleLibrary = libraryOrder.filter(id => matchesQuery(id) && (routeLibraryFilter === 'all' || levels[id] === routeLibraryFilter));
   library.replaceChildren(...visibleLibrary.map(id => routeClientCard(id, 'library', dailyOrder)));
   daily.replaceChildren(...dailyOrder.map(id => routeClientCard(id, 'daily', dailyOrder)));
-  if (!library.children.length) library.append(Object.assign(document.createElement('p'), { className: 'route-empty', textContent: query ? 'No se encontraron clientes.' : 'No hay cartulinas activas en esta ruta.' }));
+  if (!library.children.length) library.append(Object.assign(document.createElement('p'), { className: 'route-empty', textContent: query || routeLibraryFilter !== 'all' ? 'No se encontraron clientes.' : 'No hay cartulinas activas en esta ruta.' }));
   if (!daily.children.length) daily.append(Object.assign(document.createElement('p'), { className: 'route-empty', textContent: 'Agrega clientes desde la biblioteca para armar la ruta.' }));
 }
 
@@ -315,4 +323,15 @@ export function mount() {
   });
   document.querySelectorAll('#route-library-list,#route-daily-list').forEach((container, index) => updateDailyRouteDrop(container, index === 0 ? 'library' : 'daily'));
   document.querySelector('#route-library-search')?.addEventListener('input', renderRouteBuilder);
+  document.querySelector('#route-library-filters')?.addEventListener('click', event => {
+    const chip = event.target.closest('[data-route-filter]');
+    if (!chip) return;
+    routeLibraryFilter = chip.dataset.routeFilter;
+    document.querySelectorAll('[data-route-filter]').forEach(button => {
+      const active = button === chip;
+      button.classList.toggle('is-active', active);
+      button.setAttribute('aria-checked', String(active));
+    });
+    renderRouteBuilder();
+  });
 }
