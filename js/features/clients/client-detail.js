@@ -21,7 +21,7 @@ import { LOCATION_FAILURE_LABELS, hasCoordinates, isApproximateLocation, locateD
 import { clientInsurance, generalInsuranceAmount, resolveInsurance } from '../../domain/insurance.js';
 import { canRenew, onClientRenewed } from './new-client.js';
 import { MAX_ACTIVE_CARDS_PER_PERSON, activeCardIds, canAddCard, loanCount, loanCountLabel, personCardIds } from '../../domain/person-cards.js';
-import { PAYDAY_OPTIONS, paintCardColorBand, startDateForPayday, weekdayOf } from '../../domain/card-color.js';
+import { PAYDAY_OPTIONS, paintCardColorBand, shiftDays, startDateForPayday, weekdayOf } from '../../domain/card-color.js';
 import { FINANCE_INTEREST_PERCENT, GENERAL_RETANQUEO, RETANQUEO_INTEREST_PERCENT, financeCard, pendingRestructure, percentOrAmount, recordRetanqueoInRoute, retanqueoCard } from '../../domain/restructure.js';
 
 /** Dentro de la ficha: la «cicatriz» del historial de pagos de la cartulina. */
@@ -698,6 +698,16 @@ export function mount() {
     const currentPayday = client.creditStartDate ? weekdayOf(client.creditStartDate) : 1;
     const paydayOptions = PAYDAY_OPTIONS.map(option => ({ value: String(option.weekday), label: option.label }));
     if (currentPayday === 0) paydayOptions.unshift({ value: '0', label: 'Domingo (sin color)' });
+    // Diaria, quincenal o mensual entregada (o iniciada) un domingo: se guarda con la fecha del sábado o del lunes.
+    const sunday = client.deliveredOn && weekdayOf(client.deliveredOn) === 0 ? client.deliveredOn : currentPayday === 0 ? client.creditStartDate : null;
+    const shiftValue = !sunday ? '' : client.creditStartDate === shiftDays(sunday, -1) ? 'prev' : client.creditStartDate === shiftDays(sunday, 1) ? 'next' : client.creditStartDate === sunday ? 'sun' : '';
+    const shiftField = sunday && (client.frequency || 'weekly') !== 'weekly' && shiftValue
+      ? [{ name: 'sundayShift', label: 'Entregada un domingo · fecha con que se guarda', type: 'select', value: shiftValue, options: [
+        ...(shiftValue === 'sun' ? [{ value: 'sun', label: `Domingo ${formatDate(sunday)}` }] : []),
+        { value: 'prev', label: `Sábado ${formatDate(shiftDays(sunday, -1))} · día anterior` },
+        { value: 'next', label: `Lunes ${formatDate(shiftDays(sunday, 1))} · día siguiente` },
+      ] }]
+      : [];
     openCustomModal({
       title: 'Editar cartulina completa', description: 'Actualiza los datos personales, financieros y el calendario del crédito.',
       fields: [
@@ -709,7 +719,7 @@ export function mount() {
         { name: 'addressNotes', label: 'Indicaciones del domicilio', type: 'textarea', rows: 2, value: client.addressNotes || '' },
         { name: 'route', label: 'Ruta / nombre del cobro', type: 'text', value: routeSettlements[client.route]?.name || client.route, required: true },
         { name: 'frequency', label: 'Frecuencia de pago', type: 'select', value: client.frequency || 'weekly', options: Object.entries(paymentFrequencyLabels).map(([value, label]) => ({ value, label })) },
-        { name: 'paymentWeekday', label: 'Día de cobro (solo semanales · define el color)', type: 'select', value: String(currentPayday), options: paydayOptions },
+        ...((client.frequency || 'weekly') === 'weekly' ? [{ name: 'paymentWeekday', label: 'Día de cobro (define el color)', type: 'select', value: String(currentPayday), options: paydayOptions }] : shiftField),
         { name: 'principal', label: 'Capital prestado ($)', type: 'number', min: 0, step: 1, value: inferClientPrincipal(client), required: true },
         { name: 'total', label: 'Valor total del crédito ($)', type: 'number', min: 0, step: 1, value: client.total, required: true },
         { name: 'balance', label: 'Saldo pendiente ($)', type: 'number', min: 0, step: 1, value: client.balance, required: true },
@@ -784,6 +794,11 @@ export function mount() {
         const payday = Number(values.paymentWeekday);
         if (client.frequency === 'weekly' && client.creditStartDate && payday >= 1 && payday <= 6 && payday !== weekdayOf(client.creditStartDate)) {
           client.creditStartDate = startDateForPayday(client, payday);
+          (client.payments || []).forEach(payment => { if (!payment.beforeRestructure) payment.cycleIndex = paymentCycleIndex(client, payment.date); });
+          client.paidPeriodIndexes = [...new Set((client.payments || []).filter(payment => !payment.beforeRestructure).map(payment => payment.cycleIndex))].sort((a, b) => a - b);
+        }
+        if (client.frequency !== 'weekly' && sunday && (values.sundayShift === 'prev' || values.sundayShift === 'next') && values.sundayShift !== shiftValue) {
+          client.creditStartDate = shiftDays(sunday, values.sundayShift === 'prev' ? -1 : 1);
           (client.payments || []).forEach(payment => { if (!payment.beforeRestructure) payment.cycleIndex = paymentCycleIndex(client, payment.date); });
           client.paidPeriodIndexes = [...new Set((client.payments || []).filter(payment => !payment.beforeRestructure).map(payment => payment.cycleIndex))].sort((a, b) => a - b);
         }
