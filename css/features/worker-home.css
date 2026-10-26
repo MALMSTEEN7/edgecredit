@@ -1031,3 +1031,40 @@
   color: var(--muted);
   font-size: 12px;
 }
+
+/* Resumen del día · historial desplegable de los abonos de hoy */
+.worker-day-payments {
+  margin-top: 12px;
+}
+
+.worker-day-payments li {
+  align-items: center;
+}
+
+.worker-day-payment-client {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.worker-day-payment-client strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.worker-day-payment-client small {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.worker-day-payment-amount {
+  flex: 0 0 auto;
+  margin-left: auto;
+}

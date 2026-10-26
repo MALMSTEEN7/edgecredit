@@ -527,3 +527,15 @@
   border-color: var(--primary);
   background: color-mix(in srgb, var(--primary) 18%, var(--card));
 }
+
+/* Editar cartulina · color que toma según la fecha de inicio */
+.start-color-note {
+  display: grid !important;
+  grid-template-columns: minmax(0,1fr) !important;
+  gap: 4px;
+}
+
+.start-color-note strong {
+  font-size: 15px !important;
+  line-height: 1.3;
+}

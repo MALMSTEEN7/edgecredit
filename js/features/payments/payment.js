@@ -79,6 +79,7 @@ export function mount() {
     catch (error) { showToast(error.message || 'No se pudo procesar el comprobante.'); return; }
     client.payments.unshift({
       date: paidDate,
+      at: new Date().toISOString(),
       amount,
       method: paymentMethod,
       cycleIndex,

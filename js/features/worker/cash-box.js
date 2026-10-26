@@ -72,7 +72,50 @@ export function renderWorkerDailyMetrics() {
   const baseNote = document.querySelector('#worker-day-base-insurance');
   baseNote.hidden = !insurance.total;
   baseNote.textContent = insurance.total ? `Incluye ${formatMoney(insurance.total)} de seguros` : '';
+  renderWorkerDayPayments(closure);
   document.querySelector('#worker-day-cash').textContent = formatMoney(route.cashDelivered || (Number(route.base || 0) + Number(route.collections || 0) - Number(route.loans || 0) - Number(route.expenses || 0) - Number(route.otherExpenses || 0)));
+}
+
+/**
+ * Historial desplegable de los abonos recibidos hoy en la ruta (más reciente primero).
+ * Tras «Verificar y cerrar ruta» solo cuentan los registrados después del cierre.
+ */
+function renderWorkerDayPayments(closureTs) {
+  const today = localDateISO();
+  const entries = Object.entries(clients)
+    .filter(([, client]) => client?.route === state.workerRoute)
+    .flatMap(([clientId, client]) => (client.payments || [])
+      .filter(payment => payment.date === today && !(closureTs && payment.at && Date.parse(payment.at) <= closureTs))
+      .map(payment => ({ clientId, name: client.name, ...payment })))
+    .sort((a, b) => String(b.at || '').localeCompare(String(a.at || '')));
+  const list = document.querySelector('#worker-day-payments-list');
+  list.replaceChildren();
+  if (!entries.length) {
+    const empty = document.createElement('li');
+    empty.className = 'history-empty';
+    empty.textContent = 'Todavía no hay abonos registrados hoy.';
+    list.append(empty);
+  }
+  entries.forEach(entry => {
+    const row = document.createElement('li');
+    const open = document.createElement('button');
+    open.type = 'button';
+    open.className = 'worker-day-payment-client';
+    open.dataset.openClient = entry.clientId;
+    const name = document.createElement('strong');
+    name.textContent = entry.name;
+    const detail = document.createElement('small');
+    const time = entry.at ? new Date(entry.at).toLocaleTimeString('es-CO', { hour: 'numeric', minute: '2-digit' }) : '';
+    detail.textContent = [time, entry.method === 'transfer' ? 'Transferencia' : 'Efectivo'].filter(Boolean).join(' · ');
+    open.append(name, detail);
+    const amount = document.createElement('strong');
+    amount.className = 'worker-day-payment-amount';
+    amount.textContent = formatMoney(entry.amount);
+    row.append(open, amount);
+    list.append(row);
+  });
+  const total = entries.reduce((sum, entry) => sum + (Number(entry.amount) || 0), 0);
+  document.querySelector('#worker-day-payments-count').textContent = entries.length ? `${entries.length} ${entries.length === 1 ? 'abono' : 'abonos'} · ${formatMoney(total)}` : 'Sin abonos';
 }
 
 /** Registra los listeners del módulo. Se invoca una sola vez desde app.js. */

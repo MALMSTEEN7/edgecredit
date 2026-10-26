@@ -21,7 +21,7 @@ import { LOCATION_FAILURE_LABELS, hasCoordinates, isApproximateLocation, locateD
 import { clientInsurance, generalInsuranceAmount, resolveInsurance } from '../../domain/insurance.js';
 import { canRenew, onClientRenewed } from './new-client.js';
 import { MAX_ACTIVE_CARDS_PER_PERSON, activeCardIds, canAddCard, loanCount, loanCountLabel, personCardIds } from '../../domain/person-cards.js';
-import { PAYDAY_OPTIONS, paintCardColorBand, shiftDays, startDateForPayday, weekdayOf } from '../../domain/card-color.js';
+import { PAYDAY_OPTIONS, cardColor, paintCardColorBand, shiftDays, startDateForPayday, weekdayOf } from '../../domain/card-color.js';
 import { FINANCE_INTEREST_PERCENT, GENERAL_RETANQUEO, RETANQUEO_INTEREST_PERCENT, financeCard, pendingRestructure, percentOrAmount, recordRetanqueoInRoute, retanqueoCard } from '../../domain/restructure.js';
 
 /** Dentro de la ficha: la «cicatriz» del historial de pagos de la cartulina. */
@@ -150,6 +150,22 @@ export function renderHistory(client) {
   }
   document.querySelector('#interest-history-count').textContent = `${client.interestHistory.length} ${client.interestHistory.length === 1 ? 'recargo' : 'recargos'}`;
   renderRetanqueoHistory(client);
+}
+
+/** Reubica los abonos en sus cuotas cuando cambia la fecha de inicio de la cartulina. */
+function reassignPaymentCycles(client) {
+  (client.payments || []).forEach(payment => { if (!payment.beforeRestructure) payment.cycleIndex = paymentCycleIndex(client, payment.date); });
+  client.paidPeriodIndexes = [...new Set((client.payments || []).filter(payment => !payment.beforeRestructure).map(payment => payment.cycleIndex))].sort((a, b) => a - b);
+}
+
+/** Texto del color que toma una cartulina con esa frecuencia y fecha de inicio. */
+function startColorLabel(frequency, startDate) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(startDate || ''))) return 'Elige una fecha';
+  const color = cardColor({ balance: 1, frequency, creditStartDate: startDate });
+  const weekday = new Intl.DateTimeFormat('es-CO', { weekday: 'long' }).format(new Date(`${startDate}T12:00:00`));
+  if (weekdayOf(startDate) === 0) return `Domingo: no se permite (elige sábado o lunes)`;
+  if (!color) return `${weekday} · las diarias no llevan color`;
+  return frequency === 'weekly' ? `${color.label} · cobra los ${weekday}` : `${color.label} · inicia un ${weekday}`;
 }
 
 /** Retanqueos de la cartulina (lo prestado de más, sus intereses y seguros, y cómo cambió el saldo). */
@@ -729,6 +745,8 @@ export function mount() {
         { name: 'insuranceReason', label: 'Motivo si los seguros son diferentes al 10%', type: 'textarea', rows: 2, value: clientInsurance(client).reason },
         { name: 'paid', label: 'Cuotas pagadas', type: 'number', min: 0, step: 1, value: client.paid, required: true },
         { name: 'installments', label: 'Total de cuotas', type: 'number', min: 1, step: 1, value: client.installments, required: true },
+        { name: 'creditStartDate', label: 'Fecha de inicio de la cartulina (si la cambias, manda sobre el día de cobro y los días que lleva)', type: 'date', value: client.creditStartDate || localDateISO(), required: true },
+        { type: 'note', className: 'default-rate-note start-color-note', label: 'Color de la cartulina', value: startColorLabel(client.frequency || 'weekly', client.creditStartDate), valueId: 'edit-start-color', hint: 'Las semanales toman el color del día de la semana en que inicia.' },
         { name: 'routeDay', label: 'Días que lleva el crédito', type: 'number', min: 0, step: 1, value: creditDay(client), required: true },
         { name: 'totalDays', label: 'Duración acordada (días)', type: 'number', min: 1, step: 1, value: client.totalDays, required: true },
         { name: 'status', label: 'Estado', type: 'select', value: client.late ? 'late' : 'current', options: [{ value: 'current', label: 'Al día' }, { value: 'late', label: 'Mora' }] },
@@ -738,6 +756,12 @@ export function mount() {
         const oldState = { route: client.route, principal: oldPrincipal, total: Number(client.total) };
         if (Number(values.interestPercent) > 100) {
           customModalError.textContent = 'El interés debe estar entre 0 y 100%.';
+          return false;
+        }
+        const startChanged = values.creditStartDate !== (client.creditStartDate || localDateISO());
+        if (startChanged && !/^\d{4}-\d{2}-\d{2}$/.test(values.creditStartDate || '')) { customModalError.textContent = 'Escribe la fecha de inicio de la cartulina.'; return false; }
+        if (startChanged && weekdayOf(values.creditStartDate) === 0) {
+          customModalError.textContent = 'Esa fecha es domingo y las cartulinas no inician en domingo (quedaría sin color). Elige el sábado o el lunes.';
           return false;
         }
         const insurance = resolveInsurance(values.principal, true, values.insuranceAmount, values.insuranceReason);
@@ -787,21 +811,26 @@ export function mount() {
         client.paid = Number(values.paid);
         client.schedulePaidBaseline = Number(values.paid);
         client.installments = Number(values.installments);
-        // Corregir los días mueve la fecha de inicio: así siguen subiendo solos cada día.
-        if (Number(values.routeDay) !== creditDay(client)) client.creditStartDate = startDateForCreditDay(values.routeDay);
-        client.routeDay = Number(values.routeDay);
-        // Cambiar el día de cobro mueve el inicio a ese día de la semana; los abonos se reubican en sus cuotas.
-        const payday = Number(values.paymentWeekday);
-        if (client.frequency === 'weekly' && client.creditStartDate && payday >= 1 && payday <= 6 && payday !== weekdayOf(client.creditStartDate)) {
-          client.creditStartDate = startDateForPayday(client, payday);
-          (client.payments || []).forEach(payment => { if (!payment.beforeRestructure) payment.cycleIndex = paymentCycleIndex(client, payment.date); });
-          client.paidPeriodIndexes = [...new Set((client.payments || []).filter(payment => !payment.beforeRestructure).map(payment => payment.cycleIndex))].sort((a, b) => a - b);
+        const startBefore = client.creditStartDate;
+        if (startChanged) {
+          // Fecha de inicio escrita por el admin: manda sobre los días que lleva y el día de cobro.
+          // El color sale solo de esa fecha (día de la semana en las semanales).
+          client.creditStartDate = values.creditStartDate;
+        } else {
+          // Corregir los días mueve la fecha de inicio: así siguen subiendo solos cada día.
+          if (Number(values.routeDay) !== creditDay(client)) client.creditStartDate = startDateForCreditDay(values.routeDay);
+          // Cambiar el día de cobro mueve el inicio a ese día de la semana.
+          const payday = Number(values.paymentWeekday);
+          if (client.frequency === 'weekly' && client.creditStartDate && payday >= 1 && payday <= 6 && payday !== weekdayOf(client.creditStartDate)) {
+            client.creditStartDate = startDateForPayday(client, payday);
+          }
+          if (client.frequency !== 'weekly' && sunday && (values.sundayShift === 'prev' || values.sundayShift === 'next') && values.sundayShift !== shiftValue) {
+            client.creditStartDate = shiftDays(sunday, values.sundayShift === 'prev' ? -1 : 1);
+          }
         }
-        if (client.frequency !== 'weekly' && sunday && (values.sundayShift === 'prev' || values.sundayShift === 'next') && values.sundayShift !== shiftValue) {
-          client.creditStartDate = shiftDays(sunday, values.sundayShift === 'prev' ? -1 : 1);
-          (client.payments || []).forEach(payment => { if (!payment.beforeRestructure) payment.cycleIndex = paymentCycleIndex(client, payment.date); });
-          client.paidPeriodIndexes = [...new Set((client.payments || []).filter(payment => !payment.beforeRestructure).map(payment => payment.cycleIndex))].sort((a, b) => a - b);
-        }
+        // Con otra fecha de inicio los abonos se reubican en sus cuotas.
+        if (client.creditStartDate !== startBefore) reassignPaymentCycles(client);
+        client.routeDay = creditDay(client);
         client.totalDays = Number(values.totalDays);
         client.term = `${client.totalDays} días`;
         client.status = values.status === 'late' ? 'Mora' : 'Al día';
@@ -820,6 +849,21 @@ export function mount() {
         filterClientCards();
       }
     });
+  });
+  // Editar cartulina: el color se actualiza en vivo al cambiar la fecha de inicio o la frecuencia.
+  const refreshStartColor = event => {
+    const form = event.target.closest?.('#custom-modal-form');
+    const note = document.querySelector('#edit-start-color');
+    if (!form || !note || !['creditStartDate', 'frequency'].includes(event.target.name)) return;
+    note.textContent = startColorLabel(form.elements.frequency?.value || 'weekly', form.elements.creditStartDate?.value);
+    customModalError.textContent = '';
+  };
+  document.addEventListener('input', refreshStartColor);
+  document.addEventListener('change', refreshStartColor);
+  // Abonos del día (Resumen del día del trabajador): tocar el cliente abre su cartulina.
+  document.addEventListener('click', event => {
+    const target = event.target.closest?.('[data-open-client]');
+    if (target && clients[target.dataset.openClient]) openClient(target.dataset.openClient);
   });
   document.querySelector('#delete-client').addEventListener('click', () => removeClient(state.activeClient));
   document.querySelector('#payment-history-list').addEventListener('click', event => {
