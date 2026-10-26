@@ -15,6 +15,7 @@ import { updateCashTotal } from '../worker/cash-box.js';
 import { generalInsuranceAmount, resolveInsurance } from '../../domain/insurance.js';
 import { MAX_ACTIVE_CARDS_PER_PERSON, activeCardIds, canAddCard, personCardIds, personKey } from '../../domain/person-cards.js';
 import { localDateISO } from '../../shared/dates.js';
+import { PAYDAY_OPTIONS, nextWeekdayDate, weekdayOf } from '../../domain/card-color.js';
 import { formatMoney, normalizeSearch } from '../../shared/format.js';
 import { compressClientPhoto } from '../../shared/media.js';
 import { LOCATION_FAILURE_LABELS, hasCoordinates, isApproximateLocation, locateDevice } from '../../shared/geo.js';
@@ -154,6 +155,37 @@ function setLinkedMode(sourceId, mode) {
   }
 }
 
+/**
+ * Los domingos no hay cobro: una cartulina semanal creada ese día pregunta qué día va a pagar
+ * (lunes a sábado). Solo aparece los domingos y solo para la frecuencia semanal.
+ */
+function updateSundayPayday() {
+  const box = document.querySelector('#sunday-payday');
+  const show = weekdayOf(localDateISO()) === 0 && newClientForm.elements.frequency.value === 'weekly';
+  box.hidden = !show;
+  const options = document.querySelector('#sunday-payday-options');
+  if (!options.children.length) {
+    PAYDAY_OPTIONS.forEach(option => {
+      const label = document.createElement('label');
+      label.className = 'sunday-payday-option';
+      label.style.setProperty('--card-color', option.color);
+      label.style.setProperty('--card-color-ink', option.ink);
+      const input = document.createElement('input');
+      input.type = 'radio';
+      input.name = 'paymentWeekday';
+      input.value = String(option.weekday);
+      const text = document.createElement('span');
+      text.textContent = option.label;
+      label.append(input, text);
+      options.append(label);
+    });
+  }
+  options.querySelectorAll('input').forEach(input => {
+    input.required = show;
+    input.disabled = !show;
+  });
+}
+
 function openNewClientModal() {
   if (state.userRole !== 'worker' && state.userRole !== 'admin') return;
   newClientError.textContent = '';
@@ -180,6 +212,7 @@ function openNewClientModal() {
   setInsuranceCustom(false);
   setLinkedMode(null);
   updateInsurancePreview();
+  updateSundayPayday();
   newClientModal.hidden = false;
   newClientModal.classList.add('active');
   document.body.classList.add('modal-open');
@@ -229,6 +262,7 @@ function openLinkedModal(sourceId, mode) {
   fields.addressNotes.value = source.addressNotes || '';
   fields.totalDays.value = source.totalDays || '';
   fields.frequency.value = paymentFrequencyDays[source.frequency] ? source.frequency : 'weekly';
+  updateSundayPayday();
   if (source.altAddress) { setAltAddressOpen(true); document.querySelector('#alt-address-input').value = source.altAddress; }
   if (state.userRole === 'admin') document.querySelector('#admin-interest-percent').value = source.interestPercent ?? 20;
   updateInsurancePreview();
@@ -278,6 +312,12 @@ function addNewClient(values, photoData = '', insurance, gps = null) {
     frequency, creditStartDate: today, visitHistory: [], paymentWarning: false, paidPeriodIndexes: [], schedulePaidBaseline: 0, photoData, totalPaidAmount: 0, settledAt: null
   };
   const created = clients[clientId];
+  // Creada un domingo: el crédito arranca el día de cobro elegido (y toma su color).
+  const payday = Number(values.paymentWeekday);
+  if (frequency === 'weekly' && weekdayOf(today) === 0 && payday >= 1 && payday <= 6) {
+    created.creditStartDate = nextWeekdayDate(today, payday);
+    created.deliveredOn = today;
+  }
   if (source) {
     // Renovación: se heredan foto, notas, ubicaciones e historial; si la dirección cambió,
     // la anterior pasa al historial y la ubicación se vuelve a tomar.
@@ -414,6 +454,7 @@ export function mount() {
   });
   document.querySelector('#insurance-custom-toggle').addEventListener('change', event => setInsuranceCustom(event.target.checked));
   newClientForm.elements.principal.addEventListener('input', updateInsurancePreview);
+  newClientForm.elements.frequency.addEventListener('change', updateSundayPayday);
   newClientModal.addEventListener('click', event => { if (event.target === newClientModal) closeNewClientModal(); });
   newClientForm.addEventListener('submit', async event => {
     event.preventDefault();

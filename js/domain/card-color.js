@@ -47,3 +47,38 @@ export function paintCardColorBand(band, client, card = null) {
   band.textContent = color.label;
   band.title = color.key === 'biweekly' || color.key === 'monthly' ? `Cartulina ${color.label.toLocaleLowerCase('es')}` : `Cartulina semanal · paga los ${color.label.toLocaleLowerCase('es')}`;
 }
+
+/** Días de cobro que se pueden elegir (lunes a sábado), con su color. */
+export const PAYDAY_OPTIONS = Object.entries(WEEKDAY_COLORS).map(([weekday, color]) => ({ weekday: Number(weekday), ...color }));
+
+const isoOf = date => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+const dateOf = iso => { const [year, month, day] = String(iso).split('-').map(Number); return new Date(year, month - 1, day); };
+
+/** Día de la semana (0 = domingo) de una fecha AAAA-MM-DD. */
+export function weekdayOf(iso) {
+  return dateOf(iso).getDay();
+}
+
+/** Próxima fecha (1 a 7 días después de `fromISO`) que cae en `weekday`. */
+export function nextWeekdayDate(fromISO, weekday) {
+  const date = dateOf(fromISO);
+  date.setDate(date.getDate() + (((Number(weekday) - date.getDay() + 6) % 7) + 1));
+  return isoOf(date);
+}
+
+/** Fecha más cercana a `baseISO` (3 días antes a 3 después) que cae en `weekday`. */
+export function nearestWeekdayDate(baseISO, weekday) {
+  const date = dateOf(baseISO);
+  date.setDate(date.getDate() + ((Number(weekday) - date.getDay() + 10) % 7) - 3);
+  return isoOf(date);
+}
+
+/**
+ * Fecha de inicio para cobrar los `weekday`. Si la cartulina se entregó un domingo, el día
+ * elegido es el siguiente a esa entrega (así se puede corregir sin que se corra una semana);
+ * si no, se mueve al día más cercano a su inicio actual.
+ */
+export function startDateForPayday(client, weekday) {
+  if (client.deliveredOn && weekdayOf(client.deliveredOn) === 0) return nextWeekdayDate(client.deliveredOn, weekday);
+  return nearestWeekdayDate(client.creditStartDate, weekday);
+}

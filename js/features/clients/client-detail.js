@@ -8,7 +8,7 @@ import { creditDetails, customModalError, disclosureButton, interestToggle, rout
 import { state } from '../../core/state.js';
 import { clients, ensureRoute, expandedPaymentHistory, pendingRequests, persistBusinessData, routeSettlements } from '../../core/store.js';
 import { syncCancelledCard, updateClientLoanAccounting } from '../../domain/accounting.js';
-import { balancesAfterPayments, creditDay, inferClientPrincipal, paidPercent, startDateForCreditDay, paymentBehavior, paymentHistory, rememberWorstHistory, updatePaidAmountTotal } from '../../domain/loan-schedule.js';
+import { balancesAfterPayments, creditDay, inferClientPrincipal, paidPercent, paymentCycleIndex, startDateForCreditDay, paymentBehavior, paymentHistory, rememberWorstHistory, updatePaidAmountTotal } from '../../domain/loan-schedule.js';
 import { renderAdminRoute } from '../admin/admin-shell.js';
 import { filterClientCards, removeClient, renderClientRows, setClientAvatar } from './directory.js';
 import { localDateISO } from '../../shared/dates.js';
@@ -21,7 +21,7 @@ import { LOCATION_FAILURE_LABELS, hasCoordinates, isApproximateLocation, locateD
 import { clientInsurance, generalInsuranceAmount, resolveInsurance } from '../../domain/insurance.js';
 import { canRenew, onClientRenewed } from './new-client.js';
 import { MAX_ACTIVE_CARDS_PER_PERSON, activeCardIds, canAddCard, loanCount, loanCountLabel, personCardIds } from '../../domain/person-cards.js';
-import { paintCardColorBand } from '../../domain/card-color.js';
+import { PAYDAY_OPTIONS, paintCardColorBand, startDateForPayday, weekdayOf } from '../../domain/card-color.js';
 import { FINANCE_INTEREST_PERCENT, GENERAL_RETANQUEO, RETANQUEO_INTEREST_PERCENT, financeCard, pendingRestructure, percentOrAmount, recordRetanqueoInRoute, retanqueoCard } from '../../domain/restructure.js';
 
 /** Dentro de la ficha: la «cicatriz» del historial de pagos de la cartulina. */
@@ -694,6 +694,10 @@ export function mount() {
   document.querySelector('#edit-client').addEventListener('click', () => {
     if (state.userRole !== 'admin') return;
     const client = clients[state.activeClient];
+    // Día de cobro de las semanales (define su color). Domingo solo aparece si ya quedó así.
+    const currentPayday = client.creditStartDate ? weekdayOf(client.creditStartDate) : 1;
+    const paydayOptions = PAYDAY_OPTIONS.map(option => ({ value: String(option.weekday), label: option.label }));
+    if (currentPayday === 0) paydayOptions.unshift({ value: '0', label: 'Domingo (sin color)' });
     openCustomModal({
       title: 'Editar cartulina completa', description: 'Actualiza los datos personales, financieros y el calendario del crédito.',
       fields: [
@@ -705,6 +709,7 @@ export function mount() {
         { name: 'addressNotes', label: 'Indicaciones del domicilio', type: 'textarea', rows: 2, value: client.addressNotes || '' },
         { name: 'route', label: 'Ruta / nombre del cobro', type: 'text', value: routeSettlements[client.route]?.name || client.route, required: true },
         { name: 'frequency', label: 'Frecuencia de pago', type: 'select', value: client.frequency || 'weekly', options: Object.entries(paymentFrequencyLabels).map(([value, label]) => ({ value, label })) },
+        { name: 'paymentWeekday', label: 'Día de cobro (solo semanales · define el color)', type: 'select', value: String(currentPayday), options: paydayOptions },
         { name: 'principal', label: 'Capital prestado ($)', type: 'number', min: 0, step: 1, value: inferClientPrincipal(client), required: true },
         { name: 'total', label: 'Valor total del crédito ($)', type: 'number', min: 0, step: 1, value: client.total, required: true },
         { name: 'balance', label: 'Saldo pendiente ($)', type: 'number', min: 0, step: 1, value: client.balance, required: true },
@@ -775,6 +780,13 @@ export function mount() {
         // Corregir los días mueve la fecha de inicio: así siguen subiendo solos cada día.
         if (Number(values.routeDay) !== creditDay(client)) client.creditStartDate = startDateForCreditDay(values.routeDay);
         client.routeDay = Number(values.routeDay);
+        // Cambiar el día de cobro mueve el inicio a ese día de la semana; los abonos se reubican en sus cuotas.
+        const payday = Number(values.paymentWeekday);
+        if (client.frequency === 'weekly' && client.creditStartDate && payday >= 1 && payday <= 6 && payday !== weekdayOf(client.creditStartDate)) {
+          client.creditStartDate = startDateForPayday(client, payday);
+          (client.payments || []).forEach(payment => { if (!payment.beforeRestructure) payment.cycleIndex = paymentCycleIndex(client, payment.date); });
+          client.paidPeriodIndexes = [...new Set((client.payments || []).filter(payment => !payment.beforeRestructure).map(payment => payment.cycleIndex))].sort((a, b) => a - b);
+        }
         client.totalDays = Number(values.totalDays);
         client.term = `${client.totalDays} días`;
         client.status = values.status === 'late' ? 'Mora' : 'Al día';
