@@ -10,7 +10,7 @@ import { clients, persistBusinessData, routeSettlements } from '../../core/store
 import { paidPercent, paymentBehavior, paymentHistory } from '../../domain/loan-schedule.js';
 import { openClient } from './client-detail.js';
 import { todayRouteOrder, visitStatus } from '../daily-route/daily-route.js';
-import { formatMoney } from '../../shared/format.js';
+import { formatMoney, normalizeSearch } from '../../shared/format.js';
 import { moveId } from '../../shared/math.js';
 import { openCustomModal } from '../../ui/custom-modal.js';
 import { showView } from '../../ui/navigation.js';
@@ -173,17 +173,22 @@ function renderDirectoryFilterCounts(route) {
 
 export function filterClientCards() {
   const route = state.userRole === 'admin' ? routeSelect.value : state.workerRoute;
-  const query = document.querySelector('#directory-search')?.value.trim().toLocaleLowerCase('es') || '';
+  const directoryQuery = normalizeSearch(document.querySelector('#directory-search')?.value.trim());
+  const homeQuery = normalizeSearch(document.querySelector('#home-search')?.value.trim());
   const todayOrder = todayRouteOrder(route);
   document.querySelectorAll('#worker-view [data-client][data-route]').forEach(card => {
     const matchesRoute = card.dataset.route === route;
-    const matchesQuery = card.textContent.toLocaleLowerCase('es').includes(query);
     const exists = Object.prototype.hasOwnProperty.call(clients, card.dataset.client);
+    const homeClient = clients[card.dataset.client];
+    const inHome = Boolean(card.closest('#inicio .client-list'));
+    // Cada lista tiene su buscador (Inicio y Directorio); se busca por nombre o cédula.
+    const query = inHome ? homeQuery : directoryQuery;
+    const matchesQuery = !query || normalizeSearch(card.textContent).includes(query) || (exists && normalizeSearch(homeClient.id).includes(query));
     // Inicio: solo cartulinas activas de la ruta del día que aún no se visitaron hoy
     // (al registrar un abono o "No pagó hoy" la fila desaparece del Inicio). Si el trabajador
-    // todavía no armó la ruta del día, el Inicio queda vacío (solo el aviso).
-    const homeClient = clients[card.dataset.client];
-    const dailySelected = !card.closest('#inicio .client-list') || (exists && Number(homeClient.balance) > 0 && visitStatus(card.dataset.client) === 'pending' && (todayOrder.includes(card.dataset.client) || (!todayOrder.length && state.userRole !== 'worker')));
+    // todavía no armó la ruta del día, el Inicio queda vacío (solo el aviso). Al buscar en el
+    // Inicio aparecen todas las cartulinas activas de la ruta que coincidan.
+    const dailySelected = !inHome || (exists && Number(homeClient.balance) > 0 && (homeQuery || (visitStatus(card.dataset.client) === 'pending' && (todayOrder.includes(card.dataset.client) || (!todayOrder.length && state.userRole !== 'worker')))));
     const inDirectory = Boolean(card.closest('#directorio'));
     const passesFilter = !inDirectory || (exists && matchesDirectoryFilter(homeClient));
     card.hidden = !exists || !matchesRoute || !matchesQuery || !dailySelected || !passesFilter;
@@ -283,4 +288,5 @@ export function mount() {
   });
   clientButtons.forEach(button => button.addEventListener('click', event => { if (!event.target.closest('[data-home-action]')) openClient(button.dataset.client); }));
   document.querySelector('#directory-search')?.addEventListener('input', filterClientCards);
+  document.querySelector('#home-search')?.addEventListener('input', filterClientCards);
 }

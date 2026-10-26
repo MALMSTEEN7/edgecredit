@@ -107,6 +107,7 @@ function logout() {
   if (!newClientModal.hidden) closeNewClientModal();
   if (!interestModal.hidden) closeInterestModal();
   document.querySelector('#directory-search').value = '';
+  document.querySelector('#home-search').value = '';
   Object.keys(clients).forEach(clientId => { if (clients[clientId]) renderClientRows(clientId); });
   persistBusinessData();
   renderPendingRequests();

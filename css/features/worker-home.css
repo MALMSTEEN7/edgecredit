@@ -1020,3 +1020,14 @@
 .worker-metric-insurance {
   border-color: color-mix(in srgb, var(--success, #2ecc71) 35%, var(--line)) !important;
 }
+
+/* Buscador del Inicio (debajo de «Organizar ruta») */
+.view#inicio .home-search {
+  margin: 0 0 12px;
+}
+
+.home-search-note {
+  margin: -4px 0 10px;
+  color: var(--muted);
+  font-size: 12px;
+}
