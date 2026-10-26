@@ -8607,7 +8607,7 @@ function __mount_expensesModule() {
 // ── js/features/worker/home.js
 /**
  * features/worker/home · Inicio del trabajador: primero los clientes de la ruta del día;
- * "Tu caja hoy" y "Resumen del día" quedan plegados detrás de dos botones.
+ * "Tu base hoy" y "Resumen del día" quedan plegados detrás de dos botones.
  */
 
 
@@ -8641,7 +8641,7 @@ function renderHomeHeader() {
   document.querySelector('#home-route-hint').hidden = organized || state.userRole !== 'worker';
 }
 
-/** Muestra el total en caja dentro del botón "Tu caja hoy" sin tener que abrirlo. */
+/** Muestra el total en caja dentro del botón "Tu base hoy" sin tener que abrirlo. */
 function updateCashChip(totalText) {
   const chip = document.querySelector('#home-cash-total-chip');
   if (chip) chip.textContent = `${totalText} en caja`;

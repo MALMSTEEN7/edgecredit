@@ -34,7 +34,7 @@
   <link rel="icon" href="icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="icon-192.png">
   <meta name="apple-mobile-web-app-capable" content="yes">
-  <link rel="stylesheet" id="app-styles" href="dist/styles.bundle.css?v=58df03e07e">
+  <link rel="stylesheet" id="app-styles" href="dist/styles.bundle.css?v=092da97104">
 </head>
 <body class="login-active">
   <section class="login-gateway" id="login-gateway" aria-labelledby="login-title">
@@ -92,12 +92,12 @@
         <div class="client-list" aria-label="Clientes de la ruta diaria">
         </div>
         <div class="home-toggles" role="group" aria-label="Resumen de tu jornada">
-          <button type="button" class="home-toggle" id="toggle-home-cash" aria-expanded="false" aria-controls="home-cash-panel"><span class="home-toggle-icon" aria-hidden="true">▣</span><span class="home-toggle-copy"><strong>Tu caja hoy</strong><small id="home-cash-total-chip">$ 0 en caja</small></span><span class="home-toggle-chevron" aria-hidden="true">⌄</span></button>
+          <button type="button" class="home-toggle" id="toggle-home-cash" aria-expanded="false" aria-controls="home-cash-panel"><span class="home-toggle-icon" aria-hidden="true">▣</span><span class="home-toggle-copy"><strong>Tu base hoy</strong><small id="home-cash-total-chip">$ 0 en caja</small></span><span class="home-toggle-chevron" aria-hidden="true">⌄</span></button>
           <button type="button" class="home-toggle" id="toggle-home-metrics" aria-expanded="false" aria-controls="home-metrics-panel"><span class="home-toggle-icon" aria-hidden="true">▤</span><span class="home-toggle-copy"><strong>Resumen del día</strong><small>Cobros, gastos y préstamos</small></span><span class="home-toggle-chevron" aria-hidden="true">⌄</span></button>
         </div>
         <div class="home-panels">
         <section class="cash-card home-panel" id="home-cash-panel" aria-labelledby="cash-title" hidden>
-          <div class="cash-card-heading"><div><p class="eyebrow">RESUMEN DE RECAUDO</p><h2 id="cash-title">Tu Caja Hoy</h2></div><span class="sync-indicator"><span></span> En línea</span></div>
+          <div class="cash-card-heading"><div><p class="eyebrow">RESUMEN DE RECAUDO</p><h2 id="cash-title">Tu Base Hoy</h2></div><span class="sync-indicator"><span></span> En línea</span></div>
           <div class="cash-balances">
             <div class="balance-item"><span class="balance-icon" aria-hidden="true">▣</span><div><span class="balance-label">Efectivo</span><strong>$ 0</strong></div></div>
             <div class="balance-divider" aria-hidden="true"></div>
@@ -499,7 +499,7 @@
     // al cambiar el sello, el navegador descarga el JS/CSS nuevo en vez de usar su caché.
     // Para desarrollar con los módulos sueltos, abre index.html?dev desde un servidor local.
     (() => {
-      const APP_VERSION = '58df03e07e';
+      const APP_VERSION = '092da97104';
       const dev = new URLSearchParams(location.search).has('dev') && location.protocol !== 'file:';
       if (dev) {
         document.getElementById('app-styles').href = 'styles.css';
