@@ -34,7 +34,7 @@
   <link rel="icon" href="icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="icon-192.png">
   <meta name="apple-mobile-web-app-capable" content="yes">
-  <link rel="stylesheet" id="app-styles" href="dist/styles.bundle.css?v=efc4c2e592">
+  <link rel="stylesheet" id="app-styles" href="dist/styles.bundle.css?v=58df03e07e">
 </head>
 <body class="login-active">
   <section class="login-gateway" id="login-gateway" aria-labelledby="login-title">
@@ -117,6 +117,7 @@
             <article class="worker-metric-insurance"><span>Seguros del día</span><strong id="worker-day-insurance">$ 0</strong><small id="worker-day-insurance-count">Sin seguros cobrados hoy</small></article>
             <article><span>Efectivo del día</span><strong id="worker-day-cash">$ 0</strong></article>
           </div>
+          <details class="payment-history worker-day-payments" id="worker-day-payments"><summary><span>Abonos del día</span><span class="history-count" id="worker-day-payments-count">0 abonos</span></summary><ol id="worker-day-payments-list"></ol></details>
           <p class="worker-cash-note">El efectivo restante pasa a la base del siguiente día, sin los abonos recibidos por transferencia. Los sábados se entrega el efectivo del cierre.</p>
         </section>
         </div>
@@ -498,7 +499,7 @@
     // al cambiar el sello, el navegador descarga el JS/CSS nuevo en vez de usar su caché.
     // Para desarrollar con los módulos sueltos, abre index.html?dev desde un servidor local.
     (() => {
-      const APP_VERSION = 'efc4c2e592';
+      const APP_VERSION = '58df03e07e';
       const dev = new URLSearchParams(location.search).has('dev') && location.protocol !== 'file:';
       if (dev) {
         document.getElementById('app-styles').href = 'styles.css';

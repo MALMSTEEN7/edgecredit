@@ -6044,6 +6044,22 @@ function renderHistory(client) {
   renderRetanqueoHistory(client);
 }
 
+/** Reubica los abonos en sus cuotas cuando cambia la fecha de inicio de la cartulina. */
+function reassignPaymentCycles(client) {
+  (client.payments || []).forEach(payment => { if (!payment.beforeRestructure) payment.cycleIndex = paymentCycleIndex(client, payment.date); });
+  client.paidPeriodIndexes = [...new Set((client.payments || []).filter(payment => !payment.beforeRestructure).map(payment => payment.cycleIndex))].sort((a, b) => a - b);
+}
+
+/** Texto del color que toma una cartulina con esa frecuencia y fecha de inicio. */
+function startColorLabel(frequency, startDate) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(startDate || ''))) return 'Elige una fecha';
+  const color = cardColor({ balance: 1, frequency, creditStartDate: startDate });
+  const weekday = new Intl.DateTimeFormat('es-CO', { weekday: 'long' }).format(new Date(`${startDate}T12:00:00`));
+  if (weekdayOf(startDate) === 0) return `Domingo: no se permite (elige sábado o lunes)`;
+  if (!color) return `${weekday} · las diarias no llevan color`;
+  return frequency === 'weekly' ? `${color.label} · cobra los ${weekday}` : `${color.label} · inicia un ${weekday}`;
+}
+
 /** Retanqueos de la cartulina (lo prestado de más, sus intereses y seguros, y cómo cambió el saldo). */
 function renderRetanqueoHistory(client) {
   const retanqueos = (client.restructures || []).filter(entry => entry.type === 'retanqueo');
@@ -6621,6 +6637,8 @@ function __mount_clientDetailModule() {
         { name: 'insuranceReason', label: 'Motivo si los seguros son diferentes al 10%', type: 'textarea', rows: 2, value: clientInsurance(client).reason },
         { name: 'paid', label: 'Cuotas pagadas', type: 'number', min: 0, step: 1, value: client.paid, required: true },
         { name: 'installments', label: 'Total de cuotas', type: 'number', min: 1, step: 1, value: client.installments, required: true },
+        { name: 'creditStartDate', label: 'Fecha de inicio de la cartulina (si la cambias, manda sobre el día de cobro y los días que lleva)', type: 'date', value: client.creditStartDate || localDateISO(), required: true },
+        { type: 'note', className: 'default-rate-note start-color-note', label: 'Color de la cartulina', value: startColorLabel(client.frequency || 'weekly', client.creditStartDate), valueId: 'edit-start-color', hint: 'Las semanales toman el color del día de la semana en que inicia.' },
         { name: 'routeDay', label: 'Días que lleva el crédito', type: 'number', min: 0, step: 1, value: creditDay(client), required: true },
         { name: 'totalDays', label: 'Duración acordada (días)', type: 'number', min: 1, step: 1, value: client.totalDays, required: true },
         { name: 'status', label: 'Estado', type: 'select', value: client.late ? 'late' : 'current', options: [{ value: 'current', label: 'Al día' }, { value: 'late', label: 'Mora' }] },
@@ -6630,6 +6648,12 @@ function __mount_clientDetailModule() {
         const oldState = { route: client.route, principal: oldPrincipal, total: Number(client.total) };
         if (Number(values.interestPercent) > 100) {
           customModalError.textContent = 'El interés debe estar entre 0 y 100%.';
+          return false;
+        }
+        const startChanged = values.creditStartDate !== (client.creditStartDate || localDateISO());
+        if (startChanged && !/^\d{4}-\d{2}-\d{2}$/.test(values.creditStartDate || '')) { customModalError.textContent = 'Escribe la fecha de inicio de la cartulina.'; return false; }
+        if (startChanged && weekdayOf(values.creditStartDate) === 0) {
+          customModalError.textContent = 'Esa fecha es domingo y las cartulinas no inician en domingo (quedaría sin color). Elige el sábado o el lunes.';
           return false;
         }
         const insurance = resolveInsurance(values.principal, true, values.insuranceAmount, values.insuranceReason);
@@ -6679,21 +6703,26 @@ function __mount_clientDetailModule() {
         client.paid = Number(values.paid);
         client.schedulePaidBaseline = Number(values.paid);
         client.installments = Number(values.installments);
-        // Corregir los días mueve la fecha de inicio: así siguen subiendo solos cada día.
-        if (Number(values.routeDay) !== creditDay(client)) client.creditStartDate = startDateForCreditDay(values.routeDay);
-        client.routeDay = Number(values.routeDay);
-        // Cambiar el día de cobro mueve el inicio a ese día de la semana; los abonos se reubican en sus cuotas.
-        const payday = Number(values.paymentWeekday);
-        if (client.frequency === 'weekly' && client.creditStartDate && payday >= 1 && payday <= 6 && payday !== weekdayOf(client.creditStartDate)) {
-          client.creditStartDate = startDateForPayday(client, payday);
-          (client.payments || []).forEach(payment => { if (!payment.beforeRestructure) payment.cycleIndex = paymentCycleIndex(client, payment.date); });
-          client.paidPeriodIndexes = [...new Set((client.payments || []).filter(payment => !payment.beforeRestructure).map(payment => payment.cycleIndex))].sort((a, b) => a - b);
+        const startBefore = client.creditStartDate;
+        if (startChanged) {
+          // Fecha de inicio escrita por el admin: manda sobre los días que lleva y el día de cobro.
+          // El color sale solo de esa fecha (día de la semana en las semanales).
+          client.creditStartDate = values.creditStartDate;
+        } else {
+          // Corregir los días mueve la fecha de inicio: así siguen subiendo solos cada día.
+          if (Number(values.routeDay) !== creditDay(client)) client.creditStartDate = startDateForCreditDay(values.routeDay);
+          // Cambiar el día de cobro mueve el inicio a ese día de la semana.
+          const payday = Number(values.paymentWeekday);
+          if (client.frequency === 'weekly' && client.creditStartDate && payday >= 1 && payday <= 6 && payday !== weekdayOf(client.creditStartDate)) {
+            client.creditStartDate = startDateForPayday(client, payday);
+          }
+          if (client.frequency !== 'weekly' && sunday && (values.sundayShift === 'prev' || values.sundayShift === 'next') && values.sundayShift !== shiftValue) {
+            client.creditStartDate = shiftDays(sunday, values.sundayShift === 'prev' ? -1 : 1);
+          }
         }
-        if (client.frequency !== 'weekly' && sunday && (values.sundayShift === 'prev' || values.sundayShift === 'next') && values.sundayShift !== shiftValue) {
-          client.creditStartDate = shiftDays(sunday, values.sundayShift === 'prev' ? -1 : 1);
-          (client.payments || []).forEach(payment => { if (!payment.beforeRestructure) payment.cycleIndex = paymentCycleIndex(client, payment.date); });
-          client.paidPeriodIndexes = [...new Set((client.payments || []).filter(payment => !payment.beforeRestructure).map(payment => payment.cycleIndex))].sort((a, b) => a - b);
-        }
+        // Con otra fecha de inicio los abonos se reubican en sus cuotas.
+        if (client.creditStartDate !== startBefore) reassignPaymentCycles(client);
+        client.routeDay = creditDay(client);
         client.totalDays = Number(values.totalDays);
         client.term = `${client.totalDays} días`;
         client.status = values.status === 'late' ? 'Mora' : 'Al día';
@@ -6712,6 +6741,21 @@ function __mount_clientDetailModule() {
         filterClientCards();
       }
     });
+  });
+  // Editar cartulina: el color se actualiza en vivo al cambiar la fecha de inicio o la frecuencia.
+  const refreshStartColor = event => {
+    const form = event.target.closest?.('#custom-modal-form');
+    const note = document.querySelector('#edit-start-color');
+    if (!form || !note || !['creditStartDate', 'frequency'].includes(event.target.name)) return;
+    note.textContent = startColorLabel(form.elements.frequency?.value || 'weekly', form.elements.creditStartDate?.value);
+    customModalError.textContent = '';
+  };
+  document.addEventListener('input', refreshStartColor);
+  document.addEventListener('change', refreshStartColor);
+  // Abonos del día (Resumen del día del trabajador): tocar el cliente abre su cartulina.
+  document.addEventListener('click', event => {
+    const target = event.target.closest?.('[data-open-client]');
+    if (target && clients[target.dataset.openClient]) openClient(target.dataset.openClient);
   });
   document.querySelector('#delete-client').addEventListener('click', () => removeClient(state.activeClient));
   document.querySelector('#payment-history-list').addEventListener('click', event => {
@@ -8249,6 +8293,7 @@ function __mount_paymentModule() {
     catch (error) { showToast(error.message || 'No se pudo procesar el comprobante.'); return; }
     client.payments.unshift({
       date: paidDate,
+      at: new Date().toISOString(),
       amount,
       method: paymentMethod,
       cycleIndex,
@@ -8398,7 +8443,50 @@ function renderWorkerDailyMetrics() {
   const baseNote = document.querySelector('#worker-day-base-insurance');
   baseNote.hidden = !insurance.total;
   baseNote.textContent = insurance.total ? `Incluye ${formatMoney(insurance.total)} de seguros` : '';
+  renderWorkerDayPayments(closure);
   document.querySelector('#worker-day-cash').textContent = formatMoney(route.cashDelivered || (Number(route.base || 0) + Number(route.collections || 0) - Number(route.loans || 0) - Number(route.expenses || 0) - Number(route.otherExpenses || 0)));
+}
+
+/**
+ * Historial desplegable de los abonos recibidos hoy en la ruta (más reciente primero).
+ * Tras «Verificar y cerrar ruta» solo cuentan los registrados después del cierre.
+ */
+function renderWorkerDayPayments(closureTs) {
+  const today = localDateISO();
+  const entries = Object.entries(clients)
+    .filter(([, client]) => client?.route === state.workerRoute)
+    .flatMap(([clientId, client]) => (client.payments || [])
+      .filter(payment => payment.date === today && !(closureTs && payment.at && Date.parse(payment.at) <= closureTs))
+      .map(payment => ({ clientId, name: client.name, ...payment })))
+    .sort((a, b) => String(b.at || '').localeCompare(String(a.at || '')));
+  const list = document.querySelector('#worker-day-payments-list');
+  list.replaceChildren();
+  if (!entries.length) {
+    const empty = document.createElement('li');
+    empty.className = 'history-empty';
+    empty.textContent = 'Todavía no hay abonos registrados hoy.';
+    list.append(empty);
+  }
+  entries.forEach(entry => {
+    const row = document.createElement('li');
+    const open = document.createElement('button');
+    open.type = 'button';
+    open.className = 'worker-day-payment-client';
+    open.dataset.openClient = entry.clientId;
+    const name = document.createElement('strong');
+    name.textContent = entry.name;
+    const detail = document.createElement('small');
+    const time = entry.at ? new Date(entry.at).toLocaleTimeString('es-CO', { hour: 'numeric', minute: '2-digit' }) : '';
+    detail.textContent = [time, entry.method === 'transfer' ? 'Transferencia' : 'Efectivo'].filter(Boolean).join(' · ');
+    open.append(name, detail);
+    const amount = document.createElement('strong');
+    amount.className = 'worker-day-payment-amount';
+    amount.textContent = formatMoney(entry.amount);
+    row.append(open, amount);
+    list.append(row);
+  });
+  const total = entries.reduce((sum, entry) => sum + (Number(entry.amount) || 0), 0);
+  document.querySelector('#worker-day-payments-count').textContent = entries.length ? `${entries.length} ${entries.length === 1 ? 'abono' : 'abonos'} · ${formatMoney(total)}` : 'Sin abonos';
 }
 
 /** Registra los listeners del módulo. Se invoca una sola vez desde app.js. */
