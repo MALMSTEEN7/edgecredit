@@ -61,6 +61,13 @@ export function updatePaidAmountTotal(client) {
   client.totalPaidAmount = (client.payments || []).reduce((sum, payment) => sum + (Number(payment.amount) || 0), 0);
 }
 
+/** Porcentaje pagado de la cartulina (abonado / abonado + saldo), el mismo del anillo de la ficha. */
+export function paidPercent(client) {
+  const totalPaid = Math.max(0, Number(client.totalPaidAmount ?? (client.payments || []).reduce((sum, payment) => sum + Math.max(0, Number(payment.amount) || 0), 0)));
+  const outstanding = Math.max(0, Number(client.balance) || 0);
+  return totalPaid + outstanding > 0 ? Math.min(100, Math.round(totalPaid / (totalPaid + outstanding) * 100)) : 100;
+}
+
 export function normalizeClientSchedules() {
   const today = new Date();
   Object.values(clients).forEach(client => {

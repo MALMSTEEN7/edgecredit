@@ -1159,3 +1159,17 @@ button.evidence-link:active {
   font-weight: 700;
   white-space: nowrap;
 }
+
+.retanqueo-history {
+  margin-top: 10px;
+}
+
+.retanqueo-history-copy {
+  display: grid;
+  gap: 2px;
+}
+
+.retanqueo-history-copy small {
+  color: var(--muted);
+  font-size: 10px;
+}

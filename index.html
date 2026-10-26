@@ -34,7 +34,7 @@
   <link rel="icon" href="icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="icon-192.png">
   <meta name="apple-mobile-web-app-capable" content="yes">
-  <link rel="stylesheet" id="app-styles" href="dist/styles.bundle.css?v=b63110e073">
+  <link rel="stylesheet" id="app-styles" href="dist/styles.bundle.css?v=d92fd504c3">
 </head>
 <body class="login-active">
   <section class="login-gateway" id="login-gateway" aria-labelledby="login-title">
@@ -156,7 +156,7 @@
       </section>
 
       <section class="view client-detail" id="detalle-cliente" aria-labelledby="detail-name" hidden>
-        <button class="back-button" type="button" data-back>‹ <span>Volver a clientes</span></button>
+        <button class="back-button" type="button" data-back><span aria-hidden="true">←</span> <span>Volver a clientes</span></button>
         <nav class="card-nav" id="card-nav" aria-label="Moverse entre cartulinas" hidden><button class="card-nav-button" id="card-prev" type="button"><span aria-hidden="true">‹</span> Anterior</button><span class="card-nav-position" id="card-nav-position" aria-live="polite"></span><button class="card-nav-button" id="card-next" type="button">Siguiente <span aria-hidden="true">›</span></button></nav>
         <div class="detail-header">
           <div class="card-color-band detail-card-color" id="detail-card-color" hidden></div>
@@ -191,6 +191,7 @@
         </div>
         <details class="payment-history" id="payment-history"><summary><span>Historial de abonos</span><span class="history-count" id="payment-history-count">3 recientes</span></summary><ol id="payment-history-list"></ol><button class="history-more-button" id="payment-history-toggle" type="button" hidden>Ver historial completo</button></details>
         <details class="payment-history interest-history" id="interest-history"><summary><span>Historial de Intereses</span><span class="history-count" id="interest-history-count">0 recargos</span></summary><ol id="interest-history-list"></ol></details>
+        <details class="payment-history retanqueo-history" id="retanqueo-history"><summary><span>Historial de retanqueos</span><span class="history-count" id="retanqueo-history-count">0 retanqueos</span></summary><ol id="retanqueo-history-list"></ol></details>
       </section>
     </main>
 
@@ -494,7 +495,7 @@
     // al cambiar el sello, el navegador descarga el JS/CSS nuevo en vez de usar su caché.
     // Para desarrollar con los módulos sueltos, abre index.html?dev desde un servidor local.
     (() => {
-      const APP_VERSION = 'b63110e073';
+      const APP_VERSION = 'd92fd504c3';
       const dev = new URLSearchParams(location.search).has('dev') && location.protocol !== 'file:';
       if (dev) {
         document.getElementById('app-styles').href = 'styles.css';

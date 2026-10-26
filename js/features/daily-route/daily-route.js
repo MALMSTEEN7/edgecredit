@@ -7,7 +7,7 @@
 import { state } from '../../core/state.js';
 import { clients, pendingRequests, persistBusinessData, routeSettlements } from '../../core/store.js';
 import { renderPendingRequests } from '../admin/pending.js';
-import { filterClientCards, renderClientRows } from '../clients/directory.js';
+import { clientAvatarWithProgress, filterClientCards, renderClientRows } from '../clients/directory.js';
 import { localDate, localDateISO } from '../../shared/dates.js';
 import { formatDate, formatMoney, routeKey } from '../../shared/format.js';
 import { moveId } from '../../shared/math.js';
@@ -293,7 +293,7 @@ function routeClientCard(clientId, mode, routeOrder = []) {
   const band = document.createElement('span');
   band.className = 'card-color-band';
   paintCardColorBand(band, client, card);
-  card.append(band, handle, content, actions);
+  card.append(band, handle, clientAvatarWithProgress(client, { small: true }), content, actions);
   if (open) card.append(routeCardInfo(clientId));
   return card;
 }

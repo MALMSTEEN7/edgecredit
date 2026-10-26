@@ -7,7 +7,7 @@ import { paymentFrequencyLabels } from '../../core/config.js';
 import { clientButtons, directoryClientList, routeSelect } from '../../core/dom.js';
 import { state } from '../../core/state.js';
 import { clients, persistBusinessData, routeSettlements } from '../../core/store.js';
-import { paymentBehavior, paymentHistory } from '../../domain/loan-schedule.js';
+import { paidPercent, paymentBehavior, paymentHistory } from '../../domain/loan-schedule.js';
 import { openClient } from './client-detail.js';
 import { todayRouteOrder, visitStatus } from '../daily-route/daily-route.js';
 import { formatMoney } from '../../shared/format.js';
@@ -32,9 +32,7 @@ export function appendClientCards(clientId, { refresh = true } = {}) {
     card.className = isHome ? 'client-row home-client-row' : 'client-row';
     card.dataset.client = clientId;
     card.dataset.route = client.route;
-    const avatar = document.createElement('span');
-    avatar.className = 'client-avatar avatar-blue';
-    setClientAvatar(avatar, client);
+    const avatar = clientAvatarWithProgress(client);
     const main = document.createElement('span');
     main.className = 'client-main';
     const name = document.createElement('strong');
@@ -60,6 +58,24 @@ export function appendClientCards(clientId, { refresh = true } = {}) {
   if (refresh) filterClientCards();
 }
 
+/** Foto (o iniciales) dentro del anillo con el porcentaje pagado de la cartulina. */
+export function clientAvatarWithProgress(client, { small = false } = {}) {
+  const ring = document.createElement('span');
+  ring.className = small ? 'avatar-progress is-small' : 'avatar-progress';
+  const avatar = document.createElement('span');
+  avatar.className = 'client-avatar avatar-blue';
+  setClientAvatar(avatar, client);
+  ring.append(avatar);
+  paintAvatarProgress(ring, client);
+  return ring;
+}
+
+export function paintAvatarProgress(ring, client) {
+  const percent = paidPercent(client);
+  ring.style.setProperty('--progress', `${percent * 3.6}deg`);
+  ring.title = `${percent}% pagado`;
+}
+
 export function setClientAvatar(element, client) {
   element.replaceChildren();
   if (client.photoData) {
@@ -78,6 +94,7 @@ export function renderClientRows(clientId) {
   const client = clients[clientId];
   document.querySelectorAll(`.client-row[data-client="${clientId}"] .client-main strong`).forEach(node => { node.textContent = client.name; });
   document.querySelectorAll(`.client-row[data-client="${clientId}"] .client-avatar`).forEach(node => setClientAvatar(node, client));
+  document.querySelectorAll(`.client-row[data-client="${clientId}"] .avatar-progress`).forEach(ring => paintAvatarProgress(ring, client));
   document.querySelectorAll(`.client-row[data-client="${clientId}"]`).forEach(row => {
     row.dataset.route = client.route;
     // Franja de color en el borde superior (día de pago / quincenal / mensual).
