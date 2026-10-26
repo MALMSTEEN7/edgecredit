@@ -34,7 +34,7 @@
   <link rel="icon" href="icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="icon-192.png">
   <meta name="apple-mobile-web-app-capable" content="yes">
-  <link rel="stylesheet" id="app-styles" href="dist/styles.bundle.css?v=8d51163bcd">
+  <link rel="stylesheet" id="app-styles" href="dist/styles.bundle.css?v=930c35cb7a">
 </head>
 <body class="login-active">
   <section class="login-gateway" id="login-gateway" aria-labelledby="login-title">
@@ -152,7 +152,7 @@
 
       <section class="view" id="ajustes" aria-labelledby="settings-title" hidden>
         <div class="page-heading"><p class="eyebrow">PREFERENCIAS</p><h1 id="settings-title">Ajustes</h1><p>Configura tu cuenta y dispositivo.</p></div>
-        <div class="settings-list"><div class="settings-row theme-setting"><span class="settings-icon">◐</span><span><strong>Tema Visual (Modo Claro/Oscuro)</strong><small id="theme-description">Apariencia oscura</small></span><label class="theme-switch" aria-label="Cambiar tema visual"><input id="theme-toggle" type="checkbox" role="switch"><span class="switch-track"></span></label></div><div class="settings-row"><span class="settings-icon">⇄</span><span><strong>Sincronización</strong><small>Última sincronización: hoy, 8:42 a. m.</small></span><span class="row-chevron">›</span></div></div>
+        <div class="settings-list"><div class="settings-row theme-setting"><span class="settings-icon">◐</span><span><strong>Tema Visual (Modo Claro/Oscuro)</strong><small id="theme-description">Apariencia oscura</small></span><label class="theme-switch" aria-label="Cambiar tema visual"><input id="theme-toggle" type="checkbox" role="switch"><span class="switch-track"></span></label></div><div class="settings-row gps-setting" id="gps-setting"><span class="settings-icon" aria-hidden="true">⌖</span><span><strong>Compartir ubicación (GPS)</strong><small id="gps-setting-status">Revisando el permiso de ubicación…</small></span><button class="secondary-button gps-setting-button" id="gps-setting-button" type="button">Activar</button></div></div>
       </section>
 
       <section class="view client-detail" id="detalle-cliente" aria-labelledby="detail-name" hidden>
@@ -496,7 +496,7 @@
     // al cambiar el sello, el navegador descarga el JS/CSS nuevo en vez de usar su caché.
     // Para desarrollar con los módulos sueltos, abre index.html?dev desde un servidor local.
     (() => {
-      const APP_VERSION = '8d51163bcd';
+      const APP_VERSION = '930c35cb7a';
       const dev = new URLSearchParams(location.search).has('dev') && location.protocol !== 'file:';
       if (dev) {
         document.getElementById('app-styles').href = 'styles.css';
