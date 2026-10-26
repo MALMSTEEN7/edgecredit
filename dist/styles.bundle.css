@@ -6863,6 +6863,30 @@ button.evidence-link:active {
   color: var(--muted);
 }
 
+/* Ajustes del trabajador · compartir ubicación (GPS) */
+.gps-setting .gps-setting-button {
+  width: auto;
+  min-height: 38px;
+  flex: 0 0 auto;
+  padding: 0 14px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.gps-setting .gps-setting-button:not(:disabled) {
+  border-color: var(--primary);
+  background: var(--primary);
+  color: #fff;
+}
+
+.gps-setting .gps-setting-button.is-accepted {
+  border-color: color-mix(in srgb, var(--success) 45%, var(--line));
+  background: color-mix(in srgb, var(--success) 12%, transparent);
+  color: var(--success);
+  opacity: 1;
+  cursor: default;
+}
+
 /* ── css/features/legacy-import.css */
 /* features/legacy-import · Vista previa de «Importar cartera del sistema anterior» (Configuración). */
 

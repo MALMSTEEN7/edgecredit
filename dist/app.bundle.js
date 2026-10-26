@@ -8667,7 +8667,12 @@ const GPS_STATUS = {
   off: { label: 'GPS', detail: '' },
 };
 
+let gpsMode = 'off';
+let gpsPermission = 'unknown'; // permiso del navegador: granted, denied, prompt o unknown
+
 function setGpsStatus(mode) {
+  gpsMode = mode;
+  renderGpsSetting();
   gpsIndicator.classList.toggle('is-active', mode === 'active');
   gpsIndicator.classList.toggle('is-searching', mode === 'searching');
   gpsIndicator.classList.toggle('is-denied', mode === 'denied' || mode === 'unsupported');
@@ -8725,16 +8730,57 @@ function startWatch() {
   }, { enableHighAccuracy: true, maximumAge: 5000, timeout: 30000 });
 }
 
+/**
+ * Ajustes → «Compartir ubicación (GPS)»: el botón queda activo mientras el celular no haya
+ * dado el permiso de ubicación y se desactiva apenas lo acepta.
+ */
+function renderGpsSetting() {
+  const button = document.querySelector('#gps-setting-button');
+  const status = document.querySelector('#gps-setting-status');
+  if (!button || !status) return;
+  document.querySelector('#gps-setting').hidden = state.userRole !== 'worker';
+  const accepted = gpsMode === 'active' || (gpsPermission === 'granted' && gpsMode !== 'denied' && gpsMode !== 'unsupported');
+  button.disabled = accepted || gpsMode === 'unsupported';
+  button.textContent = accepted ? 'Activada ✓' : gpsMode === 'denied' || gpsPermission === 'denied' ? 'Reintentar' : 'Activar';
+  button.classList.toggle('is-accepted', accepted);
+  if (gpsMode === 'unsupported') status.textContent = GPS_STATUS.unsupported.detail;
+  else if (accepted) status.textContent = gpsMode === 'active' ? 'Ubicación compartida. El GPS está activo.' : 'Permiso aceptado. Buscando señal de GPS…';
+  else if (gpsMode === 'denied' || gpsPermission === 'denied') status.textContent = GPS_STATUS.denied.detail;
+  else status.textContent = 'Toca «Activar» y acepta compartir la ubicación cuando el celular lo pregunte.';
+}
+
+/** Sigue el permiso de ubicación del navegador (si lo permite) para mantener el botón al día. */
+function watchGpsPermission() {
+  if (!navigator.permissions?.query) { renderGpsSetting(); return; }
+  navigator.permissions.query({ name: 'geolocation' }).then(permission => {
+    gpsPermission = permission.state;
+    renderGpsSetting();
+    permission.addEventListener('change', () => {
+      gpsPermission = permission.state;
+      if (permission.state === 'granted' && state.userRole === 'worker') startWatch();
+      renderGpsSetting();
+    });
+  }).catch(() => renderGpsSetting());
+}
+
 /** Al entrar el trabajador el GPS se activa solo (el permiso se pide una única vez). */
 function resumeWorkerLocationSharing() {
   if (state.userRole !== 'worker') return;
   lastTrackPoint = null;
   startWatch();
   resumeTrackUpload(state.activeWorker?.id);
+  renderGpsSetting();
 }
 
 /** Registra los listeners del módulo. Se invoca una sola vez desde app.js. */
 function __mount_locationModule() {
+  watchGpsPermission();
+  document.querySelector('#gps-setting-button').addEventListener('click', () => {
+    if (state.userRole !== 'worker') return;
+    // Si quedó una búsqueda abierta, se reinicia para que el celular vuelva a pedir el permiso.
+    if (state.locationWatchId !== null) { navigator.geolocation?.clearWatch(state.locationWatchId); state.locationWatchId = null; }
+    startWatch();
+  });
   // El celular pausa el GPS con la app en segundo plano: al volver se reanuda solo.
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState !== 'visible' || state.userRole !== 'worker' || gpsIndicator.hidden) return;
