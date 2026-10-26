@@ -67,7 +67,16 @@ export function renderHomeRowActions() {
   const anyVisible = rows.some(row => !row.hidden);
   const empty = document.querySelector('#home-route-done');
   const organized = todayRouteOrder().length > 0;
-  if (empty) empty.hidden = anyVisible || !organized || state.userRole !== 'worker';
+  // Buscando: los avisos de la ruta se ocultan y se dice cuántos clientes coinciden.
+  const searching = Boolean(document.querySelector('#home-search')?.value.trim());
+  const note = document.querySelector('#home-search-note');
+  const found = rows.filter(row => !row.hidden).length;
+  if (note) {
+    note.hidden = !searching;
+    note.textContent = found ? `${found} ${found === 1 ? 'cliente encontrado' : 'clientes encontrados'} en tu ruta` : 'No se encontraron clientes con esa búsqueda.';
+  }
+  if (empty) empty.hidden = searching || anyVisible || !organized || state.userRole !== 'worker';
+  document.querySelector('#home-route-hint').hidden = searching || organized || state.userRole !== 'worker';
 }
 
 /** Registra los listeners del módulo. Se invoca una sola vez desde app.js. */

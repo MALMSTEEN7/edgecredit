@@ -5435,6 +5435,7 @@ function logout() {
   if (!newClientModal.hidden) closeNewClientModal();
   if (!interestModal.hidden) closeInterestModal();
   document.querySelector('#directory-search').value = '';
+  document.querySelector('#home-search').value = '';
   Object.keys(clients).forEach(clientId => { if (clients[clientId]) renderClientRows(clientId); });
   persistBusinessData();
   renderPendingRequests();
@@ -6923,17 +6924,22 @@ function renderDirectoryFilterCounts(route) {
 
 function filterClientCards() {
   const route = state.userRole === 'admin' ? routeSelect.value : state.workerRoute;
-  const query = document.querySelector('#directory-search')?.value.trim().toLocaleLowerCase('es') || '';
+  const directoryQuery = normalizeSearch(document.querySelector('#directory-search')?.value.trim());
+  const homeQuery = normalizeSearch(document.querySelector('#home-search')?.value.trim());
   const todayOrder = todayRouteOrder(route);
   document.querySelectorAll('#worker-view [data-client][data-route]').forEach(card => {
     const matchesRoute = card.dataset.route === route;
-    const matchesQuery = card.textContent.toLocaleLowerCase('es').includes(query);
     const exists = Object.prototype.hasOwnProperty.call(clients, card.dataset.client);
+    const homeClient = clients[card.dataset.client];
+    const inHome = Boolean(card.closest('#inicio .client-list'));
+    // Cada lista tiene su buscador (Inicio y Directorio); se busca por nombre o cédula.
+    const query = inHome ? homeQuery : directoryQuery;
+    const matchesQuery = !query || normalizeSearch(card.textContent).includes(query) || (exists && normalizeSearch(homeClient.id).includes(query));
     // Inicio: solo cartulinas activas de la ruta del día que aún no se visitaron hoy
     // (al registrar un abono o "No pagó hoy" la fila desaparece del Inicio). Si el trabajador
-    // todavía no armó la ruta del día, el Inicio queda vacío (solo el aviso).
-    const homeClient = clients[card.dataset.client];
-    const dailySelected = !card.closest('#inicio .client-list') || (exists && Number(homeClient.balance) > 0 && visitStatus(card.dataset.client) === 'pending' && (todayOrder.includes(card.dataset.client) || (!todayOrder.length && state.userRole !== 'worker')));
+    // todavía no armó la ruta del día, el Inicio queda vacío (solo el aviso). Al buscar en el
+    // Inicio aparecen todas las cartulinas activas de la ruta que coincidan.
+    const dailySelected = !inHome || (exists && Number(homeClient.balance) > 0 && (homeQuery || (visitStatus(card.dataset.client) === 'pending' && (todayOrder.includes(card.dataset.client) || (!todayOrder.length && state.userRole !== 'worker')))));
     const inDirectory = Boolean(card.closest('#directorio'));
     const passesFilter = !inDirectory || (exists && matchesDirectoryFilter(homeClient));
     card.hidden = !exists || !matchesRoute || !matchesQuery || !dailySelected || !passesFilter;
@@ -7033,6 +7039,7 @@ function __mount_directoryModule() {
   });
   clientButtons.forEach(button => button.addEventListener('click', event => { if (!event.target.closest('[data-home-action]')) openClient(button.dataset.client); }));
   document.querySelector('#directory-search')?.addEventListener('input', filterClientCards);
+  document.querySelector('#home-search')?.addEventListener('input', filterClientCards);
 }
 
 // ── js/features/clients/interest.js
@@ -8578,7 +8585,16 @@ function renderHomeRowActions() {
   const anyVisible = rows.some(row => !row.hidden);
   const empty = document.querySelector('#home-route-done');
   const organized = todayRouteOrder().length > 0;
-  if (empty) empty.hidden = anyVisible || !organized || state.userRole !== 'worker';
+  // Buscando: los avisos de la ruta se ocultan y se dice cuántos clientes coinciden.
+  const searching = Boolean(document.querySelector('#home-search')?.value.trim());
+  const note = document.querySelector('#home-search-note');
+  const found = rows.filter(row => !row.hidden).length;
+  if (note) {
+    note.hidden = !searching;
+    note.textContent = found ? `${found} ${found === 1 ? 'cliente encontrado' : 'clientes encontrados'} en tu ruta` : 'No se encontraron clientes con esa búsqueda.';
+  }
+  if (empty) empty.hidden = searching || anyVisible || !organized || state.userRole !== 'worker';
+  document.querySelector('#home-route-hint').hidden = searching || organized || state.userRole !== 'worker';
 }
 
 /** Registra los listeners del módulo. Se invoca una sola vez desde app.js. */
