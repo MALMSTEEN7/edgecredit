@@ -1899,6 +1899,13 @@ function updatePaidAmountTotal(client) {
   client.totalPaidAmount = (client.payments || []).reduce((sum, payment) => sum + (Number(payment.amount) || 0), 0);
 }
 
+/** Porcentaje pagado de la cartulina (abonado / abonado + saldo), el mismo del anillo de la ficha. */
+function paidPercent(client) {
+  const totalPaid = Math.max(0, Number(client.totalPaidAmount ?? (client.payments || []).reduce((sum, payment) => sum + Math.max(0, Number(payment.amount) || 0), 0)));
+  const outstanding = Math.max(0, Number(client.balance) || 0);
+  return totalPaid + outstanding > 0 ? Math.min(100, Math.round(totalPaid / (totalPaid + outstanding) * 100)) : 100;
+}
+
 function normalizeClientSchedules() {
   const today = new Date();
   Object.values(clients).forEach(client => {
@@ -5991,6 +5998,45 @@ function renderHistory(client) {
     });
   }
   document.querySelector('#interest-history-count').textContent = `${client.interestHistory.length} ${client.interestHistory.length === 1 ? 'recargo' : 'recargos'}`;
+  renderRetanqueoHistory(client);
+}
+
+/** Retanqueos de la cartulina (lo prestado de más, sus intereses y seguros, y cómo cambió el saldo). */
+function renderRetanqueoHistory(client) {
+  const retanqueos = (client.restructures || []).filter(entry => entry.type === 'retanqueo');
+  const list = document.querySelector('#retanqueo-history-list');
+  list.replaceChildren();
+  if (!retanqueos.length) {
+    const empty = document.createElement('li');
+    empty.className = 'history-empty';
+    empty.textContent = 'Esta cartulina no tiene retanqueos.';
+    list.append(empty);
+  }
+  retanqueos.forEach(entry => {
+    const extra = Number(entry.extra) || 0;
+    const interest = Number(entry.interest) || 0;
+    const row = document.createElement('li');
+    const copy = document.createElement('span');
+    copy.className = 'retanqueo-history-copy';
+    const date = document.createElement('time');
+    date.dateTime = entry.date;
+    date.textContent = formatDate(entry.date);
+    const detail = document.createElement('small');
+    const parts = [`Intereses ${formatMoney(interest)}`, `Seguros ${formatMoney(Number(entry.insurance) || 0)}`];
+    if (entry.by) parts.push(entry.by);
+    detail.textContent = parts.join(' · ');
+    copy.append(date, detail);
+    const amount = document.createElement('strong');
+    amount.textContent = `+ ${formatMoney(extra)}`;
+    const after = document.createElement('small');
+    after.className = 'history-balance-after';
+    const before = Number(entry.before?.balance);
+    after.textContent = Number.isFinite(before) ? `Saldo ${formatMoney(before)} → ${formatMoney(before + extra + interest)}` : `Suma al saldo ${formatMoney(extra + interest)}`;
+    amount.append(after);
+    row.append(copy, amount);
+    list.append(row);
+  });
+  document.querySelector('#retanqueo-history-count').textContent = `${retanqueos.length} ${retanqueos.length === 1 ? 'retanqueo' : 'retanqueos'}`;
 }
 
 function updateMoratoryButton(client) {
@@ -6143,7 +6189,7 @@ function openClient(clientId) {
   document.querySelector('#detail-balance-copy').textContent = formatMoney(client.balance);
   const totalPaid = Math.max(0, Number(client.totalPaidAmount ?? (client.payments || []).reduce((sum, payment) => sum + Math.max(0, Number(payment.amount) || 0), 0)));
   const outstanding = Math.max(0, Number(client.balance) || 0);
-  const progressPercent = totalPaid + outstanding > 0 ? Math.min(100, Math.round(totalPaid / (totalPaid + outstanding) * 100)) : 100;
+  const progressPercent = paidPercent(client);
   document.querySelector('#detail-paid-amount').textContent = formatMoney(totalPaid);
   document.querySelector('#detail-total-amount').textContent = formatMoney(totalPaid + outstanding);
   document.querySelector('.progress-ring').style.setProperty('--progress', `${progressPercent * 3.6}deg`);
@@ -6667,9 +6713,7 @@ function appendClientCards(clientId, { refresh = true } = {}) {
     card.className = isHome ? 'client-row home-client-row' : 'client-row';
     card.dataset.client = clientId;
     card.dataset.route = client.route;
-    const avatar = document.createElement('span');
-    avatar.className = 'client-avatar avatar-blue';
-    setClientAvatar(avatar, client);
+    const avatar = clientAvatarWithProgress(client);
     const main = document.createElement('span');
     main.className = 'client-main';
     const name = document.createElement('strong');
@@ -6695,6 +6739,24 @@ function appendClientCards(clientId, { refresh = true } = {}) {
   if (refresh) filterClientCards();
 }
 
+/** Foto (o iniciales) dentro del anillo con el porcentaje pagado de la cartulina. */
+function clientAvatarWithProgress(client, { small = false } = {}) {
+  const ring = document.createElement('span');
+  ring.className = small ? 'avatar-progress is-small' : 'avatar-progress';
+  const avatar = document.createElement('span');
+  avatar.className = 'client-avatar avatar-blue';
+  setClientAvatar(avatar, client);
+  ring.append(avatar);
+  paintAvatarProgress(ring, client);
+  return ring;
+}
+
+function paintAvatarProgress(ring, client) {
+  const percent = paidPercent(client);
+  ring.style.setProperty('--progress', `${percent * 3.6}deg`);
+  ring.title = `${percent}% pagado`;
+}
+
 function setClientAvatar(element, client) {
   element.replaceChildren();
   if (client.photoData) {
@@ -6713,6 +6775,7 @@ function renderClientRows(clientId) {
   const client = clients[clientId];
   document.querySelectorAll(`.client-row[data-client="${clientId}"] .client-main strong`).forEach(node => { node.textContent = client.name; });
   document.querySelectorAll(`.client-row[data-client="${clientId}"] .client-avatar`).forEach(node => setClientAvatar(node, client));
+  document.querySelectorAll(`.client-row[data-client="${clientId}"] .avatar-progress`).forEach(ring => paintAvatarProgress(ring, client));
   document.querySelectorAll(`.client-row[data-client="${clientId}"]`).forEach(row => {
     row.dataset.route = client.route;
     // Franja de color en el borde superior (día de pago / quincenal / mensual).
@@ -7715,7 +7778,7 @@ function routeClientCard(clientId, mode, routeOrder = []) {
   const band = document.createElement('span');
   band.className = 'card-color-band';
   paintCardColorBand(band, client, card);
-  card.append(band, handle, content, actions);
+  card.append(band, handle, clientAvatarWithProgress(client, { small: true }), content, actions);
   if (open) card.append(routeCardInfo(clientId));
   return card;
 }
