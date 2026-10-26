@@ -1839,6 +1839,71 @@ button {
   }
 }
 
+/* Domingo: elegir el día de cobro de la cartulina semanal (cada día con su color). */
+.sunday-payday {
+  grid-column: 1/-1;
+  margin: 0;
+  padding: 12px 14px 14px;
+  border: 1px solid color-mix(in srgb, #F9A825 55%, var(--line));
+  border-radius: 12px;
+  background: color-mix(in srgb, #F9A825 10%, transparent);
+}
+
+.sunday-payday legend {
+  padding: 0 6px;
+  color: #F9A825;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.sunday-payday p {
+  margin: 0 0 10px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.sunday-payday-options {
+  display: grid;
+  grid-template-columns: repeat(3,minmax(0,1fr));
+  gap: 8px;
+}
+
+.sunday-payday-option {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 40px;
+  border: 2px solid transparent;
+  border-radius: 10px;
+  background: var(--card-color);
+  color: var(--card-color-ink);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.sunday-payday-option input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.sunday-payday-option:has(input:checked) {
+  border-color: var(--text);
+  box-shadow: 0 0 0 2px var(--card-color);
+}
+
+.sunday-payday-option:has(input:checked) span::before {
+  content: '✓ ';
+}
+
+.sunday-payday-option:has(input:focus-visible) {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
 /* ── css/components/scrollbars.css */
 /* components/scrollbars · Barras de desplazamiento con el estilo de la app.
  * Delgadas, en forma de píldora y sin carril visible; el pulgar toma el azul de la marca
