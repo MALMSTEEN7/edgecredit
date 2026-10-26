@@ -1179,6 +1179,13 @@ function weekdayOf(iso) {
   return dateOf(iso).getDay();
 }
 
+/** La fecha `days` días después (o antes, si es negativo) de `fromISO`. */
+function shiftDays(fromISO, days) {
+  const date = dateOf(fromISO);
+  date.setDate(date.getDate() + Number(days));
+  return isoOf(date);
+}
+
 /** Próxima fecha (1 a 7 días después de `fromISO`) que cae en `weekday`. */
 function nextWeekdayDate(fromISO, weekday) {
   const date = dateOf(fromISO);
@@ -6582,6 +6589,16 @@ function __mount_clientDetailModule() {
     const currentPayday = client.creditStartDate ? weekdayOf(client.creditStartDate) : 1;
     const paydayOptions = PAYDAY_OPTIONS.map(option => ({ value: String(option.weekday), label: option.label }));
     if (currentPayday === 0) paydayOptions.unshift({ value: '0', label: 'Domingo (sin color)' });
+    // Diaria, quincenal o mensual entregada (o iniciada) un domingo: se guarda con la fecha del sábado o del lunes.
+    const sunday = client.deliveredOn && weekdayOf(client.deliveredOn) === 0 ? client.deliveredOn : currentPayday === 0 ? client.creditStartDate : null;
+    const shiftValue = !sunday ? '' : client.creditStartDate === shiftDays(sunday, -1) ? 'prev' : client.creditStartDate === shiftDays(sunday, 1) ? 'next' : client.creditStartDate === sunday ? 'sun' : '';
+    const shiftField = sunday && (client.frequency || 'weekly') !== 'weekly' && shiftValue
+      ? [{ name: 'sundayShift', label: 'Entregada un domingo · fecha con que se guarda', type: 'select', value: shiftValue, options: [
+        ...(shiftValue === 'sun' ? [{ value: 'sun', label: `Domingo ${formatDate(sunday)}` }] : []),
+        { value: 'prev', label: `Sábado ${formatDate(shiftDays(sunday, -1))} · día anterior` },
+        { value: 'next', label: `Lunes ${formatDate(shiftDays(sunday, 1))} · día siguiente` },
+      ] }]
+      : [];
     openCustomModal({
       title: 'Editar cartulina completa', description: 'Actualiza los datos personales, financieros y el calendario del crédito.',
       fields: [
@@ -6593,7 +6610,7 @@ function __mount_clientDetailModule() {
         { name: 'addressNotes', label: 'Indicaciones del domicilio', type: 'textarea', rows: 2, value: client.addressNotes || '' },
         { name: 'route', label: 'Ruta / nombre del cobro', type: 'text', value: routeSettlements[client.route]?.name || client.route, required: true },
         { name: 'frequency', label: 'Frecuencia de pago', type: 'select', value: client.frequency || 'weekly', options: Object.entries(paymentFrequencyLabels).map(([value, label]) => ({ value, label })) },
-        { name: 'paymentWeekday', label: 'Día de cobro (solo semanales · define el color)', type: 'select', value: String(currentPayday), options: paydayOptions },
+        ...((client.frequency || 'weekly') === 'weekly' ? [{ name: 'paymentWeekday', label: 'Día de cobro (define el color)', type: 'select', value: String(currentPayday), options: paydayOptions }] : shiftField),
         { name: 'principal', label: 'Capital prestado ($)', type: 'number', min: 0, step: 1, value: inferClientPrincipal(client), required: true },
         { name: 'total', label: 'Valor total del crédito ($)', type: 'number', min: 0, step: 1, value: client.total, required: true },
         { name: 'balance', label: 'Saldo pendiente ($)', type: 'number', min: 0, step: 1, value: client.balance, required: true },
@@ -6668,6 +6685,11 @@ function __mount_clientDetailModule() {
         const payday = Number(values.paymentWeekday);
         if (client.frequency === 'weekly' && client.creditStartDate && payday >= 1 && payday <= 6 && payday !== weekdayOf(client.creditStartDate)) {
           client.creditStartDate = startDateForPayday(client, payday);
+          (client.payments || []).forEach(payment => { if (!payment.beforeRestructure) payment.cycleIndex = paymentCycleIndex(client, payment.date); });
+          client.paidPeriodIndexes = [...new Set((client.payments || []).filter(payment => !payment.beforeRestructure).map(payment => payment.cycleIndex))].sort((a, b) => a - b);
+        }
+        if (client.frequency !== 'weekly' && sunday && (values.sundayShift === 'prev' || values.sundayShift === 'next') && values.sundayShift !== shiftValue) {
+          client.creditStartDate = shiftDays(sunday, values.sundayShift === 'prev' ? -1 : 1);
           (client.payments || []).forEach(payment => { if (!payment.beforeRestructure) payment.cycleIndex = paymentCycleIndex(client, payment.date); });
           client.paidPeriodIndexes = [...new Set((client.payments || []).filter(payment => !payment.beforeRestructure).map(payment => payment.cycleIndex))].sort((a, b) => a - b);
         }
@@ -7220,29 +7242,48 @@ function setLinkedMode(sourceId, mode) {
 }
 
 /**
- * Los domingos no hay cobro: una cartulina semanal creada ese día pregunta qué día va a pagar
- * (lunes a sábado). Solo aparece los domingos y solo para la frecuencia semanal.
+ * Los domingos no hay cobro: una cartulina creada ese día no arranca en domingo.
+ * Semanal: se elige el día de cobro (lunes a sábado) y toma su color. Diaria, quincenal o
+ * mensual: se guarda con fecha del sábado (día anterior) o del lunes (día siguiente).
+ * Solo aparece los domingos.
  */
+const SUNDAY_SHIFT_OPTIONS = [
+  { value: 'prev', label: 'Sábado · día anterior' },
+  { value: 'next', label: 'Lunes · día siguiente' },
+];
+
 function updateSundayPayday() {
   const box = document.querySelector('#sunday-payday');
-  const show = weekdayOf(localDateISO()) === 0 && newClientForm.elements.frequency.value === 'weekly';
+  const show = weekdayOf(localDateISO()) === 0;
+  const mode = newClientForm.elements.frequency.value === 'weekly' ? 'weekly' : 'shift';
   box.hidden = !show;
   const options = document.querySelector('#sunday-payday-options');
-  if (!options.children.length) {
-    PAYDAY_OPTIONS.forEach(option => {
+  if (options.dataset.mode !== mode) {
+    options.dataset.mode = mode;
+    options.classList.toggle('is-shift', mode === 'shift');
+    document.querySelector('#sunday-payday-title').textContent = mode === 'weekly' ? 'Hoy es domingo · ¿qué día va a pagar?' : 'Hoy es domingo · ¿con qué fecha se guarda?';
+    document.querySelector('#sunday-payday-copy').textContent = mode === 'weekly'
+      ? 'La cartulina semanal se guarda con el día de cobro que elijas y toma su color. El crédito empieza a contar desde ese día.'
+      : 'Para que la cartulina no quede con fecha de domingo, elige si se guarda con la fecha de ayer (sábado) o de mañana (lunes). El crédito cuenta desde esa fecha.';
+    const choices = mode === 'weekly'
+      ? PAYDAY_OPTIONS.map(option => ({ value: String(option.weekday), label: option.label, color: option.color, ink: option.ink }))
+      : SUNDAY_SHIFT_OPTIONS;
+    options.replaceChildren(...choices.map(choice => {
       const label = document.createElement('label');
       label.className = 'sunday-payday-option';
-      label.style.setProperty('--card-color', option.color);
-      label.style.setProperty('--card-color-ink', option.ink);
+      if (choice.color) {
+        label.style.setProperty('--card-color', choice.color);
+        label.style.setProperty('--card-color-ink', choice.ink);
+      }
       const input = document.createElement('input');
       input.type = 'radio';
       input.name = 'paymentWeekday';
-      input.value = String(option.weekday);
+      input.value = choice.value;
       const text = document.createElement('span');
-      text.textContent = option.label;
+      text.textContent = choice.label;
       label.append(input, text);
-      options.append(label);
-    });
+      return label;
+    }));
   }
   options.querySelectorAll('input').forEach(input => {
     input.required = show;
@@ -7376,11 +7417,17 @@ function addNewClient(values, photoData = '', insurance, gps = null) {
     frequency, creditStartDate: today, visitHistory: [], paymentWarning: false, paidPeriodIndexes: [], schedulePaidBaseline: 0, photoData, totalPaidAmount: 0, settledAt: null
   };
   const created = clients[clientId];
-  // Creada un domingo: el crédito arranca el día de cobro elegido (y toma su color).
-  const payday = Number(values.paymentWeekday);
-  if (frequency === 'weekly' && weekdayOf(today) === 0 && payday >= 1 && payday <= 6) {
-    created.creditStartDate = nextWeekdayDate(today, payday);
-    created.deliveredOn = today;
+  // Creada un domingo: nunca arranca en domingo. Semanal: el día de cobro elegido (y su color);
+  // las demás: la fecha del sábado anterior o del lunes siguiente.
+  if (weekdayOf(today) === 0) {
+    const payday = Number(values.paymentWeekday);
+    const shifted = frequency === 'weekly'
+      ? (payday >= 1 && payday <= 6 ? nextWeekdayDate(today, payday) : null)
+      : values.paymentWeekday === 'prev' ? shiftDays(today, -1) : values.paymentWeekday === 'next' ? shiftDays(today, 1) : null;
+    if (shifted) {
+      created.creditStartDate = shifted;
+      created.deliveredOn = today;
+    }
   }
   if (source) {
     // Renovación: se heredan foto, notas, ubicaciones e historial; si la dirección cambió,

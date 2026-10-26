@@ -34,7 +34,7 @@
   <link rel="icon" href="icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="icon-192.png">
   <meta name="apple-mobile-web-app-capable" content="yes">
-  <link rel="stylesheet" id="app-styles" href="dist/styles.bundle.css?v=d61d218871">
+  <link rel="stylesheet" id="app-styles" href="dist/styles.bundle.css?v=8d51163bcd">
 </head>
 <body class="login-active">
   <section class="login-gateway" id="login-gateway" aria-labelledby="login-title">
@@ -438,7 +438,7 @@
           <label class="custom-field">Monto del préstamo ($)<input data-money data-money-thousands name="principal" type="number" min="1" step="1" inputmode="numeric" required></label>
           <label class="custom-field">Duración acordada del crédito (días)<input name="totalDays" type="number" min="1" step="1" inputmode="numeric" placeholder="Ej. 63" required></label>
           <label class="custom-field">Frecuencia de pago<select name="frequency" required><option value="monthly">Mensual</option><option value="biweekly">Quincenal</option><option value="weekly" selected>Semanal</option><option value="daily">Diario</option></select></label>
-          <fieldset class="sunday-payday" id="sunday-payday" hidden><legend>Hoy es domingo · ¿qué día va a pagar?</legend><p>La cartulina semanal se guarda con el día de cobro que elijas y toma su color. El crédito empieza a contar desde ese día.</p><div class="sunday-payday-options" id="sunday-payday-options"></div></fieldset>
+          <fieldset class="sunday-payday" id="sunday-payday" hidden><legend id="sunday-payday-title">Hoy es domingo · ¿qué día va a pagar?</legend><p id="sunday-payday-copy">La cartulina semanal se guarda con el día de cobro que elijas y toma su color. El crédito empieza a contar desde ese día.</p><div class="sunday-payday-options" id="sunday-payday-options"></div></fieldset>
           <label class="custom-field client-comment-field">Indicaciones del domicilio<textarea name="addressNotes" rows="3" placeholder="Cómo llegar: color de la casa, puntos de referencia, timbre…"></textarea></label>
         </div>
         <div class="default-rate-note" id="default-rate-note"><span>Interés predeterminado</span><strong>20%</strong><small>La excepción de interés requiere aprobación del administrador.</small></div>
@@ -496,7 +496,7 @@
     // al cambiar el sello, el navegador descarga el JS/CSS nuevo en vez de usar su caché.
     // Para desarrollar con los módulos sueltos, abre index.html?dev desde un servidor local.
     (() => {
-      const APP_VERSION = 'd61d218871';
+      const APP_VERSION = '8d51163bcd';
       const dev = new URLSearchParams(location.search).has('dev') && location.protocol !== 'file:';
       if (dev) {
         document.getElementById('app-styles').href = 'styles.css';

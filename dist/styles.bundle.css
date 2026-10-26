@@ -1904,6 +1904,23 @@ button {
   outline-offset: 2px;
 }
 
+/* Diaria, quincenal o mensual creada un domingo: sábado o lunes (sin color de día). */
+.sunday-payday-options.is-shift {
+  grid-template-columns: repeat(2,minmax(0,1fr));
+}
+
+.sunday-payday-options.is-shift .sunday-payday-option {
+  --card-color: var(--primary);
+  border-color: var(--line);
+  background: var(--card);
+  color: var(--text);
+}
+
+.sunday-payday-options.is-shift .sunday-payday-option:has(input:checked) {
+  border-color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 18%, var(--card));
+}
+
 /* ── css/components/scrollbars.css */
 /* components/scrollbars · Barras de desplazamiento con el estilo de la app.
  * Delgadas, en forma de píldora y sin carril visible; el pulgar toma el azul de la marca

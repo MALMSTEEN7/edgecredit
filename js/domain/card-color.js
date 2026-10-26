@@ -59,6 +59,13 @@ export function weekdayOf(iso) {
   return dateOf(iso).getDay();
 }
 
+/** La fecha `days` días después (o antes, si es negativo) de `fromISO`. */
+export function shiftDays(fromISO, days) {
+  const date = dateOf(fromISO);
+  date.setDate(date.getDate() + Number(days));
+  return isoOf(date);
+}
+
 /** Próxima fecha (1 a 7 días después de `fromISO`) que cae en `weekday`. */
 export function nextWeekdayDate(fromISO, weekday) {
   const date = dateOf(fromISO);
