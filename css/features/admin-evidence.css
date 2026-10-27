@@ -220,3 +220,12 @@ button.expense-receipt-link {
 button.expense-receipt-link:active {
   transform: scale(.97);
 }
+
+/* Total del día en comprobantes (transferencias y otros gastos) */
+.evidence-summary .evidence-total {
+  display: block;
+  margin-bottom: 2px;
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 800;
+}

@@ -3548,9 +3548,14 @@ function evidenceItem({ amount, title, detail, receiptData, receiptLabel }) {
 function renderList(list, summary, items, emptyText) {
   list.replaceChildren();
   const missing = items.filter(item => !item.receiptData).length;
-  summary.textContent = items.length
-    ? `${items.length} ${items.length === 1 ? 'registro' : 'registros'}${missing ? ` · ${missing} sin comprobante` : ' · todos con comprobante'}`
-    : '';
+  const total = items.reduce((sum, item) => sum + (Number(item.amount) || 0), 0);
+  summary.replaceChildren();
+  if (items.length) {
+    const amount = document.createElement('strong');
+    amount.className = 'evidence-total';
+    amount.textContent = `Total ${formatMoney(total)}`;
+    summary.append(amount, ` · ${items.length} ${items.length === 1 ? 'registro' : 'registros'}${missing ? ` · ${missing} sin comprobante` : ' · todos con comprobante'}`);
+  }
   summary.classList.toggle('has-missing', missing > 0);
   if (!items.length) {
     const empty = document.createElement('p');
@@ -8382,13 +8387,28 @@ function __mount_paymentModule() {
 
 
 
-/** Abonos de hoy en la ruta del trabajador, separados por efectivo y transferencia. */
+/** Momento en que se cerró hoy la ruta («Verificar y cerrar ruta»), o 0 si hoy no se ha cerrado. */
+function todayClosureTs(route) {
+  return route?.lastClosure?.date === localDateISO() ? Date.parse(route.lastClosure.submittedAt) || 0 : 0;
+}
+
+/**
+ * ¿El abono ya quedó dentro del cierre de hoy? Ese efectivo ya pasó a la base del día siguiente
+ * y las transferencias ya se liquidaron, así que no se vuelven a sumar en la caja. Los abonos
+ * guardados antes de que se registrara la hora (`at`) se toman como anteriores al cierre.
+ */
+function inClosedDay(payment, closureTs) {
+  return Boolean(closureTs) && !(payment.at && Date.parse(payment.at) > closureTs);
+}
+
+/** Abonos de hoy en la ruta del trabajador (sin los que ya entraron al cierre), por efectivo y transferencia. */
 function todayCollectionsByMethod() {
   const today = localDateISO();
+  const closureTs = todayClosureTs(workerRoute());
   return Object.values(clients).reduce((sum, client) => {
     if (!client || client.route !== state.workerRoute) return sum;
     (client.payments || []).forEach(payment => {
-      if (payment.date !== today) return;
+      if (payment.date !== today || inClosedDay(payment, closureTs)) return;
       if (payment.method === 'transfer') sum.bank += Number(payment.amount) || 0;
       else sum.cash += Number(payment.amount) || 0;
     });
@@ -8436,27 +8456,30 @@ function renderWorkerDailyMetrics() {
   document.querySelector('#worker-day-loans').textContent = formatMoney(route.loans || 0);
   // Seguros cobrados hoy en la ruta: ya están sumados a la base del día (new-client.js).
   // Tras «Verificar y cerrar ruta» el resumen arranca de cero: solo cuenta lo posterior al cierre.
-  const closure = route.lastClosure?.date === localDateISO() ? Date.parse(route.lastClosure.submittedAt) : 0;
+  const closure = todayClosureTs(route);
   const insurance = insuranceCollectedOn(clients, state.workerRoute, localDateISO(), closure);
   document.querySelector('#worker-day-insurance').textContent = formatMoney(insurance.total);
   document.querySelector('#worker-day-insurance-count').textContent = insurance.count ? `${insurance.count} préstamo${insurance.count === 1 ? '' : 's'} entregado${insurance.count === 1 ? '' : 's'} hoy` : 'Sin seguros cobrados hoy';
   const baseNote = document.querySelector('#worker-day-base-insurance');
   baseNote.hidden = !insurance.total;
   baseNote.textContent = insurance.total ? `Incluye ${formatMoney(insurance.total)} de seguros` : '';
-  renderWorkerDayPayments(closure);
-  document.querySelector('#worker-day-cash').textContent = formatMoney(route.cashDelivered || (Number(route.base || 0) + Number(route.collections || 0) - Number(route.loans || 0) - Number(route.expenses || 0) - Number(route.otherExpenses || 0)));
+  renderWorkerDayPayments();
+  // Efectivo del día = base + cobros − préstamos − gastos. Ya cerrada hoy la ruta, la base que
+  // aparece es la de mañana (el efectivo del cierre): no se vuelve a contar como efectivo de hoy.
+  const movements = Number(route.collections || 0) - Number(route.loans || 0) - Number(route.expenses || 0) - Number(route.otherExpenses || 0);
+  document.querySelector('#worker-day-cash').textContent = formatMoney(closure ? movements : route.cashDelivered || Number(route.base || 0) + movements);
+  const cashNote = document.querySelector('#worker-day-cash-note');
+  cashNote.hidden = !closure;
+  cashNote.textContent = closure ? 'Ruta cerrada hoy: solo lo que entre después del cierre' : '';
 }
 
-/**
- * Historial desplegable de los abonos recibidos hoy en la ruta (más reciente primero).
- * Tras «Verificar y cerrar ruta» solo cuentan los registrados después del cierre.
- */
-function renderWorkerDayPayments(closureTs) {
+/** Historial desplegable de todos los abonos recibidos hoy en la ruta (más reciente primero), igual que los ve el admin. */
+function renderWorkerDayPayments() {
   const today = localDateISO();
   const entries = Object.entries(clients)
     .filter(([, client]) => client?.route === state.workerRoute)
     .flatMap(([clientId, client]) => (client.payments || [])
-      .filter(payment => payment.date === today && !(closureTs && payment.at && Date.parse(payment.at) <= closureTs))
+      .filter(payment => payment.date === today && Number(payment.amount) > 0)
       .map(payment => ({ clientId, name: client.name, ...payment })))
     .sort((a, b) => String(b.at || '').localeCompare(String(a.at || '')));
   const list = document.querySelector('#worker-day-payments-list');
