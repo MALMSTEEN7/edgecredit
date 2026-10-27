@@ -352,3 +352,45 @@ export function cutInsurance(route, amount, by = 'Administrador', ts = Date.now(
   route.insuranceCuts.push(cut);
   return cut;
 }
+
+/**
+ * Último «Verificar y cerrar ruta»: fecha del día cerrado y momento del cierre (0 si no se
+ * sabe, p. ej. días traídos del Excel). Null si la ruta nunca se ha cerrado.
+ */
+export function closureCutoff(route) {
+  ensureLedger(route);
+  const closure = route.lastClosure?.date ? { date: route.lastClosure.date, ts: Date.parse(route.lastClosure.submittedAt) || 0 } : null;
+  const lastClosed = Object.keys(route.ledger).filter(date => route.ledger[date]?.closed).sort().at(-1);
+  if (lastClosed && (!closure || lastClosed > closure.date)) return { date: lastClosed, ts: Number(route.ledger[lastClosed].closedTs) || 0 };
+  return closure;
+}
+
+/**
+ * ¿El abono sigue pendiente de cierre? Son los registrados después del último cierre, aunque
+ * sean de días anteriores en que no se cerró la ruta: esos suman en el cobro hasta que se cierre.
+ * Los del mismo día del cierre sin hora (`at`) se toman como anteriores al cierre.
+ */
+export function isPendingPayment(payment, cutoff, today = localDateISO()) {
+  if (!payment || !(Number(payment.amount) > 0) || payment.date > today) return false;
+  if (!cutoff || payment.date > cutoff.date) return true;
+  return payment.date === cutoff.date && Boolean(cutoff.ts) && Boolean(payment.at) && Date.parse(payment.at) > cutoff.ts;
+}
+
+/** Abonos de la ruta pendientes de cierre ({ clientId, client, payment }), del más reciente al más antiguo. */
+export function pendingRoutePayments(clientsById, routeId, route) {
+  const cutoff = route ? closureCutoff(route) : null;
+  const today = localDateISO();
+  return Object.entries(clientsById)
+    .filter(([, client]) => client?.route === routeId)
+    .flatMap(([clientId, client]) => (client.payments || [])
+      .filter(payment => isPendingPayment(payment, cutoff, today))
+      .map(payment => ({ clientId, client, payment })))
+    .sort((a, b) => String(b.payment.at || `${b.payment.date}T00`).localeCompare(String(a.payment.at || `${a.payment.date}T00`)));
+}
+
+/** Fecha y hora en que se registró un abono: «dom 26 oct · 3:05 p. m.» (sin hora si no se guardó). */
+export function paymentStamp(payment) {
+  const day = new Date(`${payment.date}T12:00:00`).toLocaleDateString('es-CO', { weekday: 'short', day: 'numeric', month: 'short' }).replace(/[.,]/g, '').replace(' de ', ' ');
+  const time = payment.at ? new Date(payment.at).toLocaleTimeString('es-CO', { hour: 'numeric', minute: '2-digit' }) : '';
+  return [day, time].filter(Boolean).join(' · ');
+}

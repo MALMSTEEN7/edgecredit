@@ -34,7 +34,7 @@
   <link rel="icon" href="icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="icon-192.png">
   <meta name="apple-mobile-web-app-capable" content="yes">
-  <link rel="stylesheet" id="app-styles" href="dist/styles.bundle.css?v=e82483b8c0">
+  <link rel="stylesheet" id="app-styles" href="dist/styles.bundle.css?v=f91e46e1b2">
 </head>
 <body class="login-active">
   <section class="login-gateway" id="login-gateway" aria-labelledby="login-title">
@@ -246,8 +246,8 @@
         </div>
         <section class="day-payments" aria-labelledby="day-payments-title">
           <header><h3 id="day-payments-title">Abonos del día</h3><small id="day-payments-summary">Sin abonos hoy</small></header>
-          <div class="day-payments-wrap" id="day-payments-wrap" role="region" aria-label="Abonos ingresados hoy" tabindex="0" hidden>
-            <table class="audit-table day-payments-table"><thead><tr><th scope="col">Cartulina</th><th scope="col">Forma de pago</th><th class="numeric" scope="col">Abono</th></tr></thead><tbody id="day-payments-body"></tbody><tfoot id="day-payments-foot"></tfoot></table>
+          <div class="day-payments-wrap" id="day-payments-wrap" role="region" aria-label="Abonos pendientes de cierre" tabindex="0" hidden>
+            <table class="audit-table day-payments-table"><thead><tr><th scope="col">Cartulina</th><th scope="col">Registrado</th><th scope="col">Forma de pago</th><th class="numeric" scope="col">Abono</th></tr></thead><tbody id="day-payments-body"></tbody><tfoot id="day-payments-foot"></tfoot></table>
           </div>
           <p class="day-payments-empty" id="day-payments-empty">Todavía no hay abonos ingresados hoy en esta ruta.</p>
         </section>
@@ -313,7 +313,7 @@
         <div class="admin-section-intro"><div><p class="eyebrow">AUDITORÍA VISUAL · <span id="receipts-route-name">RUTA</span></p><h2>Comprobantes</h2><p>Evidencias por día para la ruta seleccionada. Los registros sin comprobante aparecen primero y marcados.</p></div><div class="receipts-date-picker"><label for="receipts-date-input">Fecha</label><input id="receipts-date-input" type="date"><button type="button" class="secondary-button" id="receipts-today">Hoy</button></div></div>
         <div class="route-evidence-grid">
           <section class="expense-evidence-panel" aria-labelledby="transfer-evidence-title"><div><p class="eyebrow">ABONOS DEL DÍA</p><h3 id="transfer-evidence-title">Transferencias</h3><p class="evidence-summary" id="transfer-evidence-summary" aria-live="polite"></p></div><div id="admin-transfer-evidence-list" class="expense-evidence-list" aria-live="polite"></div></section>
-          <section class="expense-evidence-panel" aria-labelledby="expense-evidence-title"><div><p class="eyebrow">SOPORTES DE RUTA</p><h3 id="expense-evidence-title">Otros gastos</h3><p class="evidence-summary" id="expense-evidence-summary" aria-live="polite"></p></div><div id="admin-other-expense-list" class="expense-evidence-list" aria-live="polite"></div></section>
+          <section class="expense-evidence-panel" aria-labelledby="expense-evidence-title"><div><p class="eyebrow">SOPORTES DE RUTA</p><h3 id="expense-evidence-title">Otros gastos</h3><p class="evidence-summary" id="expense-evidence-summary" aria-live="polite"></p></div><div id="admin-other-expense-list" class="expense-evidence-list" aria-live="polite"></div><div class="evidence-comment" id="other-expense-comment"><p id="other-expense-comment-text"></p><button type="button" class="secondary-button" id="other-expense-comment-button">💬 Agregar comentario</button></div></section>
         </div>
       </section>
       <section class="admin-content admin-section-panel" data-admin-panel="reports" hidden>
@@ -499,7 +499,7 @@
     // al cambiar el sello, el navegador descarga el JS/CSS nuevo en vez de usar su caché.
     // Para desarrollar con los módulos sueltos, abre index.html?dev desde un servidor local.
     (() => {
-      const APP_VERSION = 'e82483b8c0';
+      const APP_VERSION = 'f91e46e1b2';
       const dev = new URLSearchParams(location.search).has('dev') && location.protocol !== 'file:';
       if (dev) {
         document.getElementById('app-styles').href = 'styles.css';

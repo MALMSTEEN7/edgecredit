@@ -672,12 +672,19 @@
   font-size: 13px;
 }
 
-.day-payments-table td:not(.numeric) {
+/* Fecha y forma de pago alineadas a la izquierda igual que su encabezado (le gana a .audit-table). */
+.day-payments .day-payments-table th:not(.numeric),
+.day-payments .day-payments-table td:not(.numeric) {
   text-align: left;
 }
 
-.day-payments-table thead th:nth-child(2) {
-  text-align: left;
+.day-payments .day-payments-table td.day-payment-date {
+  color: var(--muted);
+}
+
+.day-payments .day-payments-table tr.is-earlier-day td.day-payment-date {
+  color: var(--warning, #f5a623);
+  font-weight: 700;
 }
 
 /* Base para el lunes (menú retráctil, editable solo los sábados). */

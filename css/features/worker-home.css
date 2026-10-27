@@ -1068,3 +1068,9 @@
   flex: 0 0 auto;
   margin-left: auto;
 }
+
+/* Abonos de días anteriores sin cerrar: la fecha se resalta para distinguirlos. */
+.worker-day-payments li.is-earlier-day .worker-day-payment-client small {
+  color: var(--warning, #f5a623);
+  font-weight: 700;
+}

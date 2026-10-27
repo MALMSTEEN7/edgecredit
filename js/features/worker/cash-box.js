@@ -6,6 +6,7 @@ import { baseInput, cashTotal } from '../../core/dom.js';
 import { state } from '../../core/state.js';
 import { clients, persistBusinessData, routeSettlements } from '../../core/store.js';
 import { insuranceCollectedOn } from '../../domain/insurance.js';
+import { paymentStamp, pendingRoutePayments } from '../../domain/ledger.js';
 import { localDateISO } from '../../shared/dates.js';
 import { formatMoney } from '../../shared/format.js';
 import { showToast } from '../../ui/toast.js';
@@ -17,25 +18,15 @@ function todayClosureTs(route) {
 }
 
 /**
- * ¿El abono ya quedó dentro del cierre de hoy? Ese efectivo ya pasó a la base del día siguiente
- * y las transferencias ya se liquidaron, así que no se vuelven a sumar en la caja. Los abonos
- * guardados antes de que se registrara la hora (`at`) se toman como anteriores al cierre.
+ * Abonos de la ruta del trabajador pendientes de cierre (también los de días anteriores en que
+ * no se cerró la ruta: siguen sumando en el cobro), por efectivo y transferencia. Los que ya
+ * entraron a un cierre no se vuelven a sumar: ese efectivo ya pasó a la base y las
+ * transferencias ya se liquidaron.
  */
-function inClosedDay(payment, closureTs) {
-  return Boolean(closureTs) && !(payment.at && Date.parse(payment.at) > closureTs);
-}
-
-/** Abonos de hoy en la ruta del trabajador (sin los que ya entraron al cierre), por efectivo y transferencia. */
 function todayCollectionsByMethod() {
-  const today = localDateISO();
-  const closureTs = todayClosureTs(workerRoute());
-  return Object.values(clients).reduce((sum, client) => {
-    if (!client || client.route !== state.workerRoute) return sum;
-    (client.payments || []).forEach(payment => {
-      if (payment.date !== today || inClosedDay(payment, closureTs)) return;
-      if (payment.method === 'transfer') sum.bank += Number(payment.amount) || 0;
-      else sum.cash += Number(payment.amount) || 0;
-    });
+  return pendingRoutePayments(clients, state.workerRoute, workerRoute()).reduce((sum, { payment }) => {
+    if (payment.method === 'transfer') sum.bank += Number(payment.amount) || 0;
+    else sum.cash += Number(payment.amount) || 0;
     return sum;
   }, { cash: 0, bank: 0 });
 }
@@ -97,15 +88,13 @@ export function renderWorkerDailyMetrics() {
   cashNote.textContent = closure ? 'Ruta cerrada hoy: solo lo que entre después del cierre' : '';
 }
 
-/** Historial desplegable de todos los abonos recibidos hoy en la ruta (más reciente primero), igual que los ve el admin. */
+/**
+ * Historial desplegable de los abonos pendientes de cierre (más reciente primero), igual que
+ * los ve el admin: los de hoy y los de días anteriores en que no se cerró la ruta, con su fecha.
+ */
 function renderWorkerDayPayments() {
   const today = localDateISO();
-  const entries = Object.entries(clients)
-    .filter(([, client]) => client?.route === state.workerRoute)
-    .flatMap(([clientId, client]) => (client.payments || [])
-      .filter(payment => payment.date === today && Number(payment.amount) > 0)
-      .map(payment => ({ clientId, name: client.name, ...payment })))
-    .sort((a, b) => String(b.at || '').localeCompare(String(a.at || '')));
+  const entries = pendingRoutePayments(clients, state.workerRoute, workerRoute());
   const list = document.querySelector('#worker-day-payments-list');
   list.replaceChildren();
   if (!entries.length) {
@@ -114,26 +103,29 @@ function renderWorkerDayPayments() {
     empty.textContent = 'Todavía no hay abonos registrados hoy.';
     list.append(empty);
   }
-  entries.forEach(entry => {
+  entries.forEach(({ clientId, client, payment }) => {
     const row = document.createElement('li');
+    row.classList.toggle('is-earlier-day', payment.date < today);
     const open = document.createElement('button');
     open.type = 'button';
     open.className = 'worker-day-payment-client';
-    open.dataset.openClient = entry.clientId;
+    open.dataset.openClient = clientId;
     const name = document.createElement('strong');
-    name.textContent = entry.name;
+    name.textContent = client.name;
     const detail = document.createElement('small');
-    const time = entry.at ? new Date(entry.at).toLocaleTimeString('es-CO', { hour: 'numeric', minute: '2-digit' }) : '';
-    detail.textContent = [time, entry.method === 'transfer' ? 'Transferencia' : 'Efectivo'].filter(Boolean).join(' · ');
+    detail.textContent = [paymentStamp(payment), payment.method === 'transfer' ? 'Transferencia' : 'Efectivo'].join(' · ');
     open.append(name, detail);
     const amount = document.createElement('strong');
     amount.className = 'worker-day-payment-amount';
-    amount.textContent = formatMoney(entry.amount);
+    amount.textContent = formatMoney(payment.amount);
     row.append(open, amount);
     list.append(row);
   });
-  const total = entries.reduce((sum, entry) => sum + (Number(entry.amount) || 0), 0);
-  document.querySelector('#worker-day-payments-count').textContent = entries.length ? `${entries.length} ${entries.length === 1 ? 'abono' : 'abonos'} · ${formatMoney(total)}` : 'Sin abonos';
+  const total = entries.reduce((sum, { payment }) => sum + (Number(payment.amount) || 0), 0);
+  const earlier = entries.filter(({ payment }) => payment.date < today).length;
+  document.querySelector('#worker-day-payments-count').textContent = entries.length
+    ? `${entries.length} ${entries.length === 1 ? 'abono' : 'abonos'} · ${formatMoney(total)}${earlier ? ` · ${earlier} de días sin cerrar` : ''}`
+    : 'Sin abonos';
 }
 
 /** Registra los listeners del módulo. Se invoca una sola vez desde app.js. */
