@@ -57,9 +57,14 @@ function evidenceItem({ amount, title, detail, receiptData, receiptLabel }) {
 function renderList(list, summary, items, emptyText) {
   list.replaceChildren();
   const missing = items.filter(item => !item.receiptData).length;
-  summary.textContent = items.length
-    ? `${items.length} ${items.length === 1 ? 'registro' : 'registros'}${missing ? ` · ${missing} sin comprobante` : ' · todos con comprobante'}`
-    : '';
+  const total = items.reduce((sum, item) => sum + (Number(item.amount) || 0), 0);
+  summary.replaceChildren();
+  if (items.length) {
+    const amount = document.createElement('strong');
+    amount.className = 'evidence-total';
+    amount.textContent = `Total ${formatMoney(total)}`;
+    summary.append(amount, ` · ${items.length} ${items.length === 1 ? 'registro' : 'registros'}${missing ? ` · ${missing} sin comprobante` : ' · todos con comprobante'}`);
+  }
   summary.classList.toggle('has-missing', missing > 0);
   if (!items.length) {
     const empty = document.createElement('p');
