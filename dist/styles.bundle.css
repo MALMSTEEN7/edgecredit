@@ -4695,6 +4695,12 @@ button {
   margin-left: auto;
 }
 
+/* Abonos de días anteriores sin cerrar: la fecha se resalta para distinguirlos. */
+.worker-day-payments li.is-earlier-day .worker-day-payment-client small {
+  color: var(--warning, #f5a623);
+  font-weight: 700;
+}
+
 /* ── css/features/clients.css */
 /* features/clients · Listas y tarjetas de clientes. */
 
@@ -7823,12 +7829,19 @@ button.evidence-link:active {
   font-size: 13px;
 }
 
-.day-payments-table td:not(.numeric) {
+/* Fecha y forma de pago alineadas a la izquierda igual que su encabezado (le gana a .audit-table). */
+.day-payments .day-payments-table th:not(.numeric),
+.day-payments .day-payments-table td:not(.numeric) {
   text-align: left;
 }
 
-.day-payments-table thead th:nth-child(2) {
-  text-align: left;
+.day-payments .day-payments-table td.day-payment-date {
+  color: var(--muted);
+}
+
+.day-payments .day-payments-table tr.is-earlier-day td.day-payment-date {
+  color: var(--warning, #f5a623);
+  font-weight: 700;
 }
 
 /* Base para el lunes (menú retráctil, editable solo los sábados). */
@@ -9560,6 +9573,35 @@ button.expense-receipt-link:active {
   color: var(--text);
   font-size: 15px;
   font-weight: 800;
+}
+
+/* Comentario de otros gastos del día (el mismo de Reportes financieros). */
+.evidence-comment {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 14px;
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
+.evidence-comment p {
+  flex: 1 1 220px;
+  min-width: 0;
+  margin: 0;
+  font-size: 13px;
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+}
+
+.evidence-comment p.is-empty {
+  color: var(--muted);
+}
+
+.evidence-comment button {
+  flex: 0 0 auto;
 }
 
 /* ── css/features/operations.css */

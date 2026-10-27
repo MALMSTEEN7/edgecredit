@@ -5,7 +5,7 @@
 import { adminFeedback, routeSelect, settlementInputs } from '../../core/dom.js';
 import { state } from '../../core/state.js';
 import { clients, persistBusinessData, routeSettlements } from '../../core/store.js';
-import { carriedBase, mondayBaseFor, recordClosure } from '../../domain/ledger.js';
+import { carriedBase, mondayBaseFor, paymentStamp, pendingRoutePayments, recordClosure } from '../../domain/ledger.js';
 import { insuranceCollectedOn } from '../../domain/insurance.js';
 import { personCardIds } from '../../domain/person-cards.js';
 import { localDateISO } from '../../shared/dates.js';
@@ -100,41 +100,47 @@ function transfersOn(routeId, dateISO) {
   }, 0);
 }
 
-/** Abonos ingresados hoy en la ruta: nombre de la cartulina y monto, del más reciente al más antiguo. */
+/**
+ * Abonos de la ruta pendientes de cierre: los de hoy y los de días anteriores en que no se
+ * cerró la ruta (suman en el cobro hasta el cierre). Tras «Verificar y cerrar ruta» salen.
+ */
 export function renderDayPayments(routeId) {
   const today = localDateISO();
-  const rows = Object.entries(clients)
-    .filter(([, client]) => client?.route === routeId)
-    .flatMap(([clientId, client]) => (client.payments || [])
-      .filter(payment => payment.date === today && Number(payment.amount) > 0)
-      .map(payment => ({ clientId, client, payment })));
+  const rows = pendingRoutePayments(clients, routeId, routeSettlements[routeId]);
   const total = rows.reduce((sum, row) => sum + Number(row.payment.amount), 0);
+  const earlier = rows.filter(row => row.payment.date < today).length;
   const body = document.querySelector('#day-payments-body');
   body.replaceChildren(...rows.map(({ clientId, client, payment }) => {
     const row = document.createElement('tr');
+    row.classList.toggle('is-earlier-day', payment.date < today);
     const name = document.createElement('th');
     name.scope = 'row';
     const cards = personCardIds(clients, client.id);
     name.textContent = cards.length > 1 ? `${client.name} · Cartulina ${cards.indexOf(clientId) + 1}` : client.name;
+    const date = document.createElement('td');
+    date.className = 'day-payment-date';
+    date.textContent = paymentStamp(payment);
     const method = document.createElement('td');
     method.textContent = payment.method === 'transfer' ? 'Transferencia' : 'Efectivo';
     const amount = document.createElement('td');
     amount.className = 'numeric';
     amount.textContent = formatMoney(payment.amount);
-    row.append(name, method, amount);
+    row.append(name, date, method, amount);
     return row;
   }));
   const foot = document.querySelector('#day-payments-foot');
   foot.replaceChildren();
   if (rows.length) {
     const row = document.createElement('tr');
-    row.innerHTML = '<th scope="row" colspan="2">Total abonos</th><td class="numeric"></td>';
+    row.innerHTML = '<th scope="row" colspan="3">Total abonos</th><td class="numeric"></td>';
     row.lastElementChild.textContent = formatMoney(total);
     foot.append(row);
   }
   document.querySelector('#day-payments-wrap').hidden = !rows.length;
   document.querySelector('#day-payments-empty').hidden = Boolean(rows.length);
-  document.querySelector('#day-payments-summary').textContent = rows.length ? `${rows.length} abono${rows.length === 1 ? '' : 's'} · ${formatMoney(total)}` : 'Sin abonos hoy';
+  document.querySelector('#day-payments-summary').textContent = rows.length
+    ? `${rows.length} abono${rows.length === 1 ? '' : 's'} · ${formatMoney(total)}${earlier ? ` · ${earlier} de días sin cerrar` : ''}`
+    : 'Sin abonos hoy';
 }
 
 const isSaturday = () => new Date().getDay() === 6;
@@ -231,6 +237,10 @@ export function mount() {
       window.dispatchEvent(new CustomEvent('edgecredit:route-close', { detail: payload }));
       const route = routeSettlements[routeSelect.value] || state.activeSettlement;
       const routeId = routeSelect.value;
+      // Transferencias que entran a este cierre: también las de días anteriores sin cerrar.
+      const transfers = pendingRoutePayments(clients, routeId, route)
+        .filter(({ payment }) => payment.method === 'transfer')
+        .reduce((sum, { payment }) => sum + Number(payment.amount), 0);
       route.lastClosure = {
         date: localDateISO(), submittedAt: payload.submittedAt, difference: payload.difference,
         snapshot: Object.fromEntries(CLOSURE_FIELDS.map(field => [field, Number(route[field] || 0)]))
@@ -238,7 +248,6 @@ export function mount() {
       // Libro diario: el día queda guardado con su fecha antes de reiniciar el resumen.
       const previousClosureTs = route.lastClosure?.date === localDateISO() && route.ledger?.[localDateISO()]?.closed ? Number(route.ledger[localDateISO()].closedTs) : 0;
       const insurance = insuranceCollectedOn(clients, routeId, localDateISO(), previousClosureTs).total;
-      const transfers = transfersOn(routeId, localDateISO());
       recordClosure(route, localDateISO(), { ...route, insurance, transfers }, Date.parse(payload.submittedAt));
       const reset = resetRouteDay(route, routeId, transfers);
       route.lastClosure.carriedBase = reset.carried;

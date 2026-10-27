@@ -5,10 +5,13 @@
  */
 
 import { routeSelect } from '../../core/dom.js';
-import { clients, routeSettlements, workerForRoute } from '../../core/store.js';
+import { clients, persistBusinessData, routeSettlements, workerForRoute } from '../../core/store.js';
+import { otherExpensesNote, setOtherExpensesNote } from '../../domain/ledger.js';
 import { localDateISO } from '../../shared/dates.js';
 import { formatDate, formatMoney } from '../../shared/format.js';
+import { openCustomModal } from '../../ui/custom-modal.js';
 import { bindImageViewer } from '../../ui/image-viewer.js';
+import { showToast } from '../../ui/toast.js';
 
 let selectedDate = '';
 const qs = selector => document.querySelector(selector);
@@ -103,6 +106,35 @@ function renderOtherExpenseEvidence(route, date) {
     sortKey: entry.createdAt
   }));
   renderList(qs('#admin-other-expense-list'), qs('#expense-evidence-summary'), items, 'No hay otros gastos registrados en esta fecha.');
+  renderOtherExpenseComment(route, date);
+}
+
+/** Comentario de otros gastos del día: es el mismo que sale en Reportes financieros. */
+function renderOtherExpenseComment(route, date) {
+  const note = otherExpensesNote(route, date);
+  const text = qs('#other-expense-comment-text');
+  text.textContent = note ? `Comentario: ${note}` : 'Sin comentario para los reportes financieros.';
+  text.classList.toggle('is-empty', !note);
+  qs('#other-expense-comment-button').textContent = note ? '💬 Editar comentario' : '💬 Agregar comentario';
+}
+
+function openOtherExpenseComment() {
+  const route = routeSettlements[routeSelect.value];
+  if (!route) return;
+  const date = evidenceDate();
+  const day = new Date(`${date}T12:00:00`).toLocaleDateString('es-CO', { weekday: 'long', day: '2-digit', month: '2-digit' });
+  openCustomModal({
+    title: `Comentario de otros gastos · ${day}`,
+    description: `Ruta ${route.name}. Este comentario aparece en Reportes financieros, en «Otros gastos» de ese día.`,
+    fields: [{ name: 'note', label: 'Comentario', type: 'textarea', rows: 4, value: otherExpensesNote(route, date), placeholder: 'Ej. Pinchada $ 12.000, gasolina $ 20.000' }],
+    submitLabel: 'Guardar comentario',
+    onSubmit: values => {
+      setOtherExpensesNote(route, date, values.note);
+      persistBusinessData();
+      renderOtherExpenseComment(route, date);
+      showToast('Comentario guardado. Ya sale en Reportes financieros.');
+    },
+  });
 }
 
 export function renderRouteEvidence(routeId) {
@@ -122,6 +154,7 @@ export function mount() {
     selectedDate = event.target.value || '';
     renderRouteEvidence(routeSelect.value);
   });
+  qs('#other-expense-comment-button').addEventListener('click', openOtherExpenseComment);
   qs('#receipts-today').addEventListener('click', () => {
     selectedDate = '';
     renderRouteEvidence(routeSelect.value);

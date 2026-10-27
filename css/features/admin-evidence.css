@@ -229,3 +229,32 @@ button.expense-receipt-link:active {
   font-size: 15px;
   font-weight: 800;
 }
+
+/* Comentario de otros gastos del día (el mismo de Reportes financieros). */
+.evidence-comment {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 14px;
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
+.evidence-comment p {
+  flex: 1 1 220px;
+  min-width: 0;
+  margin: 0;
+  font-size: 13px;
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+}
+
+.evidence-comment p.is-empty {
+  color: var(--muted);
+}
+
+.evidence-comment button {
+  flex: 0 0 auto;
+}

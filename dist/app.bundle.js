@@ -1652,6 +1652,48 @@ function cutInsurance(route, amount, by = 'Administrador', ts = Date.now()) {
   return cut;
 }
 
+/**
+ * Último «Verificar y cerrar ruta»: fecha del día cerrado y momento del cierre (0 si no se
+ * sabe, p. ej. días traídos del Excel). Null si la ruta nunca se ha cerrado.
+ */
+function closureCutoff(route) {
+  ensureLedger(route);
+  const closure = route.lastClosure?.date ? { date: route.lastClosure.date, ts: Date.parse(route.lastClosure.submittedAt) || 0 } : null;
+  const lastClosed = Object.keys(route.ledger).filter(date => route.ledger[date]?.closed).sort().at(-1);
+  if (lastClosed && (!closure || lastClosed > closure.date)) return { date: lastClosed, ts: Number(route.ledger[lastClosed].closedTs) || 0 };
+  return closure;
+}
+
+/**
+ * ¿El abono sigue pendiente de cierre? Son los registrados después del último cierre, aunque
+ * sean de días anteriores en que no se cerró la ruta: esos suman en el cobro hasta que se cierre.
+ * Los del mismo día del cierre sin hora (`at`) se toman como anteriores al cierre.
+ */
+function isPendingPayment(payment, cutoff, today = localDateISO()) {
+  if (!payment || !(Number(payment.amount) > 0) || payment.date > today) return false;
+  if (!cutoff || payment.date > cutoff.date) return true;
+  return payment.date === cutoff.date && Boolean(cutoff.ts) && Boolean(payment.at) && Date.parse(payment.at) > cutoff.ts;
+}
+
+/** Abonos de la ruta pendientes de cierre ({ clientId, client, payment }), del más reciente al más antiguo. */
+function pendingRoutePayments(clientsById, routeId, route) {
+  const cutoff = route ? closureCutoff(route) : null;
+  const today = localDateISO();
+  return Object.entries(clientsById)
+    .filter(([, client]) => client?.route === routeId)
+    .flatMap(([clientId, client]) => (client.payments || [])
+      .filter(payment => isPendingPayment(payment, cutoff, today))
+      .map(payment => ({ clientId, client, payment })))
+    .sort((a, b) => String(b.payment.at || `${b.payment.date}T00`).localeCompare(String(a.payment.at || `${a.payment.date}T00`)));
+}
+
+/** Fecha y hora en que se registró un abono: «dom 26 oct · 3:05 p. m.» (sin hora si no se guardó). */
+function paymentStamp(payment) {
+  const day = new Date(`${payment.date}T12:00:00`).toLocaleDateString('es-CO', { weekday: 'short', day: 'numeric', month: 'short' }).replace(/[.,]/g, '').replace(' de ', ' ');
+  const time = payment.at ? new Date(payment.at).toLocaleTimeString('es-CO', { hour: 'numeric', minute: '2-digit' }) : '';
+  return [day, time].filter(Boolean).join(' · ');
+}
+
 // ── js/domain/legacy-import.js
 /**
  * domain/legacy-import · Convierte la exportación del sistema anterior (CREDITOS.exe,
@@ -3501,6 +3543,9 @@ function __mount_clientMapModule() {
 
 
 
+
+
+
 let selectedDate = '';
 const qs = selector => document.querySelector(selector);
 
@@ -3594,6 +3639,35 @@ function renderOtherExpenseEvidence(route, date) {
     sortKey: entry.createdAt
   }));
   renderList(qs('#admin-other-expense-list'), qs('#expense-evidence-summary'), items, 'No hay otros gastos registrados en esta fecha.');
+  renderOtherExpenseComment(route, date);
+}
+
+/** Comentario de otros gastos del día: es el mismo que sale en Reportes financieros. */
+function renderOtherExpenseComment(route, date) {
+  const note = otherExpensesNote(route, date);
+  const text = qs('#other-expense-comment-text');
+  text.textContent = note ? `Comentario: ${note}` : 'Sin comentario para los reportes financieros.';
+  text.classList.toggle('is-empty', !note);
+  qs('#other-expense-comment-button').textContent = note ? '💬 Editar comentario' : '💬 Agregar comentario';
+}
+
+function openOtherExpenseComment() {
+  const route = routeSettlements[routeSelect.value];
+  if (!route) return;
+  const date = evidenceDate();
+  const day = new Date(`${date}T12:00:00`).toLocaleDateString('es-CO', { weekday: 'long', day: '2-digit', month: '2-digit' });
+  openCustomModal({
+    title: `Comentario de otros gastos · ${day}`,
+    description: `Ruta ${route.name}. Este comentario aparece en Reportes financieros, en «Otros gastos» de ese día.`,
+    fields: [{ name: 'note', label: 'Comentario', type: 'textarea', rows: 4, value: otherExpensesNote(route, date), placeholder: 'Ej. Pinchada $ 12.000, gasolina $ 20.000' }],
+    submitLabel: 'Guardar comentario',
+    onSubmit: values => {
+      setOtherExpensesNote(route, date, values.note);
+      persistBusinessData();
+      renderOtherExpenseComment(route, date);
+      showToast('Comentario guardado. Ya sale en Reportes financieros.');
+    },
+  });
 }
 
 function renderRouteEvidence(routeId) {
@@ -3613,6 +3687,7 @@ function __mount_evidenceModule() {
     selectedDate = event.target.value || '';
     renderRouteEvidence(routeSelect.value);
   });
+  qs('#other-expense-comment-button').addEventListener('click', openOtherExpenseComment);
   qs('#receipts-today').addEventListener('click', () => {
     selectedDate = '';
     renderRouteEvidence(routeSelect.value);
@@ -5107,41 +5182,47 @@ function transfersOn(routeId, dateISO) {
   }, 0);
 }
 
-/** Abonos ingresados hoy en la ruta: nombre de la cartulina y monto, del más reciente al más antiguo. */
+/**
+ * Abonos de la ruta pendientes de cierre: los de hoy y los de días anteriores en que no se
+ * cerró la ruta (suman en el cobro hasta el cierre). Tras «Verificar y cerrar ruta» salen.
+ */
 function renderDayPayments(routeId) {
   const today = localDateISO();
-  const rows = Object.entries(clients)
-    .filter(([, client]) => client?.route === routeId)
-    .flatMap(([clientId, client]) => (client.payments || [])
-      .filter(payment => payment.date === today && Number(payment.amount) > 0)
-      .map(payment => ({ clientId, client, payment })));
+  const rows = pendingRoutePayments(clients, routeId, routeSettlements[routeId]);
   const total = rows.reduce((sum, row) => sum + Number(row.payment.amount), 0);
+  const earlier = rows.filter(row => row.payment.date < today).length;
   const body = document.querySelector('#day-payments-body');
   body.replaceChildren(...rows.map(({ clientId, client, payment }) => {
     const row = document.createElement('tr');
+    row.classList.toggle('is-earlier-day', payment.date < today);
     const name = document.createElement('th');
     name.scope = 'row';
     const cards = personCardIds(clients, client.id);
     name.textContent = cards.length > 1 ? `${client.name} · Cartulina ${cards.indexOf(clientId) + 1}` : client.name;
+    const date = document.createElement('td');
+    date.className = 'day-payment-date';
+    date.textContent = paymentStamp(payment);
     const method = document.createElement('td');
     method.textContent = payment.method === 'transfer' ? 'Transferencia' : 'Efectivo';
     const amount = document.createElement('td');
     amount.className = 'numeric';
     amount.textContent = formatMoney(payment.amount);
-    row.append(name, method, amount);
+    row.append(name, date, method, amount);
     return row;
   }));
   const foot = document.querySelector('#day-payments-foot');
   foot.replaceChildren();
   if (rows.length) {
     const row = document.createElement('tr');
-    row.innerHTML = '<th scope="row" colspan="2">Total abonos</th><td class="numeric"></td>';
+    row.innerHTML = '<th scope="row" colspan="3">Total abonos</th><td class="numeric"></td>';
     row.lastElementChild.textContent = formatMoney(total);
     foot.append(row);
   }
   document.querySelector('#day-payments-wrap').hidden = !rows.length;
   document.querySelector('#day-payments-empty').hidden = Boolean(rows.length);
-  document.querySelector('#day-payments-summary').textContent = rows.length ? `${rows.length} abono${rows.length === 1 ? '' : 's'} · ${formatMoney(total)}` : 'Sin abonos hoy';
+  document.querySelector('#day-payments-summary').textContent = rows.length
+    ? `${rows.length} abono${rows.length === 1 ? '' : 's'} · ${formatMoney(total)}${earlier ? ` · ${earlier} de días sin cerrar` : ''}`
+    : 'Sin abonos hoy';
 }
 
 const isSaturday = () => new Date().getDay() === 6;
@@ -5238,6 +5319,10 @@ function __mount_settlementModule() {
       window.dispatchEvent(new CustomEvent('edgecredit:route-close', { detail: payload }));
       const route = routeSettlements[routeSelect.value] || state.activeSettlement;
       const routeId = routeSelect.value;
+      // Transferencias que entran a este cierre: también las de días anteriores sin cerrar.
+      const transfers = pendingRoutePayments(clients, routeId, route)
+        .filter(({ payment }) => payment.method === 'transfer')
+        .reduce((sum, { payment }) => sum + Number(payment.amount), 0);
       route.lastClosure = {
         date: localDateISO(), submittedAt: payload.submittedAt, difference: payload.difference,
         snapshot: Object.fromEntries(CLOSURE_FIELDS.map(field => [field, Number(route[field] || 0)]))
@@ -5245,7 +5330,6 @@ function __mount_settlementModule() {
       // Libro diario: el día queda guardado con su fecha antes de reiniciar el resumen.
       const previousClosureTs = route.lastClosure?.date === localDateISO() && route.ledger?.[localDateISO()]?.closed ? Number(route.ledger[localDateISO()].closedTs) : 0;
       const insurance = insuranceCollectedOn(clients, routeId, localDateISO(), previousClosureTs).total;
-      const transfers = transfersOn(routeId, localDateISO());
       recordClosure(route, localDateISO(), { ...route, insurance, transfers }, Date.parse(payload.submittedAt));
       const reset = resetRouteDay(route, routeId, transfers);
       route.lastClosure.carriedBase = reset.carried;
@@ -8431,31 +8515,22 @@ function __mount_paymentModule() {
 
 
 
+
 /** Momento en que se cerró hoy la ruta («Verificar y cerrar ruta»), o 0 si hoy no se ha cerrado. */
 function todayClosureTs(route) {
   return route?.lastClosure?.date === localDateISO() ? Date.parse(route.lastClosure.submittedAt) || 0 : 0;
 }
 
 /**
- * ¿El abono ya quedó dentro del cierre de hoy? Ese efectivo ya pasó a la base del día siguiente
- * y las transferencias ya se liquidaron, así que no se vuelven a sumar en la caja. Los abonos
- * guardados antes de que se registrara la hora (`at`) se toman como anteriores al cierre.
+ * Abonos de la ruta del trabajador pendientes de cierre (también los de días anteriores en que
+ * no se cerró la ruta: siguen sumando en el cobro), por efectivo y transferencia. Los que ya
+ * entraron a un cierre no se vuelven a sumar: ese efectivo ya pasó a la base y las
+ * transferencias ya se liquidaron.
  */
-function inClosedDay(payment, closureTs) {
-  return Boolean(closureTs) && !(payment.at && Date.parse(payment.at) > closureTs);
-}
-
-/** Abonos de hoy en la ruta del trabajador (sin los que ya entraron al cierre), por efectivo y transferencia. */
 function todayCollectionsByMethod() {
-  const today = localDateISO();
-  const closureTs = todayClosureTs(workerRoute());
-  return Object.values(clients).reduce((sum, client) => {
-    if (!client || client.route !== state.workerRoute) return sum;
-    (client.payments || []).forEach(payment => {
-      if (payment.date !== today || inClosedDay(payment, closureTs)) return;
-      if (payment.method === 'transfer') sum.bank += Number(payment.amount) || 0;
-      else sum.cash += Number(payment.amount) || 0;
-    });
+  return pendingRoutePayments(clients, state.workerRoute, workerRoute()).reduce((sum, { payment }) => {
+    if (payment.method === 'transfer') sum.bank += Number(payment.amount) || 0;
+    else sum.cash += Number(payment.amount) || 0;
     return sum;
   }, { cash: 0, bank: 0 });
 }
@@ -8517,15 +8592,13 @@ function renderWorkerDailyMetrics() {
   cashNote.textContent = closure ? 'Ruta cerrada hoy: solo lo que entre después del cierre' : '';
 }
 
-/** Historial desplegable de todos los abonos recibidos hoy en la ruta (más reciente primero), igual que los ve el admin. */
+/**
+ * Historial desplegable de los abonos pendientes de cierre (más reciente primero), igual que
+ * los ve el admin: los de hoy y los de días anteriores en que no se cerró la ruta, con su fecha.
+ */
 function renderWorkerDayPayments() {
   const today = localDateISO();
-  const entries = Object.entries(clients)
-    .filter(([, client]) => client?.route === state.workerRoute)
-    .flatMap(([clientId, client]) => (client.payments || [])
-      .filter(payment => payment.date === today && Number(payment.amount) > 0)
-      .map(payment => ({ clientId, name: client.name, ...payment })))
-    .sort((a, b) => String(b.at || '').localeCompare(String(a.at || '')));
+  const entries = pendingRoutePayments(clients, state.workerRoute, workerRoute());
   const list = document.querySelector('#worker-day-payments-list');
   list.replaceChildren();
   if (!entries.length) {
@@ -8534,26 +8607,29 @@ function renderWorkerDayPayments() {
     empty.textContent = 'Todavía no hay abonos registrados hoy.';
     list.append(empty);
   }
-  entries.forEach(entry => {
+  entries.forEach(({ clientId, client, payment }) => {
     const row = document.createElement('li');
+    row.classList.toggle('is-earlier-day', payment.date < today);
     const open = document.createElement('button');
     open.type = 'button';
     open.className = 'worker-day-payment-client';
-    open.dataset.openClient = entry.clientId;
+    open.dataset.openClient = clientId;
     const name = document.createElement('strong');
-    name.textContent = entry.name;
+    name.textContent = client.name;
     const detail = document.createElement('small');
-    const time = entry.at ? new Date(entry.at).toLocaleTimeString('es-CO', { hour: 'numeric', minute: '2-digit' }) : '';
-    detail.textContent = [time, entry.method === 'transfer' ? 'Transferencia' : 'Efectivo'].filter(Boolean).join(' · ');
+    detail.textContent = [paymentStamp(payment), payment.method === 'transfer' ? 'Transferencia' : 'Efectivo'].join(' · ');
     open.append(name, detail);
     const amount = document.createElement('strong');
     amount.className = 'worker-day-payment-amount';
-    amount.textContent = formatMoney(entry.amount);
+    amount.textContent = formatMoney(payment.amount);
     row.append(open, amount);
     list.append(row);
   });
-  const total = entries.reduce((sum, entry) => sum + (Number(entry.amount) || 0), 0);
-  document.querySelector('#worker-day-payments-count').textContent = entries.length ? `${entries.length} ${entries.length === 1 ? 'abono' : 'abonos'} · ${formatMoney(total)}` : 'Sin abonos';
+  const total = entries.reduce((sum, { payment }) => sum + (Number(payment.amount) || 0), 0);
+  const earlier = entries.filter(({ payment }) => payment.date < today).length;
+  document.querySelector('#worker-day-payments-count').textContent = entries.length
+    ? `${entries.length} ${entries.length === 1 ? 'abono' : 'abonos'} · ${formatMoney(total)}${earlier ? ` · ${earlier} de días sin cerrar` : ''}`
+    : 'Sin abonos';
 }
 
 /** Registra los listeners del módulo. Se invoca una sola vez desde app.js. */
