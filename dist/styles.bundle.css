@@ -6280,6 +6280,12 @@ button.evidence-link:active {
   justify-self: end;
 }
 
+/* Encabezados Fecha · Abono · Saldo más claros para que se lean mejor. */
+#payment-history-list > li.history-payment-head {
+  color: color-mix(in srgb, var(--text) 88%, var(--muted));
+  font-weight: 800;
+}
+
 /* ── css/features/payment.css */
 /* features/payment · Modal de registro de pago. */
 
@@ -6997,6 +7003,12 @@ button.evidence-link:active {
   color: var(--text);
   font-size: 12px;
   font-weight: 600;
+}
+
+/* Encabezados Fecha · Abono · Saldo más claros para que se lean mejor. */
+.route-card-payments li.route-payments-head {
+  color: color-mix(in srgb, var(--text) 88%, var(--muted));
+  font-weight: 800;
 }
 
 /* ── css/features/settings.css */

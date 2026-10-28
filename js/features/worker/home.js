@@ -5,7 +5,7 @@
 
 import { state } from '../../core/state.js';
 import { openClient } from '../clients/client-detail.js';
-import { markNoPayment, todayRouteOrder } from '../daily-route/daily-route.js';
+import { hasBuiltRoute, markNoPayment, routeReadyMessage } from '../daily-route/daily-route.js';
 import { openPayment } from '../payments/payment.js';
 import { clients, routeSettlements } from '../../core/store.js';
 import { openCustomModal } from '../../ui/custom-modal.js';
@@ -31,8 +31,10 @@ export function renderHomeHeader() {
   const route = routeSettlements[state.workerRoute];
   const weekday = new Intl.DateTimeFormat('es-CO', { weekday: 'long' }).format(new Date());
   document.querySelector('#home-list-eyebrow').textContent = `${weekday} · RUTA ${route?.name || ''}`.toLocaleUpperCase('es');
-  const organized = todayRouteOrder().length > 0;
-  document.querySelector('#home-route-hint').hidden = organized || state.userRole !== 'worker';
+  const organized = hasBuiltRoute();
+  const hint = document.querySelector('#home-route-hint');
+  hint.hidden = organized || state.userRole !== 'worker';
+  hint.textContent = `${routeReadyMessage() || 'Aún no se ha armado la ruta del día.'} Ármala en «Ruta diaria» y aquí aparecerán los clientes que vas a visitar.`;
 }
 
 /** Muestra el total en caja dentro del botón "Tu base hoy" sin tener que abrirlo. */
@@ -66,7 +68,7 @@ export function renderHomeRowActions() {
   });
   const anyVisible = rows.some(row => !row.hidden);
   const empty = document.querySelector('#home-route-done');
-  const organized = todayRouteOrder().length > 0;
+  const organized = hasBuiltRoute();
   // Buscando: los avisos de la ruta se ocultan y se dice cuántos clientes coinciden.
   const searching = Boolean(document.querySelector('#home-search')?.value.trim());
   const note = document.querySelector('#home-search-note');
