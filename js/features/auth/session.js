@@ -3,6 +3,11 @@
  *
  * Flujo: usuario + contraseña → verificación en dos pasos (TOTP, salvo dispositivo recordado) → app.
  * Tras varios intentos fallidos el dispositivo se bloquea unos segundos.
+ *
+ * Con servidor, la sesión de Supabase queda guardada en el navegador: al recargar o abrir la
+ * app se restaura sin pedir nada si es válida, ya pasó la verificación en dos pasos (aal2, o
+ * un dispositivo recordado) y el perfil sigue activo (acceso y horario). Se cierra sola tras
+ * `security.session.idleHours` horas sin usar la app, y «Cerrar sesión» la cierra de verdad.
  */
 
 import { localAdminPasswordHash } from '../admin/account-settings.js';
@@ -93,6 +98,7 @@ function failSecondFactor() {
 
 function logout() {
   if (backendEnabled()) endServerSession();
+  forgetActivity();
   cancelSecondFactor();
   document.querySelector('#login-form').reset();
   document.querySelector('#login-user').value = '';
@@ -215,7 +221,7 @@ async function authenticateWithServer() {
   const isAdmin = profile.role === 'admin';
   const { data: settings } = await db.from('app_settings').select('*').eq('key', 'worker_access').maybeSingle();
   if (settings?.data) Object.assign(security.workerAccess, settings.data);
-  const worker = isAdmin ? null : { ...(profile.data || {}), id: profile.user_id, username: profile.username, email: profile.email, accessEnabled: profile.access_enabled !== false, route: profile.data?.route || profile.route_id || '' };
+  const worker = isAdmin ? null : serverWorker(profile);
   if (!isAdmin && !workerMayEnter(worker)) { await endServerSession(); return null; }
   // Verificación en dos pasos con el MFA de Supabase.
   const factors = await db.auth.mfa.listFactors();
@@ -238,12 +244,149 @@ async function authenticateWithServer() {
   return { isAdmin, account: { label: profile.username, trustKey: user.id, record: {}, remote, worker, onFailure: failSecondFactor } };
 }
 
-/** Cierra la sesión del servidor y limpia los datos de este dispositivo. */
+/**
+ * Cierra la sesión del servidor y limpia los datos de este dispositivo. Solo cierra la sesión
+ * de este dispositivo (scope 'local'): el admin no pierde la sesión de sus otros equipos.
+ */
 async function endServerSession() {
   await stopSync();
-  try { const db = await backend(); await db.auth.signOut(); } catch { /* sin conexión: la sesión vence sola */ }
+  let signedOut = false;
+  try { const db = await backend(); const { error } = await db.auth.signOut({ scope: 'local' }); signedOut = !error; } catch { /* sin conexión */ }
+  // Sin conexión supabase-js conserva la sesión guardada: se borra a mano para que al
+  // recargar no se vuelva a entrar sola.
+  if (!signedOut) {
+    try { Object.keys(localStorage).filter(key => key.startsWith('edgecredit-auth')).forEach(key => localStorage.removeItem(key)); } catch { /* opcional */ }
+  }
   Object.keys(clients).forEach(key => delete clients[key]);
   pendingRequests.splice(0, pendingRequests.length);
+}
+
+// ── Cierre por inactividad ──
+const ACTIVITY_KEY = 'edgecredit-last-activity';
+const SESSION_SETTINGS_KEY = 'edgecredit-session-settings';
+
+function idleLimitMs() {
+  const hours = Number(security.session?.idleHours);
+  return (Number.isFinite(hours) && hours > 0 ? hours : 12) * 3600000;
+}
+
+function lastActivity() {
+  try { return Number(localStorage.getItem(ACTIVITY_KEY)) || 0; } catch { return 0; }
+}
+
+/** Anota que la app se está usando (como mucho cada 30 s; lo comparten las pestañas). */
+function markActivity(force = false) {
+  if (!force && Date.now() - lastActivity() < 30000) return;
+  try { localStorage.setItem(ACTIVITY_KEY, String(Date.now())); } catch { /* opcional */ }
+}
+
+function forgetActivity() {
+  try { localStorage.removeItem(ACTIVITY_KEY); } catch { /* opcional */ }
+}
+
+function idleExpired() {
+  const last = lastActivity();
+  return Boolean(last) && Date.now() - last > idleLimitMs();
+}
+
+const insideApp = () => loginGateway.hidden;
+
+function idleMessage() {
+  const hours = idleLimitMs() / 3600000;
+  return `Tu sesión se cerró tras ${hours} hora${hours === 1 ? '' : 's'} sin usar la app. Vuelve a ingresar.`;
+}
+
+function checkIdle() {
+  if (!insideApp() || !idleExpired()) return;
+  logout();
+  loginError.textContent = idleMessage();
+}
+
+// ── Restaurar la sesión guardada al abrir o recargar la app ──
+let restoring = false;
+let restoreRetryPending = false;
+
+function setRestoring(on, message = '') {
+  restoring = on;
+  document.querySelector('#login-submit').disabled = on || lockRemainingSeconds() > 0;
+  loginGateway.classList.toggle('is-restoring', on);
+  loginError.textContent = message;
+}
+
+/** ¿La sesión guardada ya pasó la verificación en dos pasos? */
+async function secondFactorDone(db, userId) {
+  if (!TWO_FACTOR_REQUIRED) return true;
+  const { data, error } = await db.auth.mfa.getAuthenticatorAssuranceLevel();
+  if (error || !data) return false;
+  if (data.currentLevel === 'aal2') return true;
+  // Dispositivo recordado: al ingresar tampoco se pide el código, así que la sesión vale igual.
+  return data.nextLevel === 'aal2' && isAccountTrusted(userId, 0);
+}
+
+async function restoreServerSession() {
+  if (!backendEnabled() || restoring || insideApp()) return;
+  restoreRetryPending = false;
+  try { Object.assign(security.session, JSON.parse(localStorage.getItem(SESSION_SETTINGS_KEY) || 'null') || {}); } catch { /* opcional */ }
+  let db;
+  try { db = await backend(); } catch { restoreRetryPending = true; return; }
+  const { data: sessionData, error: sessionError } = await db.auth.getSession();
+  const session = sessionData?.session;
+  if (!session) {
+    if (sessionError && /fetch|network/i.test(String(sessionError.message))) restoreRetryPending = true;
+    return;
+  }
+  if (idleExpired()) {
+    await endServerSession();
+    forgetActivity();
+    loginError.textContent = idleMessage();
+    return;
+  }
+  setRestoring(true, 'Restaurando tu sesión…');
+  try {
+    const userId = session.user.id;
+    if (!(await secondFactorDone(db, userId))) { await endServerSession(); setRestoring(false); return; }
+    const { data: profile, error: profileError } = await db.from('profiles').select('*').eq('user_id', userId).maybeSingle();
+    if (profileError) throw profileError;
+    if (!profile || profile.role === 'pending') { await endServerSession(); setRestoring(false); return; }
+    const isAdmin = profile.role === 'admin';
+    const { data: settings } = await db.from('app_settings').select('*').in('key', ['worker_access', 'session']);
+    (settings || []).forEach(row => {
+      if (row.key === 'worker_access' && row.data) Object.assign(security.workerAccess, row.data);
+      if (row.key === 'session' && row.data) { Object.assign(security.session, row.data); try { localStorage.setItem(SESSION_SETTINGS_KEY, JSON.stringify(security.session)); } catch { /* opcional */ } }
+    });
+    const worker = isAdmin ? null : serverWorker(profile);
+    if (!isAdmin && !workerMayEnter(worker)) { const message = loginError.textContent; await endServerSession(); setRestoring(false, message); return; }
+    const account = { label: profile.username, trustKey: userId, record: {}, worker };
+    if (!(await enterWithServer(account, isAdmin))) { setRestoring(false, loginError.textContent); return; }
+    setRestoring(false);
+    enterApp(account, isAdmin);
+  } catch (error) {
+    // Sin conexión: la sesión se conserva y se reintenta al volver internet.
+    const offline = /fetch|network/i.test(String(error?.message || error));
+    if (offline) restoreRetryPending = true;
+    else await endServerSession();
+    setRestoring(false, offline ? 'Sin conexión: tu sesión se restaurará al volver internet.' : `No se pudo restaurar la sesión: ${backendErrorMessage(error)}`);
+  }
+}
+
+function serverWorker(profile) {
+  return { ...(profile.data || {}), id: profile.user_id, username: profile.username, email: profile.email, accessEnabled: profile.access_enabled !== false, route: profile.data?.route || profile.route_id || '' };
+}
+
+/** Carga los datos del servidor de una sesión ya verificada. false si no se pudo. */
+async function enterWithServer(account, isAdmin) {
+  loginError.textContent = 'Cargando datos del servidor…';
+  try {
+    if (!isAdmin) personnel.splice(0, personnel.length, account.worker);
+    await startSync({ userId: account.trustKey, role: isAdmin ? 'admin' : 'worker', routeId: routeKey(account.worker?.route || ''), routeName: account.worker?.route });
+    afterServerLoad();
+  } catch (error) {
+    loginError.textContent = `No se pudieron cargar los datos: ${backendErrorMessage(error)}`;
+    await endServerSession();
+    return false;
+  }
+  loginError.textContent = '';
+  return true;
 }
 
 /** Tras cargar los datos del servidor: normaliza y repinta las listas. */
@@ -253,6 +396,7 @@ export function setAfterServerLoad(fn) { afterServerLoad = fn; }
 /** Muestra la vista del admin o del trabajador tras un ingreso exitoso. */
 function enterApp(account, isAdmin) {
     clearFailures();
+    markActivity(true);
     state.authenticatedWorker = account.worker || null;
     document.querySelector('#login-password').value = '';
     loginGateway.hidden = true;
@@ -338,19 +482,7 @@ export function mount() {
         if (account.remote) await endServerSession();
         return;
       }
-      if (account.remote) {
-        loginError.textContent = 'Cargando datos del servidor…';
-        try {
-          if (!isAdmin) personnel.splice(0, personnel.length, account.worker);
-          await startSync({ userId: account.trustKey, role: isAdmin ? 'admin' : 'worker', routeId: routeKey(account.worker?.route || ''), routeName: account.worker?.route });
-          afterServerLoad();
-        } catch (error) {
-          loginError.textContent = `No se pudieron cargar los datos: ${backendErrorMessage(error)}`;
-          await endServerSession();
-          return;
-        }
-        loginError.textContent = '';
-      }
+      if (account.remote && !(await enterWithServer(account, isAdmin))) return;
       enterApp(account, isAdmin);
     } finally {
       submit.disabled = false;
@@ -358,9 +490,10 @@ export function mount() {
   });
   document.querySelectorAll('#worker-logout, #admin-logout').forEach(button => button.addEventListener('click', logout));
   // Modo servidor: si el admin cambia el acceso del trabajador, se aplica al instante.
+  // Sin perfil (cambió el horario): solo se vuelve a revisar el horario.
   setAccessHook(profile => {
     if (state.userRole !== 'worker' || !state.activeWorker) return;
-    state.activeWorker.accessEnabled = profile.access_enabled !== false;
+    if (profile) state.activeWorker.accessEnabled = profile.access_enabled !== false;
     checkWorkerSchedule();
   });
   // Sin servidor no hay usuarios iniciales que mostrar en otro dispositivo.
@@ -369,5 +502,10 @@ export function mount() {
   window.setInterval(checkWorkerSchedule, 30000);
   // Si el admin bloquea al trabajador desde otra pestaña del mismo navegador, se aplica al instante.
   window.addEventListener('storage', event => { if (event.key === 'edgecredit-business-data') { syncAccessFromStorage(); checkWorkerSchedule(); } });
-  document.addEventListener('visibilitychange', () => { if (!document.hidden) checkWorkerSchedule(); });
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) { checkIdle(); checkWorkerSchedule(); } });
+  // Inactividad: cualquier toque, tecla o desplazamiento cuenta como uso.
+  ['pointerdown', 'keydown', 'touchstart', 'wheel'].forEach(type => document.addEventListener(type, () => { if (insideApp()) markActivity(); }, { passive: true, capture: true }));
+  window.setInterval(checkIdle, 60000);
+  window.addEventListener('online', () => { if (restoreRetryPending) restoreServerSession(); });
+  restoreServerSession();
 }

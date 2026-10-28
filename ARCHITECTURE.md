@@ -305,11 +305,24 @@ Solo se cuadra el mes en curso, con la hora actual. Para pruebas existe `INSURAN
 - `js/core/backend.js` carga supabase-js desde jsDelivr solo cuando hay servidor. Los usuarios entran
   con un nombre corto: `camila` se convierte en `camila@edgecredit.app`.
 - `js/core/sync.js`:
-  - Al iniciar sesión descarga las filas visibles para el usuario (el RLS filtra por ruta).
-  - Tras cada `persistBusinessData()` sube los cambios. Las filas que fallan quedan en una cola en `localStorage`
-    y se reintentan.
-  - Recibe los cambios de otros por Realtime, con un refresco de respaldo cada 2 minutos.
-  - En conflictos gana la última escritura.
+  - Al iniciar sesión (o al restaurarla) descarga las filas visibles para el usuario (el RLS filtra por ruta)
+    y guarda un cursor con la hora del servidor (`server_now()`).
+  - Tras cada `persistBusinessData()` sube los cambios. La cola de salida (`localStorage`) se escribe al
+    instante, también al ocultar la app (`visibilitychange`) y al cerrarla (`pagehide`), y se reintenta.
+  - Recibe los cambios de otros por Realtime (vía principal). Si el canal se cae, reconecta con espera
+    progresiva (1 s, 2 s, 4 s… hasta 1 min) y el indicador muestra «Reconectando…».
+  - Respaldo incremental cada 60–90 s, solo con la pestaña visible: filas con `updated_at > cursor − 2 min`
+    y borrados de `deleted_rows`. Descarga completa solo al reconectar el tiempo real, al volver a la
+    pestaña tras más de 10 min oculta, con el evento `online` y como seguro cada 30 min.
+  - Nunca pisa un registro con cambios locales sin enviar: se conserva el local y se envía (gana la última
+    escritura). Una descarga completa vuelve a aplicar lo pendiente sobre lo descargado.
+- Sesión (`features/auth/session.js`): al abrir o recargar la app restaura la sesión guardada de Supabase si
+  ya pasó la verificación en dos pasos (aal2, o un dispositivo recordado) y el perfil sigue activo y en
+  horario. Se cierra sola tras `app_settings.session.idleHours` horas sin usar la app (Configuración, 12 por
+  defecto). «Cerrar sesión» la cierra de verdad en este dispositivo.
+- Botón atrás (`ui/back-navigation.js`): cada pantalla, panel o modal agrega una entrada al historial y
+  `popstate` cierra la modal o vuelve a la pantalla anterior. En el inicio, el primer atrás avisa
+  «Pulsa atrás otra vez para salir»; el segundo, dentro de 2 s, cierra la app.
 - `supabase/schema.sql` define estas tablas:
   - `profiles`: rol, ruta, acceso y datos del trabajador.
   - `routes` y `route_state`: liquidación, libro diario, caja y seguros.
@@ -321,4 +334,6 @@ Solo se cuadra el mes en curso, con la hora actual. Para pruebas existe `INSURAN
   - Las funciones `admin_*` cambian contraseña, usuario y 2FA, o borran usuarios.
 - La verificación en dos pasos usa MFA TOTP nativo de Supabase. El «dispositivo recordado» (30 días) usa como clave el id del usuario.
 - Pruebas sin internet: `tools/supabase-mock.js` imita supabase-js con `localStorage` y `BroadcastChannel`, así dos pestañas actúan como dos celulares.
+  Imita también `updated_at` del servidor, `deleted_rows`, `server_now()` y el nivel aal. `?mockSession=<nombre>` da a cada pestaña su
+  propia sesión, y `__mockSupabase.setOffline()`, `muteRealtime()`, `dropRealtime()` y `stats` sirven para probar caídas y ver cuánto se descarga.
 - Publicación: estáticos en GitHub Pages (`.nojekyll`), con `manifest.webmanifest` e iconos para instalar en el celular.

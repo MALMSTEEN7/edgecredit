@@ -9,6 +9,7 @@ import * as customModalModule from './js/ui/custom-modal.js';
 import * as themeModule from './js/ui/theme.js';
 import * as networkModule from './js/ui/network.js';
 import * as navigationModule from './js/ui/navigation.js';
+import * as backNavigationModule from './js/ui/back-navigation.js';
 import * as shortcutsModule from './js/ui/shortcuts.js';
 import * as imageViewerModule from './js/ui/image-viewer.js';
 import * as deviceTrustModule from './js/features/auth/device-trust.js';
@@ -70,6 +71,7 @@ const MODULES = [
   themeModule,
   networkModule,
   navigationModule,
+  backNavigationModule,
   shortcutsModule,
   imageViewerModule,
   deviceTrustModule,

@@ -59,6 +59,8 @@ export async function renderAccountSettings() {
   if (toggle) toggle.checked = light;
   const description = document.querySelector('#admin-theme-description');
   if (description) description.textContent = light ? 'Apariencia clara' : 'Apariencia oscura';
+  const idle = document.querySelector('#admin-idle-hours');
+  if (idle && document.activeElement !== idle) idle.value = String(Number(security.session?.idleHours) || 12);
   const status = document.querySelector('#admin-recovery-status');
   const button = document.querySelector('#admin-recovery-key');
   if (!status || !button) return;
@@ -194,6 +196,15 @@ export function mount() {
     renderAccountSettings();
   });
   document.querySelector('#admin-change-password')?.addEventListener('click', openChangePassword);
+  // Horas sin usar la app antes de cerrar la sesión: se guarda en el servidor para todos.
+  document.querySelector('#admin-idle-hours')?.addEventListener('change', event => {
+    const hours = Number(event.target.value);
+    if (!Number.isFinite(hours) || hours <= 0) return;
+    security.session.idleHours = hours;
+    try { localStorage.setItem('edgecredit-session-settings', JSON.stringify(security.session)); } catch { /* opcional */ }
+    persistBusinessData();
+    showToast(`Las sesiones se cerrarán tras ${hours} hora${hours === 1 ? '' : 's'} sin usar la app.`);
+  });
   document.querySelector('#admin-recovery-key')?.addEventListener('click', openRecoveryKey);
   document.querySelector('#login-forgot')?.addEventListener('click', openForgotPassword);
 }
