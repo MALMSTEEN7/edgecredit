@@ -1229,3 +1229,9 @@ button.evidence-link:active {
   grid-column: 1 / -1;
   justify-self: end;
 }
+
+/* Encabezados Fecha · Abono · Saldo más claros para que se lean mejor. */
+#payment-history-list > li.history-payment-head {
+  color: color-mix(in srgb, var(--text) 88%, var(--muted));
+  font-weight: 800;
+}

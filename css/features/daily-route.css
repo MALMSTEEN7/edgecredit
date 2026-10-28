@@ -453,3 +453,9 @@
   font-size: 12px;
   font-weight: 600;
 }
+
+/* Encabezados Fecha · Abono · Saldo más claros para que se lean mejor. */
+.route-card-payments li.route-payments-head {
+  color: color-mix(in srgb, var(--text) 88%, var(--muted));
+  font-weight: 800;
+}

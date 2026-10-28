@@ -8478,28 +8478,97 @@ function routePlanDate(route = state.workerRoute, now = new Date()) {
 }
 
 /**
- * Ruta del día: vale para el día en que se armó. La de un día que ya pasó se borra; la armada
- * por adelantado para mañana se conserva al cambiar de día. Una ruta guardada antes de que se
- * anotara la fecha cuenta como armada hoy.
+ * Momento en que se armó la ruta (se anota al agregar el primer cliente). Las rutas guardadas
+ * antes de este cambio tienen solo la fecha: cuentan desde el inicio de ese día.
  */
-function todayRouteOrder(route = state.workerRoute) {
+function routeBuiltTs(route) {
+  const stamp = String(state.dailyRouteDates[route] || '');
+  if (!stamp) return 0;
+  return (stamp.length <= 10 ? Date.parse(`${stamp}T00:00:00`) : Date.parse(stamp)) || 0;
+}
+
+/** Cierre («Verificar y cerrar ruta») hecho después de armar la ruta, o null. */
+function closureAfterBuild(route) {
+  const closure = routeSettlements[route]?.lastClosure;
+  const closedTs = closure ? Date.parse(closure.submittedAt) || 0 : 0;
+  return closedTs && closedTs > routeBuiltTs(route) ? closure : null;
+}
+
+/** ¿El cliente abonó después de armar la ruta? Entonces sale de la lista. */
+function paidSinceBuilt(client, builtTs) {
+  return (client?.payments || []).some(payment => Number(payment.amount) > 0
+    && (payment.at ? Date.parse(payment.at) > builtTs : Date.parse(`${payment.date}T23:59:59`) >= builtTs));
+}
+
+/**
+ * La ruta armada no se borra sola al cambiar de día: si se armó el lunes y se sale a cobrar el
+ * miércoles, sigue igual. Solo cambia cuando:
+ *  - el trabajador registra el abono de un cliente de la lista (ese cliente sale), o
+ *  - el admin verifica y cierra la ruta (la lista se vacía y se puede armar la siguiente).
+ */
+function storedRouteOrder(route) {
   const order = state.dailyRouteOrder[route] || [];
   if (!order.length) return order;
-  const today = localDateISO();
-  state.dailyRouteDates[route] ||= today;
-  const date = state.dailyRouteDates[route];
-  if (date < today) {
+  if (!state.dailyRouteDates[route]) state.dailyRouteDates[route] = new Date().toISOString();
+  if (closureAfterBuild(route)) {
     state.dailyRouteOrder[route] = [];
     delete state.dailyRouteDates[route];
     return state.dailyRouteOrder[route];
   }
-  // Con el cobro de hoy cerrado se arma la de mañana: la de hoy ya no se muestra.
-  return date === routePlanDate(route) ? order : [];
+  return order;
+}
+
+/** Clientes de la ruta que aún falta cobrar (sin los que ya abonaron desde que se armó). */
+function todayRouteOrder(route = state.workerRoute) {
+  const order = storedRouteOrder(route);
+  if (!order.length) return order;
+  const builtTs = routeBuiltTs(route);
+  return order.filter(id => !paidSinceBuilt(clients[id], builtTs));
+}
+
+/** ¿Hay una ruta armada y sin cerrar (aunque ya se hayan cobrado todos sus clientes)? */
+function hasBuiltRoute(route = state.workerRoute) {
+  return storedRouteOrder(route).length > 0;
 }
 
 function setTodayRouteOrder(order, route = state.workerRoute) {
-  state.dailyRouteOrder[route] = order;
-  state.dailyRouteDates[route] = routePlanDate(route);
+  // La hora de armado se anota solo al empezar una ruta nueva: agregar o mover clientes después
+  // no hace volver a la lista a los que ya abonaron.
+  if (!storedRouteOrder(route).length || !state.dailyRouteDates[route]) state.dailyRouteDates[route] = new Date().toISOString();
+  const paid = (state.dailyRouteOrder[route] || []).filter(id => !order.includes(id) && paidSinceBuilt(clients[id], routeBuiltTs(route)));
+  state.dailyRouteOrder[route] = [...order, ...paid];
+  if (!state.dailyRouteOrder[route].length) delete state.dailyRouteDates[route];
+}
+
+/** Día de la semana y fecha para la que ya se puede armar la ruta: «miércoles 29 de octubre». */
+function planDayLabel(route = state.workerRoute) {
+  return new Date(`${routePlanDate(route)}T12:00:00`).toLocaleDateString('es-CO', { weekday: 'long', day: 'numeric', month: 'long' });
+}
+
+/**
+ * Aviso cuando el admin ya verificó y cerró la ruta: «Ya puede armar su ruta para el …».
+ * Vacío si todavía hay una ruta armada sin cerrar o si nunca se ha cerrado.
+ */
+function routeReadyMessage(route = state.workerRoute) {
+  const closure = routeSettlements[route]?.lastClosure;
+  if (!closure || hasBuiltRoute(route)) return '';
+  const today = localDateISO();
+  const plan = routePlanDate(route);
+  const day = planDayLabel(route);
+  if (closure.date === today) return `La ruta de hoy ya se verificó y cerró. Ya puede armar su ruta para el ${day}.`;
+  return `Ya puede armar su ruta para ${plan === today ? 'hoy, ' : 'el '}${day}.`;
+}
+
+/** El trabajador recibe un aviso (una sola vez por cierre) apenas el admin cierra la ruta. */
+function announceRouteReady(route = state.workerRoute) {
+  const closure = routeSettlements[route]?.lastClosure;
+  if (state.userRole !== 'worker' || !closure?.submittedAt || closure.date !== localDateISO()) return;
+  const key = `edgecredit-route-ready-${route}`;
+  try { if (localStorage.getItem(key) === closure.submittedAt) return; } catch { return; }
+  const message = routeReadyMessage(route);
+  if (!message) return;
+  try { localStorage.setItem(key, closure.submittedAt); } catch { /* opcional */ }
+  showToast(message);
 }
 
 /** ¿Se está armando la ruta de un día que todavía no llega? */
@@ -8704,11 +8773,14 @@ function renderRouteBuilder() {
   if (!daily.children.length) daily.append(Object.assign(document.createElement('p'), { className: 'route-empty', textContent: 'Agrega clientes desde la biblioteca para armar la ruta.' }));
   // Título según el día que se está armando: hoy o el siguiente día de cobro.
   const ahead = planningAhead();
-  const planDay = new Date(`${routePlanDate()}T12:00:00`).toLocaleDateString('es-CO', { weekday: 'long', day: 'numeric', month: 'short' });
+  const planDay = planDayLabel();
   document.querySelector('#route-daily-title').textContent = ahead ? `Ruta del ${planDay}` : 'Clientes de hoy';
   const note = document.querySelector('#route-plan-note');
-  note.hidden = !ahead;
-  note.textContent = ahead ? `${new Date().getDay() === 0 ? 'Hoy es domingo' : 'El cobro de hoy ya se cerró'}: la ruta que armes queda lista para el ${planDay} y no se borra a medianoche.` : '';
+  const ready = routeReadyMessage();
+  const message = ready || (ahead ? `${new Date().getDay() === 0 ? 'Hoy es domingo' : 'La ruta de hoy ya se cerró'}: la ruta que armes queda lista para el ${planDay}.` : '');
+  note.hidden = !message;
+  note.textContent = message ? `${message} La lista no se borra al cambiar de día: solo salen los clientes a los que registres el abono, y se vacía cuando el administrador verifique y cierre la ruta.` : '';
+  announceRouteReady();
 }
 
 function commitRouteDrop(id, sourceMode, targetMode, beforeId) {
@@ -9413,8 +9485,10 @@ function renderHomeHeader() {
   const route = routeSettlements[state.workerRoute];
   const weekday = new Intl.DateTimeFormat('es-CO', { weekday: 'long' }).format(new Date());
   document.querySelector('#home-list-eyebrow').textContent = `${weekday} · RUTA ${route?.name || ''}`.toLocaleUpperCase('es');
-  const organized = todayRouteOrder().length > 0;
-  document.querySelector('#home-route-hint').hidden = organized || state.userRole !== 'worker';
+  const organized = hasBuiltRoute();
+  const hint = document.querySelector('#home-route-hint');
+  hint.hidden = organized || state.userRole !== 'worker';
+  hint.textContent = `${routeReadyMessage() || 'Aún no se ha armado la ruta del día.'} Ármala en «Ruta diaria» y aquí aparecerán los clientes que vas a visitar.`;
 }
 
 /** Muestra el total en caja dentro del botón "Tu base hoy" sin tener que abrirlo. */
@@ -9448,7 +9522,7 @@ function renderHomeRowActions() {
   });
   const anyVisible = rows.some(row => !row.hidden);
   const empty = document.querySelector('#home-route-done');
-  const organized = todayRouteOrder().length > 0;
+  const organized = hasBuiltRoute();
   // Buscando: los avisos de la ruta se ocultan y se dice cuántos clientes coinciden.
   const searching = Boolean(document.querySelector('#home-search')?.value.trim());
   const note = document.querySelector('#home-search-note');
