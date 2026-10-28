@@ -15,6 +15,7 @@
 
 import { adminView, loginGateway, workerView } from '../core/dom.js';
 import { state } from '../core/state.js';
+import { clients } from '../core/store.js';
 import { defaultAdminPanel, enterAdminDirectory, showAdminPanel } from '../features/admin/admin-shell.js';
 import { openClient } from '../features/clients/client-detail.js';
 import { showView } from './navigation.js';
@@ -58,6 +59,26 @@ function currentScreen() {
 // La ficha del cliente es una sola pantalla aunque se pase a la cartulina siguiente.
 const screenKey = snap => `${snap.mode}:${snap.panel || snap.view}`;
 const isHomeScreen = snap => (snap.mode === 'worker' && snap.view === 'inicio') || (snap.mode === 'admin' && snap.panel === defaultAdminPanel());
+
+// Pantalla actual guardada en la pestaña: al recargar, la sesión restaurada vuelve aquí.
+const LAST_SCREEN_KEY = 'edgecredit-last-screen';
+
+function rememberScreen(snap) {
+  try { sessionStorage.setItem(LAST_SCREEN_KEY, JSON.stringify(snap)); } catch { /* opcional */ }
+}
+
+/** Tras restaurar la sesión al recargar: vuelve a la pantalla en la que estaba (si es del mismo rol). */
+export function restoreLastScreen(isAdmin) {
+  let snap = null;
+  try { snap = JSON.parse(sessionStorage.getItem(LAST_SCREEN_KEY) || 'null'); } catch { /* opcional */ }
+  if (!snap?.mode || (snap.mode === 'worker') === Boolean(isAdmin)) return;
+  if (snap.mode === 'admin' && !document.querySelector(`[data-admin-panel="${snap.panel}"]`)) return;
+  if (snap.mode !== 'admin' && (!document.getElementById(snap.view) || (snap.view === 'detalle-cliente' && !clients[snap.client]))) return;
+  if (isHomeScreen(snap)) return;
+  // Primero el historial arranca en el inicio; así «atrás» desde la pantalla restaurada vuelve allí.
+  reconcile();
+  try { restoreScreen(snap); } catch { /* si ya no existe, se queda en el inicio */ }
+}
 
 function restoreScreen(snap) {
   if (snap.mode === 'admin') {
@@ -127,11 +148,12 @@ function reconcile() {
   if (navRestoring) return;
   const snap = currentScreen();
   if (!snap) { if (navActive) stop(); return; }
-  if (!navActive) { start(snap); return; }
+  if (!navActive) { start(snap); rememberScreen(snap); return; }
   const before = navLayers.length;
   const added = [];
   // Modales cerradas con su botón, Escape o al guardar: se retira su entrada.
   navLayers = navLayers.filter(layer => layer.type !== 'modal' || layer.modal.isOpen());
+  rememberScreen(snap);
   const key = screenKey(snap);
   if (key !== navScreen.key) {
     // Volver al inicio por el menú limpia el camino: el siguiente atrás ofrece salir.

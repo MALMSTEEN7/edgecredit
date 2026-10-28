@@ -300,3 +300,41 @@
 .login-forgot:focus-visible {
   color: var(--text);
 }
+
+/* Recarga con sesión guardada: pantalla de carga en vez del formulario de ingreso. */
+.session-splash {
+  display: none;
+}
+
+html.session-restoring .login-gateway > :not(.session-splash),
+.login-gateway.is-restoring > :not(.session-splash) {
+  display: none !important;
+}
+
+html.session-restoring .login-gateway .session-splash,
+.login-gateway.is-restoring .session-splash {
+  display: grid;
+  justify-items: center;
+  gap: 14px;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.session-splash .brand-mark {
+  width: 52px;
+  height: 52px;
+  font-size: 24px;
+  animation: session-splash-pulse 1.2s ease-in-out infinite;
+}
+
+.session-splash p {
+  margin: 0;
+}
+
+@keyframes session-splash-pulse {
+  50% { opacity: .45; transform: scale(.94); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .session-splash .brand-mark { animation: none; }
+}

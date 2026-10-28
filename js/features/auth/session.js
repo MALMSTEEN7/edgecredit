@@ -35,6 +35,7 @@ import { hashCredential } from '../../shared/crypto.js';
 import { routeKey } from '../../shared/format.js';
 import { closeCustomModal } from '../../ui/custom-modal.js';
 import { showView } from '../../ui/navigation.js';
+import { restoreLastScreen } from '../../ui/back-navigation.js';
 import { collapseHomePanels } from '../worker/home.js';
 import { resumeWorkerLocationSharing } from '../worker/location.js';
 
@@ -323,8 +324,23 @@ async function secondFactorDone(db, userId) {
   return data.nextLevel === 'aal2' && isAccountTrusted(userId, 0);
 }
 
+/**
+ * Al recargar no se ve la pantalla de ingreso: mientras se restaura la sesión guardada se
+ * muestra «Cargando tu sesión…» (lo activa index.html antes de cargar la app) y al entrar
+ * se vuelve a la pantalla en la que se estaba.
+ */
 async function restoreServerSession() {
-  if (!backendEnabled() || restoring || insideApp()) return;
+  if (!backendEnabled() || restoring || insideApp()) { if (!backendEnabled()) document.documentElement.classList.remove('session-restoring'); return; }
+  try {
+    await restoreSavedSession();
+  } finally {
+    // Si no se pudo entrar, aparece el formulario de ingreso (con el motivo, si lo hay).
+    if (!insideApp()) { restoring = false; loginGateway.classList.remove('is-restoring'); document.querySelector('#login-submit').disabled = lockRemainingSeconds() > 0; }
+    document.documentElement.classList.remove('session-restoring');
+  }
+}
+
+async function restoreSavedSession() {
   restoreRetryPending = false;
   try { Object.assign(security.session, JSON.parse(localStorage.getItem(SESSION_SETTINGS_KEY) || 'null') || {}); } catch { /* opcional */ }
   let db;
@@ -360,6 +376,7 @@ async function restoreServerSession() {
     if (!(await enterWithServer(account, isAdmin))) { setRestoring(false, loginError.textContent); return; }
     setRestoring(false);
     enterApp(account, isAdmin);
+    restoreLastScreen(isAdmin);
   } catch (error) {
     // Sin conexión: la sesión se conserva y se reintenta al volver internet.
     const offline = /fetch|network/i.test(String(error?.message || error));

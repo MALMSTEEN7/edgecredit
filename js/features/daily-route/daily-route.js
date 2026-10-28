@@ -181,13 +181,25 @@ export function routeDayKey(route = state.workerRoute) {
 function requestVisitCorrection(clientId, key) {
   const client = clients[clientId];
   const visitDate = key.slice(key.indexOf(':') + 1);
+  // Abono registrado ese día (si lo hay): se corrige ese mismo, como en «Abonos del día».
+  const payment = (client.payments || []).find(item => item.date === visitDate && Number(item.amount) > 0) || null;
   openCustomModal({
     title: 'Solicitar corrección al administrador',
-    description: `Explica por qué debe corregirse la visita o el pago de ${client.name} del ${formatDate(visitDate)}.`,
-    fields: [{ name: 'comment', label: 'Comentario para el administrador', type: 'textarea', rows: 4, placeholder: 'Describe qué ocurrió y qué corrección se necesita', required: true }],
+    description: payment
+      ? `Abono de ${client.name} del ${formatDate(visitDate)} por ${formatMoney(payment.amount)}. Indica el monto correcto y qué pasó.`
+      : `Visita de ${client.name} del ${formatDate(visitDate)} sin abono registrado. Indica el monto que pagó y qué pasó.`,
+    fields: [
+      { name: 'amount', label: 'Monto correcto del abono ($)', type: 'number', money: true, thousands: true, min: 1, step: 1, required: true, value: payment?.amount || '' },
+      { name: 'comment', label: 'Comentario para el administrador', type: 'textarea', rows: 3, placeholder: 'Describe qué ocurrió y qué corrección se necesita', required: true },
+    ],
     submitLabel: 'Enviar solicitud',
     onSubmit: values => {
-      pendingRequests.unshift({ id: `request-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, type: 'route-correction', routeId: routeKey(client.route), route: client.route, workerId: state.activeWorker?.id, workerName: state.activeWorker?.name || 'Trabajador', clientId, clientName: client.name, visitDate, previousOutcome: state.routeVisitOutcomes[key]?.[clientId] || 'closed', comment: values.comment.trim(), createdAt: new Date().toISOString(), status: 'pending' });
+      pendingRequests.unshift({
+        id: `request-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, type: 'route-correction', routeId: routeKey(client.route), route: client.route,
+        workerId: state.activeWorker?.id, workerName: state.activeWorker?.name || 'Trabajador', clientId, clientName: client.name, visitDate,
+        paymentAt: payment?.at || '', paymentAmount: Number(payment?.amount) || 0, requestedAmount: Number(values.amount) || 0,
+        previousOutcome: state.routeVisitOutcomes[key]?.[clientId] || 'closed', comment: String(values.comment || '').trim(), createdAt: new Date().toISOString(), status: 'pending',
+      });
       persistBusinessData();
       renderPendingRequests();
       showToast('Solicitud de corrección enviada al administrador.');
