@@ -15,7 +15,7 @@ import { moveId } from '../../shared/math.js';
 import { openCustomModal } from '../../ui/custom-modal.js';
 import { showView } from '../../ui/navigation.js';
 import { renderHomeHeader, renderHomeRowActions } from '../worker/home.js';
-import { personCardIds } from '../../domain/person-cards.js';
+import { cardLabel, isActiveCard } from '../../domain/person-cards.js';
 import { paintCardColorBand } from '../../domain/card-color.js';
 
 /**
@@ -104,8 +104,8 @@ export function renderClientRows(clientId) {
     const main = row.querySelector('.client-main');
     const description = main?.querySelector(':scope > span:not(.client-risk-line)');
     // Si la persona tiene varias cartulinas, cada fila indica cuál es.
-    const siblings = personCardIds(clients, client.id);
-    const cardTag = siblings.length > 1 ? ` · Cartulina ${siblings.indexOf(clientId) + 1}` : '';
+    const card = isActiveCard(client) ? cardLabel(clients, clientId) : '';
+    const cardTag = card ? ` · ${card}` : '';
     if (description) description.textContent = `Préstamo activo${cardTag} · Cuota ${formatMoney(client.installment)} · ${paymentFrequencyLabels[client.frequency] || 'Semanal'}`;
     if (main && !main.querySelector('.client-risk-line')) {
       const riskLine = document.createElement('span');

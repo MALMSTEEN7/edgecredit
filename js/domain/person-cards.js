@@ -52,6 +52,19 @@ export function cardNumber(clients, clientId) {
   return personCardIds(clients, clients[clientId]?.id).indexOf(clientId) + 1;
 }
 
+/**
+ * Nombre de la cartulina para mostrar junto al cliente. Se numeran solo las ACTIVAS (las
+ * canceladas no ocupan número): «Cartulina 2». Vacío si la persona tiene una sola activa;
+ * «Cartulina cancelada» si esta ya no tiene saldo y la persona tiene otras.
+ */
+export function cardLabel(clients, clientId) {
+  const client = clients[clientId];
+  if (!client) return '';
+  const active = activeCardIds(clients, client.id);
+  if (!isActiveCard(client)) return personCardIds(clients, client.id).length > 1 ? 'Cartulina cancelada' : '';
+  return active.length > 1 ? `Cartulina ${active.indexOf(clientId) + 1}` : '';
+}
+
 /** ¿Se puede abrir otra cartulina simultánea para esta persona? */
 export function canAddCard(clients, idNumber) {
   return activeCardIds(clients, idNumber).length < MAX_ACTIVE_CARDS_PER_PERSON;

@@ -20,7 +20,7 @@ import { bindImageViewer } from '../../ui/image-viewer.js';
 import { LOCATION_FAILURE_LABELS, hasCoordinates, isApproximateLocation, locateDevice } from '../../shared/geo.js';
 import { clientInsurance, generalInsuranceAmount, resolveInsurance } from '../../domain/insurance.js';
 import { canRenew, onClientRenewed } from './new-client.js';
-import { MAX_ACTIVE_CARDS_PER_PERSON, activeCardIds, canAddCard, loanCount, loanCountLabel, personCardIds } from '../../domain/person-cards.js';
+import { MAX_ACTIVE_CARDS_PER_PERSON, activeCardIds, canAddCard, loanCount, loanCountLabel } from '../../domain/person-cards.js';
 import { PAYDAY_OPTIONS, cardColor, paintCardColorBand, shiftDays, startDateForPayday, weekdayOf } from '../../domain/card-color.js';
 import { FINANCE_INTEREST_PERCENT, GENERAL_RETANQUEO, RETANQUEO_INTEREST_PERCENT, financeCard, pendingRestructure, percentOrAmount, recordRetanqueoInRoute, retanqueoCard } from '../../domain/restructure.js';
 
@@ -65,6 +65,14 @@ function createMethodIcon(method) {
   return icon;
 }
 
+/** Fecha corta del historial, como en la tarjeta de la ruta diaria: «24-oct-26». */
+function shortHistoryDate(iso) {
+  const [year, month, day] = String(iso || '').split('-').map(Number);
+  if (!year) return '—';
+  const name = new Date(year, month - 1, day).toLocaleDateString('es-CO', { month: 'short' }).replace('.', '');
+  return `${String(day).padStart(2, '0')}-${name}-${String(year).slice(-2)}`;
+}
+
 export function renderHistory(client) {
   const paymentsList = document.querySelector('#payment-history-list');
   paymentsList.replaceChildren();
@@ -78,7 +86,8 @@ export function renderHistory(client) {
     dateAndMethod.className = 'history-date-method';
     const date = document.createElement('time');
     date.dateTime = payment.date;
-    date.textContent = formatDate(payment.date);
+    date.textContent = shortHistoryDate(payment.date);
+    date.title = formatDate(payment.date);
     dateAndMethod.append(date, createMethodIcon(payment.method));
     if (payment.method === 'transfer' && !payment.receiptData) {
       const missing = document.createElement('small');
@@ -95,14 +104,15 @@ export function renderHistory(client) {
       evidenceLink.setAttribute('aria-label', `Ver comprobante del ${formatDate(payment.date)}`);
       dateAndMethod.append(evidenceLink);
     }
+    // Como el historial del sistema anterior: fecha, abono y el saldo que dejó, en columnas.
+    row.className = 'history-payment-row';
     const amount = document.createElement('strong');
+    amount.className = 'history-payment-amount';
     amount.textContent = formatMoney(payment.amount);
-    // Saldo del crédito después de este abono.
-    const after = document.createElement('small');
-    after.className = 'history-balance-after';
-    after.textContent = `Saldo ${formatMoney(balances[paymentIndex])}`;
-    amount.append(after);
-    row.append(dateAndMethod, amount);
+    const after = document.createElement('span');
+    after.className = 'history-payment-balance';
+    after.textContent = formatMoney(balances[paymentIndex]);
+    row.append(dateAndMethod, amount, after);
     if (state.userRole === 'admin') {
       const actions = document.createElement('span');
       actions.className = 'history-admin-actions';
@@ -118,6 +128,12 @@ export function renderHistory(client) {
     }
     paymentsList.append(row);
   });
+  if (paymentsToRender.length) {
+    const head = document.createElement('li');
+    head.className = 'history-payment-head';
+    head.innerHTML = '<span>Fecha</span><span>Abono</span><span>Saldo</span>';
+    paymentsList.prepend(head);
+  }
   document.querySelector('#payment-history-count').textContent = client.archivedPaymentsAt && !client.payments.length ? 'Archivado' : isExpanded ? `${client.payments.length} registros` : `${Math.min(client.payments.length, 3)} recientes`;
   const historyToggle = document.querySelector('#payment-history-toggle');
   historyToggle.hidden = client.payments.length <= 3;
@@ -530,28 +546,34 @@ function renderCardActions(client) {
   document.querySelector('.detail-profile .eyebrow').textContent = cancelled ? 'CARTULINA CANCELADA' : 'CRÉDITO ACTIVO';
 }
 
-/** Selector de cartulinas cuando la persona tiene más de una (activas, canceladas o renovadas). */
+/**
+ * Selector de cartulinas de la persona: solo las ACTIVAS (las canceladas no se muestran arriba).
+ * Se ve con 2 o más activas, o si se abrió una cancelada y la persona tiene alguna activa.
+ */
 function renderPersonCards(clientId) {
   const client = clients[clientId];
-  const ids = personCardIds(clients, client.id);
+  const ids = activeCardIds(clients, client.id);
   const nav = document.querySelector('#person-cards');
   const list = document.querySelector('#person-cards-list');
-  nav.hidden = ids.length < 2;
+  const currentActive = ids.includes(clientId);
+  const show = ids.length >= 2 || (!currentActive && ids.length >= 1);
+  nav.hidden = !show;
   list.replaceChildren();
-  if (ids.length < 2) return;
-  const active = activeCardIds(clients, client.id).length;
-  document.querySelector('#person-cards-label').textContent = `${ids.length} cartulinas · ${active} activa${active === 1 ? '' : 's'}`;
+  if (!show) return;
+  document.querySelector('#person-cards-label').textContent = `${ids.length} cartulina${ids.length === 1 ? '' : 's'} activa${ids.length === 1 ? '' : 's'}`;
   ids.forEach((id, index) => {
     const card = clients[id];
     const chip = document.createElement('button');
     chip.type = 'button';
     chip.className = 'person-card-chip';
     chip.dataset.personCard = id;
-    const isCancelled = Number(card.balance) <= 0;
     chip.classList.toggle('is-current', id === clientId);
-    chip.classList.toggle('is-cancelled', isCancelled);
     if (id === clientId) chip.setAttribute('aria-current', 'true');
-    chip.innerHTML = `<strong>Cartulina ${index + 1}</strong><small>${isCancelled ? 'Cancelada' : `Saldo ${formatMoney(card.balance)}`}</small>`;
+    const name = document.createElement('strong');
+    name.textContent = ids.length > 1 ? `Cartulina ${index + 1}` : 'Cartulina activa';
+    const balance = document.createElement('small');
+    balance.textContent = `Saldo ${formatMoney(card.balance)}`;
+    chip.append(name, balance);
     list.append(chip);
   });
 }

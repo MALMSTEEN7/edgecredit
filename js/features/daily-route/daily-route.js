@@ -182,7 +182,7 @@ function requestVisitCorrection(clientId, key) {
   const client = clients[clientId];
   const visitDate = key.slice(key.indexOf(':') + 1);
   openCustomModal({
-    title: 'Solicitar revisión al administrador',
+    title: 'Solicitar corrección al administrador',
     description: `Explica por qué debe corregirse la visita o el pago de ${client.name} del ${formatDate(visitDate)}.`,
     fields: [{ name: 'comment', label: 'Comentario para el administrador', type: 'textarea', rows: 4, placeholder: 'Describe qué ocurrió y qué corrección se necesita', required: true }],
     submitLabel: 'Enviar solicitud',
@@ -190,8 +190,45 @@ function requestVisitCorrection(clientId, key) {
       pendingRequests.unshift({ id: `request-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, type: 'route-correction', routeId: routeKey(client.route), route: client.route, workerId: state.activeWorker?.id, workerName: state.activeWorker?.name || 'Trabajador', clientId, clientName: client.name, visitDate, previousOutcome: state.routeVisitOutcomes[key]?.[clientId] || 'closed', comment: values.comment.trim(), createdAt: new Date().toISOString(), status: 'pending' });
       persistBusinessData();
       renderPendingRequests();
-      showToast('Solicitud enviada al administrador para revisión.');
+      showToast('Solicitud de corrección enviada al administrador.');
     }
+  });
+}
+
+/** ¿Ya hay una solicitud de corrección pendiente para este abono? */
+export function paymentCorrectionPending(clientId, payment) {
+  return pendingRequests.some(request => request.status === 'pending' && request.type === 'route-correction' && request.clientId === clientId
+    && (payment.at ? request.paymentAt === payment.at : request.visitDate === payment.date));
+}
+
+/**
+ * Corrección de un abono puntual (desde «Abonos del día»): el trabajador indica el monto
+ * correcto y el motivo; el admin lo aprueba en Solicitudes y se corrige ese abono.
+ */
+export function requestPaymentCorrection(clientId, payment, onSent = () => {}) {
+  const client = clients[clientId];
+  if (!client || !payment) return;
+  if (paymentCorrectionPending(clientId, payment)) { showToast('Ya enviaste una corrección de este abono: espera al administrador.'); return; }
+  openCustomModal({
+    title: 'Solicitar corrección al administrador',
+    description: `Abono de ${client.name} del ${formatDate(payment.date)} por ${formatMoney(payment.amount)}. Indica el monto correcto y qué pasó.`,
+    fields: [
+      { name: 'amount', label: 'Monto correcto del abono ($)', type: 'number', money: true, thousands: true, min: 1, step: 1, required: true, value: payment.amount },
+      { name: 'comment', label: 'Comentario para el administrador', type: 'textarea', rows: 3, required: true, placeholder: 'Ej. Pagó $ 30.000, se registró $ 300.000 por error' },
+    ],
+    submitLabel: 'Enviar solicitud',
+    onSubmit: values => {
+      pendingRequests.unshift({
+        id: `request-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, type: 'route-correction', routeId: routeKey(client.route), route: client.route,
+        workerId: state.activeWorker?.id, workerName: state.activeWorker?.name || 'Trabajador', clientId, clientName: client.name,
+        visitDate: payment.date, paymentAt: payment.at || '', paymentAmount: Number(payment.amount) || 0, requestedAmount: Number(values.amount) || 0,
+        previousOutcome: 'paid', comment: String(values.comment || '').trim(), createdAt: new Date().toISOString(), status: 'pending',
+      });
+      persistBusinessData();
+      renderPendingRequests();
+      onSent();
+      showToast('Solicitud de corrección enviada al administrador.');
+    },
   });
 }
 
@@ -269,7 +306,7 @@ function routeClientCard(clientId, mode, routeOrder = []) {
     actions.append(statusChip(status, client));
     if (status !== 'pending' && state.userRole === 'worker') {
       const correction = document.createElement('button');
-      correction.type = 'button'; correction.className = 'route-reopen-button'; correction.dataset.routeCorrection = clientId; correction.textContent = 'Solicitar revisión';
+      correction.type = 'button'; correction.className = 'route-reopen-button'; correction.dataset.routeCorrection = clientId; correction.textContent = 'Solicitar corrección';
       actions.append(correction);
     }
   } else if (routeOrder.includes(clientId)) {

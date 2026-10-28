@@ -4663,13 +4663,21 @@ button {
   margin-top: 12px;
 }
 
-.worker-day-payments li {
+.worker-day-payments #worker-day-payments-list > li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
+  gap: 10px;
+}
+
+.worker-day-payments #worker-day-payments-list > li.history-empty {
+  display: block;
 }
 
 .worker-day-payment-client {
   display: grid;
-  gap: 2px;
+  justify-items: start;
+  gap: 3px;
   min-width: 0;
   padding: 0;
   border: 0;
@@ -4679,20 +4687,67 @@ button {
   cursor: pointer;
 }
 
-.worker-day-payment-client strong {
+/* El nombre va a la izquierda (las reglas generales del historial alinean <strong> a la derecha). */
+.worker-day-payments .worker-day-payment-client strong {
+  display: -webkit-box;
+  max-width: 100%;
+  margin: 0;
   overflow: hidden;
-  text-overflow: ellipsis;
+  font-size: 13px;
+  line-height: 1.3;
+  text-align: left;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+/* Título y conteo: si no caben juntos, el conteo baja de línea (el título no se parte). */
+.worker-day-payments > summary {
+  flex-wrap: wrap;
+  row-gap: 4px;
+}
+
+.worker-day-payments > summary > span:first-child {
   white-space: nowrap;
 }
 
 .worker-day-payment-client small {
   color: var(--muted);
-  font-size: 10px;
+  font-size: 11px;
+  text-align: left;
 }
 
-.worker-day-payment-amount {
-  flex: 0 0 auto;
-  margin-left: auto;
+.worker-day-payment-side {
+  display: grid;
+  justify-items: end;
+  gap: 6px;
+}
+
+.worker-day-payments .worker-day-payment-amount {
+  margin: 0;
+  font-size: 13px;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.worker-day-payment-fix {
+  min-height: 28px;
+  padding: 4px 10px;
+  border: 1px solid color-mix(in srgb, var(--warning, #f5a623) 55%, var(--line));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--warning, #f5a623) 10%, transparent);
+  color: var(--warning, #f5a623);
+  font: 700 11px 'DM Sans', sans-serif;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.worker-day-payment-fix:disabled {
+  border-color: var(--line);
+  background: none;
+  color: var(--muted);
+  cursor: default;
 }
 
 /* Abonos de días anteriores sin cerrar: la fecha se resalta para distinguirlos. */
@@ -6129,6 +6184,62 @@ button.evidence-link:active {
 .retanqueo-history-copy small {
   color: var(--muted);
   font-size: 10px;
+}
+
+/* Historial de abonos de la ficha en columnas: fecha · abono · saldo que dejó (igual que la
+ * tarjeta de la ruta diaria). */
+#payment-history-list > li.history-payment-head,
+#payment-history-list > li.history-payment-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr) minmax(0, 1fr);
+  align-items: center;
+  column-gap: 10px;
+  row-gap: 6px;
+}
+
+#payment-history-list > li.history-payment-head {
+  padding-top: 4px;
+  padding-bottom: 8px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .3px;
+  text-transform: uppercase;
+}
+
+#payment-history-list > li.history-payment-head span:last-child,
+#payment-history-list .history-payment-balance {
+  text-align: right;
+}
+
+#payment-history-list .history-date-method {
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 6px 8px;
+}
+
+#payment-history-list .history-date-method time {
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+#payment-history-list .history-payment-amount {
+  margin: 0;
+  text-align: left;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+#payment-history-list .history-payment-balance {
+  color: var(--text);
+  font-weight: 700;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+#payment-history-list > li.history-payment-row .history-admin-actions {
+  grid-column: 1 / -1;
+  justify-self: end;
 }
 
 /* ── css/features/payment.css */
@@ -7934,6 +8045,103 @@ button.evidence-link:active {
 .monday-base-row button:disabled {
   opacity: .55;
   cursor: not-allowed;
+}
+
+/* Base: junto al título, los seguros del día que ya suma y la base sin ellos. */
+.finance-label-stack {
+  min-width: 0;
+  display: grid;
+  justify-items: start;
+  gap: 6px;
+}
+
+.base-breakdown {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+}
+
+.base-breakdown span {
+  display: grid;
+  gap: 1px;
+}
+
+.base-breakdown small {
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.base-breakdown b {
+  color: var(--text);
+  font: 700 13px Manrope, sans-serif;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.base-breakdown .base-breakdown-insurance b {
+  color: var(--success, #00c853);
+}
+
+/* Otros gastos: comentario del día (el mismo de Reportes financieros). */
+.settlement-note-button {
+  min-height: 30px;
+  padding: 4px 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--primary);
+  font: 700 12px 'DM Sans', sans-serif;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.settlement-note-button:hover {
+  border-color: var(--primary);
+}
+
+.settlement-note-preview {
+  max-width: 220px;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settlement-layout .settlement-fields .settlement-card .finance-label-stack {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+/* La caja del monto se encoge con la tarjeta (en el celular se salía por la derecha). */
+.settlement-layout .settlement-fields .editable-money {
+  min-width: 0;
+}
+
+.settlement-note-button {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+@media (max-width: 420px) {
+  .settlement-layout .settlement-fields .base-card,
+  .settlement-layout .settlement-fields .other-expenses-card {
+    flex-wrap: wrap;
+  }
+
+  .settlement-layout .settlement-fields .base-card .editable-money,
+  .settlement-layout .settlement-fields .other-expenses-card .editable-money {
+    max-width: none;
+  }
+}
+
+/* El título y su botón no se recortan: la caja del monto cede espacio. */
+.settlement-layout .settlement-fields .other-expenses-card .finance-label-stack,
+.settlement-layout .settlement-fields .base-card .finance-label-stack {
+  flex-shrink: 0;
+  max-width: 55%;
 }
 
 /* ── css/features/admin-reports.css */
