@@ -4293,6 +4293,7 @@ function renderPendingRequests() {
     value.className = 'pending-comment';
     value.textContent = request.type === 'finance' || request.type === 'retanqueo' ? restructureSummary(request)
       : request.type === 'route-correction' && request.paymentAmount ? `Abono del ${formatDate(request.visitDate)}: registrado ${formatMoney(request.paymentAmount)} → correcto ${formatMoney(request.requestedAmount)}. Motivo: ${request.comment || 'Sin comentario'}`
+      : request.type === 'route-correction' && request.requestedAmount ? `Visita del ${formatDate(request.visitDate)} sin abono registrado → pagó ${formatMoney(request.requestedAmount)}. Motivo: ${request.comment || 'Sin comentario'}`
       : `${request.type === 'route-correction' ? 'Motivo enviado' : 'Acuerdo informado'}: ${request.comment || 'Sin comentario'}`;
     copy.append(title, details, value);
     const actions = document.createElement('div');
@@ -5849,6 +5850,7 @@ function __mount_deviceTrustModule() {
 
 
 
+
 // ── Bloqueo por intentos fallidos (por dispositivo) ──
 const LOCK_KEY = 'edgecredit-login-guard';
 
@@ -6134,8 +6136,23 @@ async function secondFactorDone(db, userId) {
   return data.nextLevel === 'aal2' && isAccountTrusted(userId, 0);
 }
 
+/**
+ * Al recargar no se ve la pantalla de ingreso: mientras se restaura la sesión guardada se
+ * muestra «Cargando tu sesión…» (lo activa index.html antes de cargar la app) y al entrar
+ * se vuelve a la pantalla en la que se estaba.
+ */
 async function restoreServerSession() {
-  if (!backendEnabled() || restoring || insideApp()) return;
+  if (!backendEnabled() || restoring || insideApp()) { if (!backendEnabled()) document.documentElement.classList.remove('session-restoring'); return; }
+  try {
+    await restoreSavedSession();
+  } finally {
+    // Si no se pudo entrar, aparece el formulario de ingreso (con el motivo, si lo hay).
+    if (!insideApp()) { restoring = false; loginGateway.classList.remove('is-restoring'); document.querySelector('#login-submit').disabled = lockRemainingSeconds() > 0; }
+    document.documentElement.classList.remove('session-restoring');
+  }
+}
+
+async function restoreSavedSession() {
   restoreRetryPending = false;
   try { Object.assign(security.session, JSON.parse(localStorage.getItem(SESSION_SETTINGS_KEY) || 'null') || {}); } catch { /* opcional */ }
   let db;
@@ -6171,6 +6188,7 @@ async function restoreServerSession() {
     if (!(await enterWithServer(account, isAdmin))) { setRestoring(false, loginError.textContent); return; }
     setRestoring(false);
     enterApp(account, isAdmin);
+    restoreLastScreen(isAdmin);
   } catch (error) {
     // Sin conexión: la sesión se conserva y se reintenta al volver internet.
     const offline = /fetch|network/i.test(String(error?.message || error));
@@ -8495,13 +8513,25 @@ function routeDayKey(route = state.workerRoute) {
 function requestVisitCorrection(clientId, key) {
   const client = clients[clientId];
   const visitDate = key.slice(key.indexOf(':') + 1);
+  // Abono registrado ese día (si lo hay): se corrige ese mismo, como en «Abonos del día».
+  const payment = (client.payments || []).find(item => item.date === visitDate && Number(item.amount) > 0) || null;
   openCustomModal({
     title: 'Solicitar corrección al administrador',
-    description: `Explica por qué debe corregirse la visita o el pago de ${client.name} del ${formatDate(visitDate)}.`,
-    fields: [{ name: 'comment', label: 'Comentario para el administrador', type: 'textarea', rows: 4, placeholder: 'Describe qué ocurrió y qué corrección se necesita', required: true }],
+    description: payment
+      ? `Abono de ${client.name} del ${formatDate(visitDate)} por ${formatMoney(payment.amount)}. Indica el monto correcto y qué pasó.`
+      : `Visita de ${client.name} del ${formatDate(visitDate)} sin abono registrado. Indica el monto que pagó y qué pasó.`,
+    fields: [
+      { name: 'amount', label: 'Monto correcto del abono ($)', type: 'number', money: true, thousands: true, min: 1, step: 1, required: true, value: payment?.amount || '' },
+      { name: 'comment', label: 'Comentario para el administrador', type: 'textarea', rows: 3, placeholder: 'Describe qué ocurrió y qué corrección se necesita', required: true },
+    ],
     submitLabel: 'Enviar solicitud',
     onSubmit: values => {
-      pendingRequests.unshift({ id: `request-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, type: 'route-correction', routeId: routeKey(client.route), route: client.route, workerId: state.activeWorker?.id, workerName: state.activeWorker?.name || 'Trabajador', clientId, clientName: client.name, visitDate, previousOutcome: state.routeVisitOutcomes[key]?.[clientId] || 'closed', comment: values.comment.trim(), createdAt: new Date().toISOString(), status: 'pending' });
+      pendingRequests.unshift({
+        id: `request-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, type: 'route-correction', routeId: routeKey(client.route), route: client.route,
+        workerId: state.activeWorker?.id, workerName: state.activeWorker?.name || 'Trabajador', clientId, clientName: client.name, visitDate,
+        paymentAt: payment?.at || '', paymentAmount: Number(payment?.amount) || 0, requestedAmount: Number(values.amount) || 0,
+        previousOutcome: state.routeVisitOutcomes[key]?.[clientId] || 'closed', comment: String(values.comment || '').trim(), createdAt: new Date().toISOString(), status: 'pending',
+      });
       persistBusinessData();
       renderPendingRequests();
       showToast('Solicitud de corrección enviada al administrador.');
@@ -9957,6 +9987,7 @@ function normalizeRecoveryCode(code) {
 
 
 
+
 const EXIT_WINDOW_MS = 2000;
 
 /** Ventanas que se cierran con atrás: cómo saber si están abiertas y con qué botón se cierran. */
@@ -9995,6 +10026,26 @@ function currentScreen() {
 // La ficha del cliente es una sola pantalla aunque se pase a la cartulina siguiente.
 const screenKey = snap => `${snap.mode}:${snap.panel || snap.view}`;
 const isHomeScreen = snap => (snap.mode === 'worker' && snap.view === 'inicio') || (snap.mode === 'admin' && snap.panel === defaultAdminPanel());
+
+// Pantalla actual guardada en la pestaña: al recargar, la sesión restaurada vuelve aquí.
+const LAST_SCREEN_KEY = 'edgecredit-last-screen';
+
+function rememberScreen(snap) {
+  try { sessionStorage.setItem(LAST_SCREEN_KEY, JSON.stringify(snap)); } catch { /* opcional */ }
+}
+
+/** Tras restaurar la sesión al recargar: vuelve a la pantalla en la que estaba (si es del mismo rol). */
+function restoreLastScreen(isAdmin) {
+  let snap = null;
+  try { snap = JSON.parse(sessionStorage.getItem(LAST_SCREEN_KEY) || 'null'); } catch { /* opcional */ }
+  if (!snap?.mode || (snap.mode === 'worker') === Boolean(isAdmin)) return;
+  if (snap.mode === 'admin' && !document.querySelector(`[data-admin-panel="${snap.panel}"]`)) return;
+  if (snap.mode !== 'admin' && (!document.getElementById(snap.view) || (snap.view === 'detalle-cliente' && !clients[snap.client]))) return;
+  if (isHomeScreen(snap)) return;
+  // Primero el historial arranca en el inicio; así «atrás» desde la pantalla restaurada vuelve allí.
+  reconcile();
+  try { restoreScreen(snap); } catch { /* si ya no existe, se queda en el inicio */ }
+}
 
 function restoreScreen(snap) {
   if (snap.mode === 'admin') {
@@ -10064,11 +10115,12 @@ function reconcile() {
   if (navRestoring) return;
   const snap = currentScreen();
   if (!snap) { if (navActive) stop(); return; }
-  if (!navActive) { start(snap); return; }
+  if (!navActive) { start(snap); rememberScreen(snap); return; }
   const before = navLayers.length;
   const added = [];
   // Modales cerradas con su botón, Escape o al guardar: se retira su entrada.
   navLayers = navLayers.filter(layer => layer.type !== 'modal' || layer.modal.isOpen());
+  rememberScreen(snap);
   const key = screenKey(snap);
   if (key !== navScreen.key) {
     // Volver al inicio por el menú limpia el camino: el siguiente atrás ofrece salir.

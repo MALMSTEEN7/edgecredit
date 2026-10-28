@@ -70,6 +70,7 @@ export function renderPendingRequests() {
     value.className = 'pending-comment';
     value.textContent = request.type === 'finance' || request.type === 'retanqueo' ? restructureSummary(request)
       : request.type === 'route-correction' && request.paymentAmount ? `Abono del ${formatDate(request.visitDate)}: registrado ${formatMoney(request.paymentAmount)} → correcto ${formatMoney(request.requestedAmount)}. Motivo: ${request.comment || 'Sin comentario'}`
+      : request.type === 'route-correction' && request.requestedAmount ? `Visita del ${formatDate(request.visitDate)} sin abono registrado → pagó ${formatMoney(request.requestedAmount)}. Motivo: ${request.comment || 'Sin comentario'}`
       : `${request.type === 'route-correction' ? 'Motivo enviado' : 'Acuerdo informado'}: ${request.comment || 'Sin comentario'}`;
     copy.append(title, details, value);
     const actions = document.createElement('div');
