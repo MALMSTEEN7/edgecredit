@@ -5,9 +5,9 @@
 import { adminFeedback, routeSelect, settlementInputs } from '../../core/dom.js';
 import { state } from '../../core/state.js';
 import { clients, persistBusinessData, routeSettlements } from '../../core/store.js';
-import { carriedBase, mondayBaseFor, paymentStamp, pendingRoutePayments, recordClosure } from '../../domain/ledger.js';
+import { carriedBase, mondayBaseFor, otherExpensesNote, paymentStamp, pendingRoutePayments, recordClosure, setOtherExpensesNote } from '../../domain/ledger.js';
 import { insuranceCollectedOn } from '../../domain/insurance.js';
-import { personCardIds } from '../../domain/person-cards.js';
+import { cardLabel } from '../../domain/person-cards.js';
 import { localDateISO } from '../../shared/dates.js';
 import { formatMoney } from '../../shared/format.js';
 import { openCustomModal } from '../../ui/custom-modal.js';
@@ -115,8 +115,8 @@ export function renderDayPayments(routeId) {
     row.classList.toggle('is-earlier-day', payment.date < today);
     const name = document.createElement('th');
     name.scope = 'row';
-    const cards = personCardIds(clients, client.id);
-    name.textContent = cards.length > 1 ? `${client.name} · Cartulina ${cards.indexOf(clientId) + 1}` : client.name;
+    const card = cardLabel(clients, clientId);
+    name.textContent = card ? `${client.name} · ${card}` : client.name;
     const date = document.createElement('td');
     date.className = 'day-payment-date';
     date.textContent = paymentStamp(payment);
@@ -188,6 +188,55 @@ function saveMondayBase() {
   showToast(amount ? `Base para el lunes de ${route.name}: ${formatMoney(amount)}.` : `${route.name} arranca el lunes en ${formatMoney(0)}.`);
 }
 
+/**
+ * Junto al título «Base»: los seguros del día que ya están sumados en la base y la base sin
+ * ellos. Tras cerrar hoy solo cuentan los seguros cobrados después del cierre.
+ */
+export function renderBaseBreakdown(routeId) {
+  const route = routeSettlements[routeId];
+  if (!route) return;
+  const today = localDateISO();
+  const since = route.lastClosure?.date === today ? Date.parse(route.lastClosure.submittedAt) || 0 : 0;
+  const insurance = insuranceCollectedOn(clients, routeId, today, since);
+  document.querySelector('#base-insurance-label').textContent = insurance.count ? `Seguros del día (${insurance.count})` : 'Seguros del día';
+  document.querySelector('#base-insurance').textContent = `+ ${formatMoney(insurance.total)}`;
+  document.querySelector('#base-own').textContent = formatMoney(Number(route.base || 0) - insurance.total);
+  document.querySelector('#base-breakdown').title = insurance.total
+    ? `La base de ${formatMoney(route.base)} incluye ${formatMoney(insurance.total)} de seguros cobrados hoy`
+    : 'Hoy no se han cobrado seguros en esta ruta';
+}
+
+/** Comentario de «Otros gastos» del día: es el mismo que sale en Reportes financieros. */
+export function renderSettlementOtherNote(routeId) {
+  const route = routeSettlements[routeId];
+  if (!route) return;
+  const note = otherExpensesNote(route, localDateISO());
+  const preview = document.querySelector('#settlement-other-note-preview');
+  preview.hidden = !note;
+  preview.textContent = note.replace(/\n/g, ' · ');
+  preview.title = note;
+  document.querySelector('#settlement-other-note').textContent = note ? '💬 Editar' : '💬 Comentario';
+}
+
+function openSettlementOtherNote() {
+  const routeId = routeSelect.value;
+  const route = routeSettlements[routeId];
+  if (!route) return;
+  const today = localDateISO();
+  openCustomModal({
+    title: `Otros gastos · ${route.name}`,
+    description: `Comentario de hoy (${formatMoney(route.otherExpenses || 0)} en otros gastos). Sale en Reportes financieros, en «Otros gastos» de este día.`,
+    fields: [{ name: 'note', label: '¿En qué se gastó?', type: 'textarea', rows: 4, value: otherExpensesNote(route, today), placeholder: 'Ej. Pinchada $ 12.000, gasolina $ 20.000' }],
+    submitLabel: 'Guardar comentario',
+    onSubmit: values => {
+      setOtherExpensesNote(route, today, values.note);
+      persistBusinessData();
+      renderSettlementOtherNote(routeId);
+      showToast('Comentario guardado. Ya sale en Reportes financieros.');
+    },
+  });
+}
+
 export function renderRouteOperations(route) {
   if (!route) return;
   document.querySelector('#report-route-name').textContent = route.name.toLocaleUpperCase('es');
@@ -212,11 +261,13 @@ export function recalculateSettlement() {
 /** Registra los listeners del módulo. Se invoca una sola vez desde app.js. */
 export function mount() {
   document.querySelector('#monday-base-save').addEventListener('click', saveMondayBase);
+  document.querySelector('#settlement-other-note').addEventListener('click', openSettlementOtherNote);
   settlementInputs.forEach(input => input.addEventListener('input', () => {
     const field = input.dataset.settlementField;
     const amount = Number(input.value);
     if (!state.activeSettlement) return;
     state.activeSettlement[field] = Number.isFinite(amount) && amount >= 0 ? amount : 0;
+    if (field === 'base') renderBaseBreakdown(routeSelect.value);
     recalculateSettlement();
     persistBusinessData();
   }));

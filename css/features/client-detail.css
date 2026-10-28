@@ -1173,3 +1173,59 @@ button.evidence-link:active {
   color: var(--muted);
   font-size: 10px;
 }
+
+/* Historial de abonos de la ficha en columnas: fecha · abono · saldo que dejó (igual que la
+ * tarjeta de la ruta diaria). */
+#payment-history-list > li.history-payment-head,
+#payment-history-list > li.history-payment-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr) minmax(0, 1fr);
+  align-items: center;
+  column-gap: 10px;
+  row-gap: 6px;
+}
+
+#payment-history-list > li.history-payment-head {
+  padding-top: 4px;
+  padding-bottom: 8px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .3px;
+  text-transform: uppercase;
+}
+
+#payment-history-list > li.history-payment-head span:last-child,
+#payment-history-list .history-payment-balance {
+  text-align: right;
+}
+
+#payment-history-list .history-date-method {
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 6px 8px;
+}
+
+#payment-history-list .history-date-method time {
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+#payment-history-list .history-payment-amount {
+  margin: 0;
+  text-align: left;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+#payment-history-list .history-payment-balance {
+  color: var(--text);
+  font-weight: 700;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+#payment-history-list > li.history-payment-row .history-admin-actions {
+  grid-column: 1 / -1;
+  justify-self: end;
+}

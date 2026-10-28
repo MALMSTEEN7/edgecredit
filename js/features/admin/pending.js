@@ -40,6 +40,12 @@ function applyRestructureRequest(request) {
   return '';
 }
 
+/** Abono a corregir: el que eligió el trabajador (por su hora de registro) o el de esa fecha. */
+function correctedPayment(client, request) {
+  const payments = client?.payments || [];
+  return (request.paymentAt && payments.find(item => item.at === request.paymentAt)) || payments.find(item => item.date === request.visitDate);
+}
+
 export function renderPendingRequests() {
   pendingList.replaceChildren();
   const selectedRoute = routeSelect.value;
@@ -62,7 +68,9 @@ export function renderPendingRequests() {
     details.textContent = `${request.clientName} · ${routeSettlements[request.routeId || routeKey(request.route)]?.name || request.route} · Solicitó ${request.workerName}`;
     const value = document.createElement('p');
     value.className = 'pending-comment';
-    value.textContent = request.type === 'finance' || request.type === 'retanqueo' ? restructureSummary(request) : `${request.type === 'route-correction' ? 'Motivo enviado' : 'Acuerdo informado'}: ${request.comment || 'Sin comentario'}`;
+    value.textContent = request.type === 'finance' || request.type === 'retanqueo' ? restructureSummary(request)
+      : request.type === 'route-correction' && request.paymentAmount ? `Abono del ${formatDate(request.visitDate)}: registrado ${formatMoney(request.paymentAmount)} → correcto ${formatMoney(request.requestedAmount)}. Motivo: ${request.comment || 'Sin comentario'}`
+      : `${request.type === 'route-correction' ? 'Motivo enviado' : 'Acuerdo informado'}: ${request.comment || 'Sin comentario'}`;
     copy.append(title, details, value);
     const actions = document.createElement('div');
     actions.className = 'pending-actions';
@@ -94,7 +102,7 @@ function resolvePendingRequest(requestId, approved, approvedValue) {
       const key = `${routeKey(request.routeId || client.route)}:${request.visitDate}`;
       state.routeVisitOutcomes[key] ||= {};
       const correctedAmount = Number(approvedValue);
-      const payment = (client.payments || []).find(item => item.date === request.visitDate);
+      const payment = correctedPayment(client, request);
       let collectionDelta = correctedAmount;
       if (payment) {
         collectionDelta = correctedAmount - Number(payment.amount);
@@ -169,12 +177,12 @@ export function mount() {
       if (request.type === 'route-correction') {
         openCustomModal({
           title: 'Revisar visita o pago',
-          description: `${request.workerName} solicita corregir la visita de ${request.clientName} (${formatDate(request.visitDate)}). Comentario: ${request.comment}`,
+          description: `${request.workerName} solicita corregir ${request.paymentAmount ? `el abono de ${formatMoney(request.paymentAmount)}` : 'la visita'} de ${request.clientName} (${formatDate(request.visitDate)}).${request.requestedAmount ? ` Monto que indica: ${formatMoney(request.requestedAmount)}.` : ''} Comentario: ${request.comment}`,
           fields: [{ name: 'amount', label: `Monto correcto del abono (${formatDate(request.visitDate)})`, money: true, thousands: true, type: 'number', min: 1, step: 1, required: true, value: request.requestedAmount || '', placeholder: 'Ingresa el monto acordado' }],
           submitLabel: 'Guardar monto',
           onSubmit: values => {
             const client = clients[request.clientId];
-            const existingPayment = (client?.payments || []).find(payment => payment.date === request.visitDate);
+            const existingPayment = correctedPayment(client, request);
             const available = Number(client?.balance || 0) + Number(existingPayment?.amount || 0);
             if (!Number.isFinite(Number(values.amount)) || Number(values.amount) <= 0) { customModalError.textContent = 'Ingresa un monto mayor que cero.'; return false; }
             if (Number(values.amount) > available) { customModalError.textContent = 'El monto corregido supera el saldo que puede aplicarse al crédito.'; return false; }

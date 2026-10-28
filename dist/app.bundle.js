@@ -2618,6 +2618,19 @@ function cardNumber(clients, clientId) {
   return personCardIds(clients, clients[clientId]?.id).indexOf(clientId) + 1;
 }
 
+/**
+ * Nombre de la cartulina para mostrar junto al cliente. Se numeran solo las ACTIVAS (las
+ * canceladas no ocupan número): «Cartulina 2». Vacío si la persona tiene una sola activa;
+ * «Cartulina cancelada» si esta ya no tiene saldo y la persona tiene otras.
+ */
+function cardLabel(clients, clientId) {
+  const client = clients[clientId];
+  if (!client) return '';
+  const active = activeCardIds(clients, client.id);
+  if (!isActiveCard(client)) return personCardIds(clients, client.id).length > 1 ? 'Cartulina cancelada' : '';
+  return active.length > 1 ? `Cartulina ${active.indexOf(clientId) + 1}` : '';
+}
+
 /** ¿Se puede abrir otra cartulina simultánea para esta persona? */
 function canAddCard(clients, idNumber) {
   return activeCardIds(clients, idNumber).length < MAX_ACTIVE_CARDS_PER_PERSON;
@@ -3110,6 +3123,8 @@ function renderAdminRoute(routeId) {
   document.querySelector('#metric-other-expenses').value = route.otherExpenses;
   renderRouteOperations(route);
   renderDayPayments(routeId);
+  renderBaseBreakdown(routeId);
+  renderSettlementOtherNote(routeId);
   renderMondayBase(routeId);
   renderRouteEvidence(routeId);
   renderRouteReports(route);
@@ -4248,6 +4263,12 @@ function applyRestructureRequest(request) {
   return '';
 }
 
+/** Abono a corregir: el que eligió el trabajador (por su hora de registro) o el de esa fecha. */
+function correctedPayment(client, request) {
+  const payments = client?.payments || [];
+  return (request.paymentAt && payments.find(item => item.at === request.paymentAt)) || payments.find(item => item.date === request.visitDate);
+}
+
 function renderPendingRequests() {
   pendingList.replaceChildren();
   const selectedRoute = routeSelect.value;
@@ -4270,7 +4291,9 @@ function renderPendingRequests() {
     details.textContent = `${request.clientName} · ${routeSettlements[request.routeId || routeKey(request.route)]?.name || request.route} · Solicitó ${request.workerName}`;
     const value = document.createElement('p');
     value.className = 'pending-comment';
-    value.textContent = request.type === 'finance' || request.type === 'retanqueo' ? restructureSummary(request) : `${request.type === 'route-correction' ? 'Motivo enviado' : 'Acuerdo informado'}: ${request.comment || 'Sin comentario'}`;
+    value.textContent = request.type === 'finance' || request.type === 'retanqueo' ? restructureSummary(request)
+      : request.type === 'route-correction' && request.paymentAmount ? `Abono del ${formatDate(request.visitDate)}: registrado ${formatMoney(request.paymentAmount)} → correcto ${formatMoney(request.requestedAmount)}. Motivo: ${request.comment || 'Sin comentario'}`
+      : `${request.type === 'route-correction' ? 'Motivo enviado' : 'Acuerdo informado'}: ${request.comment || 'Sin comentario'}`;
     copy.append(title, details, value);
     const actions = document.createElement('div');
     actions.className = 'pending-actions';
@@ -4302,7 +4325,7 @@ function resolvePendingRequest(requestId, approved, approvedValue) {
       const key = `${routeKey(request.routeId || client.route)}:${request.visitDate}`;
       state.routeVisitOutcomes[key] ||= {};
       const correctedAmount = Number(approvedValue);
-      const payment = (client.payments || []).find(item => item.date === request.visitDate);
+      const payment = correctedPayment(client, request);
       let collectionDelta = correctedAmount;
       if (payment) {
         collectionDelta = correctedAmount - Number(payment.amount);
@@ -4377,12 +4400,12 @@ function __mount_pendingModule() {
       if (request.type === 'route-correction') {
         openCustomModal({
           title: 'Revisar visita o pago',
-          description: `${request.workerName} solicita corregir la visita de ${request.clientName} (${formatDate(request.visitDate)}). Comentario: ${request.comment}`,
+          description: `${request.workerName} solicita corregir ${request.paymentAmount ? `el abono de ${formatMoney(request.paymentAmount)}` : 'la visita'} de ${request.clientName} (${formatDate(request.visitDate)}).${request.requestedAmount ? ` Monto que indica: ${formatMoney(request.requestedAmount)}.` : ''} Comentario: ${request.comment}`,
           fields: [{ name: 'amount', label: `Monto correcto del abono (${formatDate(request.visitDate)})`, money: true, thousands: true, type: 'number', min: 1, step: 1, required: true, value: request.requestedAmount || '', placeholder: 'Ingresa el monto acordado' }],
           submitLabel: 'Guardar monto',
           onSubmit: values => {
             const client = clients[request.clientId];
-            const existingPayment = (client?.payments || []).find(payment => payment.date === request.visitDate);
+            const existingPayment = correctedPayment(client, request);
             const available = Number(client?.balance || 0) + Number(existingPayment?.amount || 0);
             if (!Number.isFinite(Number(values.amount)) || Number(values.amount) <= 0) { customModalError.textContent = 'Ingresa un monto mayor que cero.'; return false; }
             if (Number(values.amount) > available) { customModalError.textContent = 'El monto corregido supera el saldo que puede aplicarse al crédito.'; return false; }
@@ -5517,8 +5540,8 @@ function renderDayPayments(routeId) {
     row.classList.toggle('is-earlier-day', payment.date < today);
     const name = document.createElement('th');
     name.scope = 'row';
-    const cards = personCardIds(clients, client.id);
-    name.textContent = cards.length > 1 ? `${client.name} · Cartulina ${cards.indexOf(clientId) + 1}` : client.name;
+    const card = cardLabel(clients, clientId);
+    name.textContent = card ? `${client.name} · ${card}` : client.name;
     const date = document.createElement('td');
     date.className = 'day-payment-date';
     date.textContent = paymentStamp(payment);
@@ -5590,6 +5613,55 @@ function saveMondayBase() {
   showToast(amount ? `Base para el lunes de ${route.name}: ${formatMoney(amount)}.` : `${route.name} arranca el lunes en ${formatMoney(0)}.`);
 }
 
+/**
+ * Junto al título «Base»: los seguros del día que ya están sumados en la base y la base sin
+ * ellos. Tras cerrar hoy solo cuentan los seguros cobrados después del cierre.
+ */
+function renderBaseBreakdown(routeId) {
+  const route = routeSettlements[routeId];
+  if (!route) return;
+  const today = localDateISO();
+  const since = route.lastClosure?.date === today ? Date.parse(route.lastClosure.submittedAt) || 0 : 0;
+  const insurance = insuranceCollectedOn(clients, routeId, today, since);
+  document.querySelector('#base-insurance-label').textContent = insurance.count ? `Seguros del día (${insurance.count})` : 'Seguros del día';
+  document.querySelector('#base-insurance').textContent = `+ ${formatMoney(insurance.total)}`;
+  document.querySelector('#base-own').textContent = formatMoney(Number(route.base || 0) - insurance.total);
+  document.querySelector('#base-breakdown').title = insurance.total
+    ? `La base de ${formatMoney(route.base)} incluye ${formatMoney(insurance.total)} de seguros cobrados hoy`
+    : 'Hoy no se han cobrado seguros en esta ruta';
+}
+
+/** Comentario de «Otros gastos» del día: es el mismo que sale en Reportes financieros. */
+function renderSettlementOtherNote(routeId) {
+  const route = routeSettlements[routeId];
+  if (!route) return;
+  const note = otherExpensesNote(route, localDateISO());
+  const preview = document.querySelector('#settlement-other-note-preview');
+  preview.hidden = !note;
+  preview.textContent = note.replace(/\n/g, ' · ');
+  preview.title = note;
+  document.querySelector('#settlement-other-note').textContent = note ? '💬 Editar' : '💬 Comentario';
+}
+
+function openSettlementOtherNote() {
+  const routeId = routeSelect.value;
+  const route = routeSettlements[routeId];
+  if (!route) return;
+  const today = localDateISO();
+  openCustomModal({
+    title: `Otros gastos · ${route.name}`,
+    description: `Comentario de hoy (${formatMoney(route.otherExpenses || 0)} en otros gastos). Sale en Reportes financieros, en «Otros gastos» de este día.`,
+    fields: [{ name: 'note', label: '¿En qué se gastó?', type: 'textarea', rows: 4, value: otherExpensesNote(route, today), placeholder: 'Ej. Pinchada $ 12.000, gasolina $ 20.000' }],
+    submitLabel: 'Guardar comentario',
+    onSubmit: values => {
+      setOtherExpensesNote(route, today, values.note);
+      persistBusinessData();
+      renderSettlementOtherNote(routeId);
+      showToast('Comentario guardado. Ya sale en Reportes financieros.');
+    },
+  });
+}
+
 function renderRouteOperations(route) {
   if (!route) return;
   document.querySelector('#report-route-name').textContent = route.name.toLocaleUpperCase('es');
@@ -5614,11 +5686,13 @@ function recalculateSettlement() {
 /** Registra los listeners del módulo. Se invoca una sola vez desde app.js. */
 function __mount_settlementModule() {
   document.querySelector('#monday-base-save').addEventListener('click', saveMondayBase);
+  document.querySelector('#settlement-other-note').addEventListener('click', openSettlementOtherNote);
   settlementInputs.forEach(input => input.addEventListener('input', () => {
     const field = input.dataset.settlementField;
     const amount = Number(input.value);
     if (!state.activeSettlement) return;
     state.activeSettlement[field] = Number.isFinite(amount) && amount >= 0 ? amount : 0;
+    if (field === 'base') renderBaseBreakdown(routeSelect.value);
     recalculateSettlement();
     persistBusinessData();
   }));
@@ -6504,6 +6578,14 @@ function createMethodIcon(method) {
   return icon;
 }
 
+/** Fecha corta del historial, como en la tarjeta de la ruta diaria: «24-oct-26». */
+function shortHistoryDate(iso) {
+  const [year, month, day] = String(iso || '').split('-').map(Number);
+  if (!year) return '—';
+  const name = new Date(year, month - 1, day).toLocaleDateString('es-CO', { month: 'short' }).replace('.', '');
+  return `${String(day).padStart(2, '0')}-${name}-${String(year).slice(-2)}`;
+}
+
 function renderHistory(client) {
   const paymentsList = document.querySelector('#payment-history-list');
   paymentsList.replaceChildren();
@@ -6517,7 +6599,8 @@ function renderHistory(client) {
     dateAndMethod.className = 'history-date-method';
     const date = document.createElement('time');
     date.dateTime = payment.date;
-    date.textContent = formatDate(payment.date);
+    date.textContent = shortHistoryDate(payment.date);
+    date.title = formatDate(payment.date);
     dateAndMethod.append(date, createMethodIcon(payment.method));
     if (payment.method === 'transfer' && !payment.receiptData) {
       const missing = document.createElement('small');
@@ -6534,14 +6617,15 @@ function renderHistory(client) {
       evidenceLink.setAttribute('aria-label', `Ver comprobante del ${formatDate(payment.date)}`);
       dateAndMethod.append(evidenceLink);
     }
+    // Como el historial del sistema anterior: fecha, abono y el saldo que dejó, en columnas.
+    row.className = 'history-payment-row';
     const amount = document.createElement('strong');
+    amount.className = 'history-payment-amount';
     amount.textContent = formatMoney(payment.amount);
-    // Saldo del crédito después de este abono.
-    const after = document.createElement('small');
-    after.className = 'history-balance-after';
-    after.textContent = `Saldo ${formatMoney(balances[paymentIndex])}`;
-    amount.append(after);
-    row.append(dateAndMethod, amount);
+    const after = document.createElement('span');
+    after.className = 'history-payment-balance';
+    after.textContent = formatMoney(balances[paymentIndex]);
+    row.append(dateAndMethod, amount, after);
     if (state.userRole === 'admin') {
       const actions = document.createElement('span');
       actions.className = 'history-admin-actions';
@@ -6557,6 +6641,12 @@ function renderHistory(client) {
     }
     paymentsList.append(row);
   });
+  if (paymentsToRender.length) {
+    const head = document.createElement('li');
+    head.className = 'history-payment-head';
+    head.innerHTML = '<span>Fecha</span><span>Abono</span><span>Saldo</span>';
+    paymentsList.prepend(head);
+  }
   document.querySelector('#payment-history-count').textContent = client.archivedPaymentsAt && !client.payments.length ? 'Archivado' : isExpanded ? `${client.payments.length} registros` : `${Math.min(client.payments.length, 3)} recientes`;
   const historyToggle = document.querySelector('#payment-history-toggle');
   historyToggle.hidden = client.payments.length <= 3;
@@ -6969,28 +7059,34 @@ function renderCardActions(client) {
   document.querySelector('.detail-profile .eyebrow').textContent = cancelled ? 'CARTULINA CANCELADA' : 'CRÉDITO ACTIVO';
 }
 
-/** Selector de cartulinas cuando la persona tiene más de una (activas, canceladas o renovadas). */
+/**
+ * Selector de cartulinas de la persona: solo las ACTIVAS (las canceladas no se muestran arriba).
+ * Se ve con 2 o más activas, o si se abrió una cancelada y la persona tiene alguna activa.
+ */
 function renderPersonCards(clientId) {
   const client = clients[clientId];
-  const ids = personCardIds(clients, client.id);
+  const ids = activeCardIds(clients, client.id);
   const nav = document.querySelector('#person-cards');
   const list = document.querySelector('#person-cards-list');
-  nav.hidden = ids.length < 2;
+  const currentActive = ids.includes(clientId);
+  const show = ids.length >= 2 || (!currentActive && ids.length >= 1);
+  nav.hidden = !show;
   list.replaceChildren();
-  if (ids.length < 2) return;
-  const active = activeCardIds(clients, client.id).length;
-  document.querySelector('#person-cards-label').textContent = `${ids.length} cartulinas · ${active} activa${active === 1 ? '' : 's'}`;
+  if (!show) return;
+  document.querySelector('#person-cards-label').textContent = `${ids.length} cartulina${ids.length === 1 ? '' : 's'} activa${ids.length === 1 ? '' : 's'}`;
   ids.forEach((id, index) => {
     const card = clients[id];
     const chip = document.createElement('button');
     chip.type = 'button';
     chip.className = 'person-card-chip';
     chip.dataset.personCard = id;
-    const isCancelled = Number(card.balance) <= 0;
     chip.classList.toggle('is-current', id === clientId);
-    chip.classList.toggle('is-cancelled', isCancelled);
     if (id === clientId) chip.setAttribute('aria-current', 'true');
-    chip.innerHTML = `<strong>Cartulina ${index + 1}</strong><small>${isCancelled ? 'Cancelada' : `Saldo ${formatMoney(card.balance)}`}</small>`;
+    const name = document.createElement('strong');
+    name.textContent = ids.length > 1 ? `Cartulina ${index + 1}` : 'Cartulina activa';
+    const balance = document.createElement('small');
+    balance.textContent = `Saldo ${formatMoney(card.balance)}`;
+    chip.append(name, balance);
     list.append(chip);
   });
 }
@@ -7446,8 +7542,8 @@ function renderClientRows(clientId) {
     const main = row.querySelector('.client-main');
     const description = main?.querySelector(':scope > span:not(.client-risk-line)');
     // Si la persona tiene varias cartulinas, cada fila indica cuál es.
-    const siblings = personCardIds(clients, client.id);
-    const cardTag = siblings.length > 1 ? ` · Cartulina ${siblings.indexOf(clientId) + 1}` : '';
+    const card = isActiveCard(client) ? cardLabel(clients, clientId) : '';
+    const cardTag = card ? ` · ${card}` : '';
     if (description) description.textContent = `Préstamo activo${cardTag} · Cuota ${formatMoney(client.installment)} · ${paymentFrequencyLabels[client.frequency] || 'Semanal'}`;
     if (main && !main.querySelector('.client-risk-line')) {
       const riskLine = document.createElement('span');
@@ -8400,7 +8496,7 @@ function requestVisitCorrection(clientId, key) {
   const client = clients[clientId];
   const visitDate = key.slice(key.indexOf(':') + 1);
   openCustomModal({
-    title: 'Solicitar revisión al administrador',
+    title: 'Solicitar corrección al administrador',
     description: `Explica por qué debe corregirse la visita o el pago de ${client.name} del ${formatDate(visitDate)}.`,
     fields: [{ name: 'comment', label: 'Comentario para el administrador', type: 'textarea', rows: 4, placeholder: 'Describe qué ocurrió y qué corrección se necesita', required: true }],
     submitLabel: 'Enviar solicitud',
@@ -8408,8 +8504,45 @@ function requestVisitCorrection(clientId, key) {
       pendingRequests.unshift({ id: `request-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, type: 'route-correction', routeId: routeKey(client.route), route: client.route, workerId: state.activeWorker?.id, workerName: state.activeWorker?.name || 'Trabajador', clientId, clientName: client.name, visitDate, previousOutcome: state.routeVisitOutcomes[key]?.[clientId] || 'closed', comment: values.comment.trim(), createdAt: new Date().toISOString(), status: 'pending' });
       persistBusinessData();
       renderPendingRequests();
-      showToast('Solicitud enviada al administrador para revisión.');
+      showToast('Solicitud de corrección enviada al administrador.');
     }
+  });
+}
+
+/** ¿Ya hay una solicitud de corrección pendiente para este abono? */
+function paymentCorrectionPending(clientId, payment) {
+  return pendingRequests.some(request => request.status === 'pending' && request.type === 'route-correction' && request.clientId === clientId
+    && (payment.at ? request.paymentAt === payment.at : request.visitDate === payment.date));
+}
+
+/**
+ * Corrección de un abono puntual (desde «Abonos del día»): el trabajador indica el monto
+ * correcto y el motivo; el admin lo aprueba en Solicitudes y se corrige ese abono.
+ */
+function requestPaymentCorrection(clientId, payment, onSent = () => {}) {
+  const client = clients[clientId];
+  if (!client || !payment) return;
+  if (paymentCorrectionPending(clientId, payment)) { showToast('Ya enviaste una corrección de este abono: espera al administrador.'); return; }
+  openCustomModal({
+    title: 'Solicitar corrección al administrador',
+    description: `Abono de ${client.name} del ${formatDate(payment.date)} por ${formatMoney(payment.amount)}. Indica el monto correcto y qué pasó.`,
+    fields: [
+      { name: 'amount', label: 'Monto correcto del abono ($)', type: 'number', money: true, thousands: true, min: 1, step: 1, required: true, value: payment.amount },
+      { name: 'comment', label: 'Comentario para el administrador', type: 'textarea', rows: 3, required: true, placeholder: 'Ej. Pagó $ 30.000, se registró $ 300.000 por error' },
+    ],
+    submitLabel: 'Enviar solicitud',
+    onSubmit: values => {
+      pendingRequests.unshift({
+        id: `request-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, type: 'route-correction', routeId: routeKey(client.route), route: client.route,
+        workerId: state.activeWorker?.id, workerName: state.activeWorker?.name || 'Trabajador', clientId, clientName: client.name,
+        visitDate: payment.date, paymentAt: payment.at || '', paymentAmount: Number(payment.amount) || 0, requestedAmount: Number(values.amount) || 0,
+        previousOutcome: 'paid', comment: String(values.comment || '').trim(), createdAt: new Date().toISOString(), status: 'pending',
+      });
+      persistBusinessData();
+      renderPendingRequests();
+      onSent();
+      showToast('Solicitud de corrección enviada al administrador.');
+    },
   });
 }
 
@@ -8487,7 +8620,7 @@ function routeClientCard(clientId, mode, routeOrder = []) {
     actions.append(statusChip(status, client));
     if (status !== 'pending' && state.userRole === 'worker') {
       const correction = document.createElement('button');
-      correction.type = 'button'; correction.className = 'route-reopen-button'; correction.dataset.routeCorrection = clientId; correction.textContent = 'Solicitar revisión';
+      correction.type = 'button'; correction.className = 'route-reopen-button'; correction.dataset.routeCorrection = clientId; correction.textContent = 'Solicitar corrección';
       actions.append(correction);
     }
   } else if (routeOrder.includes(clientId)) {
@@ -8974,6 +9107,7 @@ function __mount_paymentModule() {
 
 
 
+
 /** Momento en que se cerró hoy la ruta («Verificar y cerrar ruta»), o 0 si hoy no se ha cerrado. */
 function todayClosureTs(route) {
   return route?.lastClosure?.date === localDateISO() ? Date.parse(route.lastClosure.submittedAt) || 0 : 0;
@@ -9077,10 +9211,21 @@ function renderWorkerDayPayments() {
     const detail = document.createElement('small');
     detail.textContent = [paymentStamp(payment), payment.method === 'transfer' ? 'Transferencia' : 'Efectivo'].join(' · ');
     open.append(name, detail);
+    const side = document.createElement('div');
+    side.className = 'worker-day-payment-side';
     const amount = document.createElement('strong');
     amount.className = 'worker-day-payment-amount';
     amount.textContent = formatMoney(payment.amount);
-    row.append(open, amount);
+    // Si se equivocaron en la cuota, la corrección se pide desde aquí mismo.
+    const correction = document.createElement('button');
+    correction.type = 'button';
+    correction.className = 'worker-day-payment-fix';
+    const pending = paymentCorrectionPending(clientId, payment);
+    correction.textContent = pending ? 'Corrección enviada' : 'Solicitar corrección';
+    correction.disabled = pending;
+    correction.addEventListener('click', () => requestPaymentCorrection(clientId, payment, renderWorkerDayPayments));
+    side.append(amount, correction);
+    row.append(open, side);
     list.append(row);
   });
   const total = entries.reduce((sum, { payment }) => sum + (Number(payment.amount) || 0), 0);

@@ -761,3 +761,100 @@
   opacity: .55;
   cursor: not-allowed;
 }
+
+/* Base: junto al título, los seguros del día que ya suma y la base sin ellos. */
+.finance-label-stack {
+  min-width: 0;
+  display: grid;
+  justify-items: start;
+  gap: 6px;
+}
+
+.base-breakdown {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+}
+
+.base-breakdown span {
+  display: grid;
+  gap: 1px;
+}
+
+.base-breakdown small {
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.base-breakdown b {
+  color: var(--text);
+  font: 700 13px Manrope, sans-serif;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.base-breakdown .base-breakdown-insurance b {
+  color: var(--success, #00c853);
+}
+
+/* Otros gastos: comentario del día (el mismo de Reportes financieros). */
+.settlement-note-button {
+  min-height: 30px;
+  padding: 4px 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--primary);
+  font: 700 12px 'DM Sans', sans-serif;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.settlement-note-button:hover {
+  border-color: var(--primary);
+}
+
+.settlement-note-preview {
+  max-width: 220px;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settlement-layout .settlement-fields .settlement-card .finance-label-stack {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+/* La caja del monto se encoge con la tarjeta (en el celular se salía por la derecha). */
+.settlement-layout .settlement-fields .editable-money {
+  min-width: 0;
+}
+
+.settlement-note-button {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+@media (max-width: 420px) {
+  .settlement-layout .settlement-fields .base-card,
+  .settlement-layout .settlement-fields .other-expenses-card {
+    flex-wrap: wrap;
+  }
+
+  .settlement-layout .settlement-fields .base-card .editable-money,
+  .settlement-layout .settlement-fields .other-expenses-card .editable-money {
+    max-width: none;
+  }
+}
+
+/* El título y su botón no se recortan: la caja del monto cede espacio. */
+.settlement-layout .settlement-fields .other-expenses-card .finance-label-stack,
+.settlement-layout .settlement-fields .base-card .finance-label-stack {
+  flex-shrink: 0;
+  max-width: 55%;
+}

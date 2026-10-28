@@ -11,6 +11,7 @@ import { localDateISO } from '../../shared/dates.js';
 import { formatMoney } from '../../shared/format.js';
 import { showToast } from '../../ui/toast.js';
 import { updateCashChip } from './home.js';
+import { paymentCorrectionPending, requestPaymentCorrection } from '../daily-route/daily-route.js';
 
 /** Momento en que se cerró hoy la ruta («Verificar y cerrar ruta»), o 0 si hoy no se ha cerrado. */
 function todayClosureTs(route) {
@@ -115,10 +116,21 @@ function renderWorkerDayPayments() {
     const detail = document.createElement('small');
     detail.textContent = [paymentStamp(payment), payment.method === 'transfer' ? 'Transferencia' : 'Efectivo'].join(' · ');
     open.append(name, detail);
+    const side = document.createElement('div');
+    side.className = 'worker-day-payment-side';
     const amount = document.createElement('strong');
     amount.className = 'worker-day-payment-amount';
     amount.textContent = formatMoney(payment.amount);
-    row.append(open, amount);
+    // Si se equivocaron en la cuota, la corrección se pide desde aquí mismo.
+    const correction = document.createElement('button');
+    correction.type = 'button';
+    correction.className = 'worker-day-payment-fix';
+    const pending = paymentCorrectionPending(clientId, payment);
+    correction.textContent = pending ? 'Corrección enviada' : 'Solicitar corrección';
+    correction.disabled = pending;
+    correction.addEventListener('click', () => requestPaymentCorrection(clientId, payment, renderWorkerDayPayments));
+    side.append(amount, correction);
+    row.append(open, side);
     list.append(row);
   });
   const total = entries.reduce((sum, { payment }) => sum + (Number(payment.amount) || 0), 0);
