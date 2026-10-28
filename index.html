@@ -34,7 +34,7 @@
   <link rel="icon" href="icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="icon-192.png">
   <meta name="apple-mobile-web-app-capable" content="yes">
-  <link rel="stylesheet" id="app-styles" href="dist/styles.bundle.css?v=f91e46e1b2">
+  <link rel="stylesheet" id="app-styles" href="dist/styles.bundle.css?v=f3b0435fb5">
 </head>
 <body class="login-active">
   <section class="login-gateway" id="login-gateway" aria-labelledby="login-title">
@@ -374,6 +374,7 @@
         <div class="admin-section-intro"><div><p class="eyebrow">CUENTA Y PREFERENCIAS</p><h2>Configuración</h2><p>Apariencia del sistema y seguridad de la cuenta del administrador.</p></div></div>
         <div class="settings-list admin-settings-list">
           <div class="settings-row theme-setting"><span class="settings-icon" aria-hidden="true">◐</span><span><strong>Tema visual (modo claro / oscuro)</strong><small id="admin-theme-description">Apariencia oscura</small></span><label class="theme-switch" aria-label="Cambiar tema visual"><input id="admin-theme-toggle" type="checkbox" role="switch"><span class="switch-track"></span></label></div>
+          <div class="settings-row"><span class="settings-icon" aria-hidden="true">⏻</span><span><strong>Cierre de sesión por inactividad</strong><small id="admin-idle-description">La sesión se cierra sola tras este tiempo sin usar la app (aplica a todos los usuarios).</small></span><select class="settings-select" id="admin-idle-hours" aria-describedby="admin-idle-description"><option value="1">1 hora</option><option value="2">2 horas</option><option value="4">4 horas</option><option value="8">8 horas</option><option value="12">12 horas</option><option value="24">24 horas</option><option value="48">48 horas</option></select></div>
           <div class="settings-row"><span class="settings-icon" aria-hidden="true">⚿</span><span><strong>Contraseña de ingreso</strong><small>Cámbiala cuando quieras; se pide la contraseña actual.</small></span><button class="secondary-button" type="button" id="admin-change-password">Cambiar</button></div>
           <div class="settings-row"><span class="settings-icon" aria-hidden="true">⛨</span><span><strong>Clave de recuperación</strong><small id="admin-recovery-status">Sirve para entrar si olvidas la contraseña o pierdes el celular del autenticador.</small></span><button class="secondary-button" type="button" id="admin-recovery-key">Generar</button></div>
           <div class="settings-row legacy-import-row"><span class="settings-icon" aria-hidden="true">⇪</span><span><strong>Importar cartera del sistema anterior</strong><small>Carga un cobro exportado de CREDITOS (archivo .json). Primero verás el resumen; nada se guarda sin tu confirmación.</small></span><button class="secondary-button" type="button" id="legacy-import-open">Elegir archivo</button><input type="file" id="legacy-import-file" accept=".json,application/json" hidden></div>
@@ -499,7 +500,7 @@
     // al cambiar el sello, el navegador descarga el JS/CSS nuevo en vez de usar su caché.
     // Para desarrollar con los módulos sueltos, abre index.html?dev desde un servidor local.
     (() => {
-      const APP_VERSION = 'f91e46e1b2';
+      const APP_VERSION = 'f3b0435fb5';
       const dev = new URLSearchParams(location.search).has('dev') && location.protocol !== 'file:';
       if (dev) {
         document.getElementById('app-styles').href = 'styles.css';

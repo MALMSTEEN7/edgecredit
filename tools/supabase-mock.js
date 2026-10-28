@@ -2,14 +2,30 @@
 // Guarda la "base de datos" en localStorage ('mock-supabase-db') y emite los cambios en
 // tiempo real con BroadcastChannel, así dos pestañas se comportan como dos dispositivos.
 // Emula RLS de forma simple: el trabajador solo lee/escribe filas de su ruta.
+// Como el servidor real: `updated_at` lo pone el «servidor» (con su propia hora, que puede
+// ir desfasada del navegador: __mockSupabase.setServerSkew), los borrados quedan en
+// `deleted_rows` y existe la RPC `server_now()`. Para pruebas: __mockSupabase.setOffline(true)
+// simula quedarse sin internet en esta pestaña, dropRealtime() tumba el canal de tiempo real
+// (o muteRealtime(true) lo deja «conectado» pero sin entregar cambios) y stats cuenta las
+// filas descargadas. Con ?mockSession=<nombre> cada pestaña guarda su
+// propia sesión, así dos usuarios pueden recargar a la vez en el mismo navegador.
 (() => {
   const DB_KEY = 'mock-supabase-db';
-  const TABLE_KEYS = { profiles: 'user_id', routes: 'id', route_state: 'route_id', clients: 'id', pending_requests: 'id', app_settings: 'key' };
+  const TABLE_KEYS = { profiles: 'user_id', routes: 'id', route_state: 'route_id', clients: 'id', pending_requests: 'id', app_settings: 'key', deleted_rows: 'id' };
+  const LOGGED_DELETES = ['clients', 'routes', 'route_state', 'pending_requests'];
   const bus = new BroadcastChannel('mock-supabase');
   const listeners = new Set();
-  const load = () => JSON.parse(localStorage.getItem(DB_KEY) || 'null') || { users: [], factors: [], tables: Object.fromEntries(Object.keys(TABLE_KEYS).map(t => [t, []])) };
+  const channels = new Set();
+  const control = { offline: false, muted: false, skewMs: 0, stats: { selects: 0, rows: 0, byTable: {} } };
+  const load = () => {
+    const db = JSON.parse(localStorage.getItem(DB_KEY) || 'null') || { users: [], factors: [], tables: {} };
+    Object.keys(TABLE_KEYS).forEach(t => { db.tables[t] ||= []; });
+    return db;
+  };
   const save = db => localStorage.setItem(DB_KEY, JSON.stringify(db));
   const uuid = () => crypto.randomUUID();
+  const serverNow = () => new Date(Date.now() + control.skewMs).toISOString();
+  const offlineError = () => ({ data: null, error: { message: 'TypeError: Failed to fetch' } });
   const emit = change => { bus.postMessage(change); setTimeout(() => listeners.forEach(fn => fn(change)), 10); };
   bus.onmessage = event => listeners.forEach(fn => fn(event.data));
 
@@ -25,9 +41,14 @@
 
   function createClient(url, anonKey, options = {}) {
     let currentUser = null;
+    let currentAal = 'aal1';
     const storageKey = options.auth?.storageKey;
-    if (options.auth?.persistSession !== false && storageKey) { try { currentUser = JSON.parse(localStorage.getItem(`mock-session-${storageKey}`) || 'null'); } catch { /* */ } }
-    const setUser = user => { currentUser = user; if (options.auth?.persistSession !== false && storageKey) localStorage.setItem(`mock-session-${storageKey}`, JSON.stringify(user)); };
+    const persist = options.auth?.persistSession !== false && storageKey;
+    const slotName = new URLSearchParams(location.search).get('mockSession');
+    const sessionSlot = `mock-session-${storageKey}${slotName ? `-${slotName}` : ''}`;
+    if (persist) { try { const saved = JSON.parse(localStorage.getItem(sessionSlot) || 'null'); if (saved) { currentUser = saved.user || saved; currentAal = saved.aal || 'aal1'; } } catch { /* */ } }
+    const store = () => { if (!persist) return; if (currentUser) localStorage.setItem(sessionSlot, JSON.stringify({ user: currentUser, aal: currentAal })); else localStorage.removeItem(sessionSlot); };
+    const setUser = user => { currentUser = user; currentAal = 'aal1'; store(); };
     const profileOf = db => currentUser && db.tables.profiles.find(p => p.user_id === currentUser.id);
     const isAdmin = db => profileOf(db)?.role === 'admin';
     const scheduleOk = db => { const s = db.tables.app_settings.find(r => r.key === 'worker_access')?.data; if (!s?.enabled) return true; const now = new Date(); const cur = now.getHours() * 60 + now.getMinutes(); const [sh, sm] = s.start.split(':').map(Number); const [eh, em] = s.end.split(':').map(Number); return s.days.includes(now.getDay()) && cur >= sh * 60 + sm && cur < eh * 60 + em; };
@@ -36,6 +57,7 @@
       if (!currentUser) return false;
       if (table === 'profiles') return row.user_id === currentUser.id || isAdmin(db);
       if (table === 'app_settings') return true;
+      if (table === 'deleted_rows') return isAdmin(db) || canRoute(db, row.route_id);
       const route = table === 'routes' ? row.id : row.route_id;
       return canRoute(db, route);
     };
@@ -51,6 +73,9 @@
       const builder = {
         select() { return builder; },
         eq(col, val) { filters.push(r => r[col] === val); return builder; },
+        gt(col, val) { filters.push(r => String(r[col] || '') > String(val)); return builder; },
+        order() { return builder; },
+        limit() { return builder; },
         in(col, vals) { filters.push(r => vals.includes(r[col])); return builder; },
         maybeSingle() { single = 'maybe'; return builder; },
         single() { single = 'one'; return builder; },
@@ -60,6 +85,7 @@
         then(resolve, reject) { return Promise.resolve().then(run).then(resolve, reject); },
       };
       function run() {
+        if (control.offline) return offlineError();
         if (!currentUser) return { data: null, error: { message: 'permission denied for table ' + table } };
         const db = load();
         const rows = db.tables[table];
@@ -67,6 +93,8 @@
         const match = r => filters.every(f => f(r));
         if (action === 'select') {
           const data = rows.filter(r => visible(db, table, r) && match(r)).map(r => structuredClone(r));
+          control.stats.selects += 1; control.stats.rows += data.length;
+          control.stats.byTable[table] = (control.stats.byTable[table] || 0) + data.length;
           if (single) return { data: data[0] || null, error: single === 'one' && !data[0] ? { message: 'not found' } : null };
           return { data, error: null };
         }
@@ -76,7 +104,7 @@
           list.forEach(r => {
             const index = rows.findIndex(x => x[key] === r[key]);
             if (index >= 0 && !writable(db, table, rows[index])) return;
-            const row = { ...(index >= 0 ? rows[index] : {}), ...structuredClone(r) };
+            const row = { ...(index >= 0 ? rows[index] : {}), ...structuredClone(r), updated_at: serverNow() };
             if (index >= 0) rows[index] = row; else rows.push(row);
             emit({ table, eventType: index >= 0 ? 'UPDATE' : 'INSERT', new: row });
           });
@@ -85,7 +113,7 @@
         if (action === 'update') {
           rows.filter(r => match(r) && visible(db, table, r)).forEach(r => {
             if (!writable(db, table, r)) return;
-            Object.assign(r, structuredClone(payload));
+            Object.assign(r, structuredClone(payload), { updated_at: serverNow() });
             emit({ table, eventType: 'UPDATE', new: r });
           });
           save(db); return { data: null, error: null };
@@ -93,6 +121,7 @@
         if (action === 'delete') {
           const removed = rows.filter(r => match(r) && writable(db, table, r) && (isAdmin(db)));
           db.tables[table] = rows.filter(r => !removed.includes(r));
+          if (LOGGED_DELETES.includes(table)) removed.forEach(r => db.tables.deleted_rows.push({ id: db.tables.deleted_rows.length + 1, table_name: table, row_key: String(r.id ?? r.route_id), route_id: table === 'routes' ? r.id : r.route_id, deleted_at: serverNow() }));
           removed.forEach(r => emit({ table, eventType: 'DELETE', old: { [key]: r[key] } }));
           save(db); return { data: null, error: null };
         }
@@ -120,7 +149,16 @@
       },
       async signOut() { setUser(null); return { error: null }; },
       async getUser() { return { data: { user: currentUser }, error: null }; },
+      async getSession() {
+        return { data: { session: currentUser ? { user: currentUser, access_token: `mock-${currentUser.id}`, expires_at: Math.floor(Date.now() / 1000) + 3600 } : null }, error: null };
+      },
       mfa: {
+        async getAuthenticatorAssuranceLevel() {
+          if (!currentUser) return { data: null, error: { message: 'no session' } };
+          const db = load();
+          const verified = db.factors.some(f => f.user_id === currentUser.id && f.status === 'verified');
+          return { data: { currentLevel: currentAal, nextLevel: verified ? 'aal2' : 'aal1' }, error: null };
+        },
         async listFactors() {
           const db = load();
           const all = db.factors.filter(f => f.user_id === currentUser?.id);
@@ -139,13 +177,15 @@
           const factor = db.factors.find(f => f.id === factorId && f.user_id === currentUser?.id);
           if (!factor) return { error: { message: 'factor not found' } };
           const step = Math.floor(Date.now() / 30000);
-          for (const s of [step, step - 1, step + 1]) if (await totp(factor.secret, s) === code) { factor.status = 'verified'; save(db); return { data: {}, error: null }; }
+          for (const s of [step, step - 1, step + 1]) if (await totp(factor.secret, s) === code) { factor.status = 'verified'; save(db); currentAal = 'aal2'; store(); return { data: {}, error: null }; }
           return { error: { message: 'Invalid TOTP code entered' } };
         },
       },
     };
 
     async function rpc(name, params) {
+      if (control.offline) return offlineError();
+      if (name === 'server_now') return currentUser ? { data: serverNow(), error: null } : { data: null, error: { message: 'permission denied' } };
       const db = load();
       const me = currentUser && db.users.find(u => u.id === currentUser.id);
       const clean = key => String(key || '').replace(/[^0-9a-z]/gi, '').toUpperCase();
@@ -186,7 +226,10 @@
 
     function channel() {
       const handlers = [];
+      let statusCb = () => {};
+      let joined = false;
       const listener = change => {
+        if (!joined || control.offline || control.muted) return;
         const db = load();
         const row = change.new || change.old;
         if (change.eventType !== 'DELETE' && !visible(db, change.table, row)) return;
@@ -194,15 +237,30 @@
       };
       const ch = {
         on(type, filter, cb) { handlers.push({ table: filter.table, cb }); return ch; },
-        subscribe() { listeners.add(listener); return ch; },
-        unsubscribe() { listeners.delete(listener); },
+        subscribe(cb) {
+          statusCb = cb || (() => {});
+          listeners.add(listener); channels.add(ch);
+          setTimeout(() => { if (!channels.has(ch)) return; if (control.offline) { statusCb('TIMED_OUT'); return; } joined = true; statusCb('SUBSCRIBED'); }, 30);
+          return ch;
+        },
+        unsubscribe() { listeners.delete(listener); if (channels.delete(ch)) { joined = false; statusCb('CLOSED'); } return Promise.resolve('ok'); },
+        _drop(status) { if (!joined) return; joined = false; statusCb(status); },
       };
       return ch;
     }
+    const removeChannel = ch => ch.unsubscribe();
 
-    return { auth, from: query, rpc, channel };
+    return { auth, from: query, rpc, channel, removeChannel };
   }
 
   window.supabase = { createClient };
-  window.__mockSupabase = { load, save, reset: () => localStorage.removeItem(DB_KEY) };
+  window.__mockSupabase = {
+    load, save, reset: () => localStorage.removeItem(DB_KEY), stats: control.stats,
+    resetStats() { control.stats.selects = 0; control.stats.rows = 0; control.stats.byTable = {}; },
+    setServerSkew(ms) { control.skewMs = ms; },
+    setOffline(on) { control.offline = on; if (on) channels.forEach(ch => ch._drop('CHANNEL_ERROR')); },
+    muteRealtime(on) { control.muted = on; },
+    dropRealtime(status = 'CHANNEL_ERROR') { channels.forEach(ch => ch._drop(status)); },
+    channelCount: () => channels.size,
+  };
 })();

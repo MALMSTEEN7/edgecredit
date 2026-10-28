@@ -121,6 +121,8 @@ export const security = {
   admin: { totpSecret: null, recoveryHashes: [], totpLastStep: -1, enrolledAt: null },
   // Horario de acceso de los trabajadores (ver domain/access-schedule.js).
   workerAccess: { enabled: false, days: [1, 2, 3, 4, 5, 6], start: '06:00', end: '20:00' },
+  // Cierre de sesión por inactividad (horas sin usar la app). Lo cambia el admin en Configuración.
+  session: { idleHours: 12 },
 };
 
 // Con servidor configurado, cada guardado avisa a la sincronización (core/sync.js).
@@ -144,6 +146,7 @@ export function hydrateBusinessData() {
     if (!saved || typeof saved !== 'object') return;
     if (saved.security?.admin && typeof saved.security.admin === 'object') Object.assign(security.admin, saved.security.admin);
     if (saved.security?.workerAccess && typeof saved.security.workerAccess === 'object') Object.assign(security.workerAccess, saved.security.workerAccess);
+    if (saved.security?.session && typeof saved.security.session === 'object') Object.assign(security.session, saved.security.session);
     if (Array.isArray(saved.personnel)) personnel.splice(0, personnel.length, ...saved.personnel);
     // Datos de una versión anterior (demostración/pruebas): se arranca desde cero. Se
     // conservan el personal, la seguridad y los nombres de las rutas creadas.
