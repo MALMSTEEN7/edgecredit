@@ -141,34 +141,9 @@
   background: var(--surface);
 }
 
-.network-indicator {
-  width: 38px;
-  height: 38px;
-  display: grid;
-  place-items: center;
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  background: var(--card);
-  color: #515A66;
-}
 
-.network-indicator svg {
-  width: 21px;
-  height: 21px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.8;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
 
-.network-indicator.is-online {
-  color: var(--success);
-}
 
-.network-indicator.is-offline {
-  color: #6B7280;
-}
 
 @media (min-width:768px) {
   .app-shell {
