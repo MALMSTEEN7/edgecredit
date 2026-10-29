@@ -220,3 +220,25 @@ button {
   line-height: 1;
   cursor: pointer;
 }
+
+/* Titileo suave de los indicadores de estado: se enciende y se desvanece sin parpadeo brusco.
+ * Lo usan el punto de conexión (solo cuando hay conexión) y el de solicitudes pendientes. */
+@keyframes status-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: .3; }
+}
+
+.sync-status[data-state="ok"] i,
+.sync-indicator:not(.is-offline) span,
+.network-indicator.is-online svg {
+  animation: status-blink 1.6s ease-in-out infinite;
+}
+
+.sync-status[data-state="reconnecting"] i { background: #F9A825; }
+.sync-indicator.is-offline span { background: var(--alert-color); }
+
+@media (prefers-reduced-motion: reduce) {
+  .sync-status i,
+  .sync-indicator span,
+  .network-indicator svg { animation: none !important; }
+}
