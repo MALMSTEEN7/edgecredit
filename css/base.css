@@ -229,8 +229,7 @@ button {
 }
 
 .sync-status[data-state="ok"] i,
-.sync-indicator:not(.is-offline) span,
-.network-indicator.is-online svg {
+.sync-indicator:not(.is-offline) span {
   animation: status-blink 1.6s ease-in-out infinite;
 }
 
@@ -239,6 +238,5 @@ button {
 
 @media (prefers-reduced-motion: reduce) {
   .sync-status i,
-  .sync-indicator span,
-  .network-indicator svg { animation: none !important; }
+  .sync-indicator span { animation: none !important; }
 }

@@ -10897,13 +10897,9 @@ function __mount_navigationModule() {
  * ui/network · Indicador de conectividad (online/offline).
  */
 
+// El ícono de wifi se quitó: la conexión la muestra el indicador de sincronización (core/sync.js).
 function updateNetworkStatus() {
-  const indicator = document.querySelector('#network-indicator');
   const online = navigator.onLine;
-  indicator.classList.toggle('is-online', online);
-  indicator.classList.toggle('is-offline', !online);
-  indicator.setAttribute('aria-label', online ? 'Con conexión' : 'Sin conexión');
-  indicator.title = online ? 'Con conexión' : 'Sin conexión';
   // «En línea» de la tarjeta de la base: refleja la conexión real (y titila mientras hay conexión).
   document.querySelectorAll('.sync-indicator').forEach(badge => {
     badge.classList.toggle('is-offline', !online);
