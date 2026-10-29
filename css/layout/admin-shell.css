@@ -546,6 +546,7 @@
 
 /* Otro cobro (no el seleccionado) tiene pendientes: un punto pequeño en la esquina del botón. */
 .route-picker-button.has-other-pending::after {
+  animation: status-blink 1.6s ease-in-out infinite;
   position: absolute;
   top: -3px;
   right: -3px;
@@ -626,6 +627,8 @@
   border-radius: 50%;
   background: var(--neon);
   box-shadow: 0 0 6px 1px rgba(61, 139, 255, .45);
+  /* Titila (con su halo) mientras haya una solicitud pendiente. */
+  animation: status-blink 1.6s ease-in-out infinite;
 }
 
 .neon-dot::before {
@@ -639,6 +642,11 @@
   content: "";
   pointer-events: none;
   transform: translate(-50%, -50%);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .neon-dot,
+  .route-picker-button.has-other-pending::after { animation: none; }
 }
 
 :root[data-theme="light"] .route-picker-list {
