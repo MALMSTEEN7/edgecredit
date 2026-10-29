@@ -26,6 +26,7 @@ import * as expensesModule from './js/features/worker/expenses.js';
 import * as homeModule from './js/features/worker/home.js';
 import * as locationModule from './js/features/worker/location.js';
 import * as adminShellModule from './js/features/admin/admin-shell.js';
+import * as routePickerModule from './js/features/admin/route-picker.js';
 import * as settlementModule from './js/features/admin/settlement.js';
 import * as reportsModule from './js/features/admin/reports.js';
 import * as pendingModule from './js/features/admin/pending.js';
@@ -88,6 +89,7 @@ const MODULES = [
   homeModule,
   locationModule,
   adminShellModule,
+  routePickerModule,
   settlementModule,
   reportsModule,
   pendingModule,

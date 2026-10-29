@@ -13,6 +13,7 @@ import { formatMoney, routeKey } from '../../shared/format.js';
 import { openCustomModal } from '../../ui/custom-modal.js';
 import { showToast } from '../../ui/toast.js';
 import { renderAdminRoute } from './admin-shell.js';
+import { renderRoutePicker } from './route-picker.js';
 
 const CLOSURE_FIELDS = ['collections', 'base', 'loans', 'expenses', 'otherExpenses', 'cashDelivered'];
 
@@ -32,7 +33,7 @@ function pendingRequestCount(routeId) {
 
 /**
  * Marca en el selector de cobros: ✓ ya cuadrado y enviado hoy (⚠ si cambió después) y un
- * punto azul 🔵 después del nombre si el cobro tiene solicitudes pendientes por revisar.
+ * punto azul neón después del nombre si el cobro tiene solicitudes pendientes por revisar.
  */
 export function refreshRouteOptions() {
   [...routeSelect.options].forEach(option => {
@@ -41,9 +42,13 @@ export function refreshRouteOptions() {
     const status = closureStatus(route);
     const name = route.name || option.value;
     const pending = pendingRequestCount(option.value);
-    option.textContent = `${status === 'closed' ? '✓ ' : status === 'changed' ? '⚠ ' : ''}${name}${pending ? ' 🔵' : ''}`;
-    option.title = pending ? `${pending} solicitud${pending === 1 ? '' : 'es'} pendiente${pending === 1 ? '' : 's'} por revisar` : '';
+    // El menú visible (route-picker.js) dibuja estos datos con el punto neón.
+    option.dataset.name = name;
+    option.dataset.status = status || '';
+    option.dataset.pending = String(pending);
+    option.textContent = `${status === 'closed' ? '✓ ' : status === 'changed' ? '⚠ ' : ''}${name}${pending ? ' (pendientes)' : ''}`;
   });
+  renderRoutePicker();
   const route = routeSettlements[routeSelect.value];
   const status = closureStatus(route);
   const badge = document.querySelector('#route-closure-status');

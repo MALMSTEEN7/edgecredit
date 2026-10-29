@@ -34,7 +34,7 @@
   <link rel="icon" href="icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="icon-192.png">
   <meta name="apple-mobile-web-app-capable" content="yes">
-  <link rel="stylesheet" id="app-styles" href="dist/styles.bundle.css?v=b221f3fd5c">
+  <link rel="stylesheet" id="app-styles" href="dist/styles.bundle.css?v=0e3e4455f9">
   <script>
     // Si hay una sesión guardada, al recargar se muestra «Cargando tu sesión…» en vez del
     // formulario de ingreso mientras la app la restaura (features/auth/session.js).
@@ -219,8 +219,12 @@
     <aside class="admin-sidebar" id="admin-sidebar" aria-label="Navegación de administración">
       <div class="admin-sidebar-head"><a class="brand" href="#admin" aria-label="EdgeCredit Administración"><span class="brand-mark" aria-hidden="true">E</span><span>Edge<span class="brand-accent">Credit</span></span></a><button class="admin-menu-close" id="admin-menu-close" type="button" aria-label="Cerrar menú">×</button></div>
       <div class="admin-nav-caption">OPERACIÓN</div>
-      <label class="route-label" for="route-select">Zonas / Rutas</label>
-      <select id="route-select" class="route-select"></select>
+      <label class="route-label" id="route-picker-label">Zonas / Rutas</label>
+      <select id="route-select" class="route-select route-select-native" tabindex="-1" aria-hidden="true"></select>
+      <div class="route-picker" id="route-picker">
+        <button type="button" class="route-picker-button" id="route-picker-button" aria-haspopup="listbox" aria-expanded="false" aria-controls="route-picker-list"><span class="route-picker-current"></span><span class="route-picker-chevron" aria-hidden="true"></span></button>
+        <ul class="route-picker-list" id="route-picker-list" role="listbox" aria-labelledby="route-picker-label" hidden></ul>
+      </div>
       <p class="route-empty-hint" id="route-empty-hint" hidden>Aún no hay rutas. Se crean al registrar un trabajador.</p>
       <p class="route-closure-status" id="route-closure-status" role="status" aria-live="polite" hidden></p>
       <button id="admin-global-directory" class="admin-directory-link" type="button"><span aria-hidden="true">▤</span> Directorio de Ruta</button>
@@ -508,7 +512,7 @@
     // al cambiar el sello, el navegador descarga el JS/CSS nuevo en vez de usar su caché.
     // Para desarrollar con los módulos sueltos, abre index.html?dev desde un servidor local.
     (() => {
-      const APP_VERSION = 'b221f3fd5c';
+      const APP_VERSION = '0e3e4455f9';
       const dev = new URLSearchParams(location.search).has('dev') && location.protocol !== 'file:';
       if (dev) {
         document.getElementById('app-styles').href = 'styles.css';
