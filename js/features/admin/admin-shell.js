@@ -55,6 +55,8 @@ export function updateRouteAvailability() {
   document.body.classList.toggle('no-routes', empty);
   routeSelect.disabled = empty;
   routeSelect.hidden = empty;
+  const picker = document.querySelector('#route-picker');
+  if (picker) picker.hidden = empty;
   const hint = document.querySelector('#route-empty-hint');
   if (hint) hint.hidden = !empty;
   const directory = document.querySelector('#admin-global-directory');
