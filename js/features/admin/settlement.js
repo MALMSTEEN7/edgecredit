@@ -4,12 +4,12 @@
 
 import { adminFeedback, routeSelect, settlementInputs } from '../../core/dom.js';
 import { state } from '../../core/state.js';
-import { clients, persistBusinessData, routeSettlements } from '../../core/store.js';
+import { clients, pendingRequests, persistBusinessData, routeSettlements } from '../../core/store.js';
 import { carriedBase, mondayBaseFor, otherExpensesNote, paymentStamp, pendingRoutePayments, recordClosure, setOtherExpensesNote } from '../../domain/ledger.js';
 import { insuranceCollectedOn } from '../../domain/insurance.js';
 import { cardLabel } from '../../domain/person-cards.js';
 import { localDateISO } from '../../shared/dates.js';
-import { formatMoney } from '../../shared/format.js';
+import { formatMoney, routeKey } from '../../shared/format.js';
 import { openCustomModal } from '../../ui/custom-modal.js';
 import { showToast } from '../../ui/toast.js';
 import { renderAdminRoute } from './admin-shell.js';
@@ -25,13 +25,24 @@ function closureStatus(route) {
   return CLOSURE_FIELDS.every(field => Number(route[field] || 0) === Number(reference?.[field] || 0)) ? 'closed' : 'changed';
 }
 
-/** Marca con ✓ en el selector los cobros ya cuadrados y enviados hoy (⚠ si cambiaron después). */
+/** Solicitudes del trabajador de ese cobro que esperan revisión del admin. */
+function pendingRequestCount(routeId) {
+  return pendingRequests.filter(request => request?.status === 'pending' && routeKey(request.routeId || request.route) === routeId).length;
+}
+
+/**
+ * Marca en el selector de cobros: ✓ ya cuadrado y enviado hoy (⚠ si cambió después) y un
+ * punto azul 🔵 después del nombre si el cobro tiene solicitudes pendientes por revisar.
+ */
 export function refreshRouteOptions() {
   [...routeSelect.options].forEach(option => {
     const route = routeSettlements[option.value];
     if (!route) return;
     const status = closureStatus(route);
-    option.textContent = status === 'closed' ? `✓ ${route.name}` : status === 'changed' ? `⚠ ${route.name}` : route.name;
+    const name = route.name || option.value;
+    const pending = pendingRequestCount(option.value);
+    option.textContent = `${status === 'closed' ? '✓ ' : status === 'changed' ? '⚠ ' : ''}${name}${pending ? ' 🔵' : ''}`;
+    option.title = pending ? `${pending} solicitud${pending === 1 ? '' : 'es'} pendiente${pending === 1 ? '' : 's'} por revisar` : '';
   });
   const route = routeSettlements[routeSelect.value];
   const status = closureStatus(route);

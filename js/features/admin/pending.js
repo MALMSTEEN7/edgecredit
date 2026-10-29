@@ -9,6 +9,7 @@ import { syncCancelledCard } from '../../domain/accounting.js';
 import { paymentCycleIndex, updatePaidAmountTotal } from '../../domain/loan-schedule.js';
 import { financeCard, recordRetanqueoInRoute, retanqueoCard } from '../../domain/restructure.js';
 import { renderAdminRoute } from './admin-shell.js';
+import { refreshRouteOptions } from './settlement.js';
 import { openClient, renderHistory } from '../clients/client-detail.js';
 import { renderClientRows } from '../clients/directory.js';
 import { renderRouteBuilder } from '../daily-route/daily-route.js';
@@ -47,6 +48,8 @@ function correctedPayment(client, request) {
 }
 
 export function renderPendingRequests() {
+  // El punto azul del selector de cobros se actualiza con cada cambio de solicitudes.
+  refreshRouteOptions();
   pendingList.replaceChildren();
   const selectedRoute = routeSelect.value;
   const openRequests = pendingRequests.filter(request => request.status === 'pending' && routeKey(request.routeId || request.route) === selectedRoute);
