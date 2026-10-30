@@ -208,6 +208,17 @@ function setTodayRouteOrder(order, route = state.workerRoute) {
   if (!state.dailyRouteOrder[route].length) delete state.dailyRouteDates[route];
 }
 
+/**
+ * Mueve un cliente dentro de la ruta armada (desde el Inicio): queda antes de `beforeId`, o al
+ * final si es null. Es la misma lista de «Ruta diaria», así que el orden se ve igual en ambas.
+ */
+export function moveInRoute(id, beforeId, route = state.workerRoute) {
+  const order = [...storedRouteOrder(route)];
+  if (!order.includes(id) || id === beforeId) return false;
+  setTodayRouteOrder(moveId(order, id, beforeId), route);
+  return true;
+}
+
 /** Día de la semana y fecha para la que ya se puede armar la ruta: «miércoles 29 de octubre». */
 function planDayLabel(route = state.workerRoute) {
   return new Date(`${routePlanDate(route)}T12:00:00`).toLocaleDateString('es-CO', { weekday: 'long', day: 'numeric', month: 'long' });

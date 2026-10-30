@@ -5,9 +5,10 @@
 
 import { state } from '../../core/state.js';
 import { openClient } from '../clients/client-detail.js';
-import { hasBuiltRoute, markNoPayment, routeReadyMessage } from '../daily-route/daily-route.js';
+import { hasBuiltRoute, markNoPayment, moveInRoute, renderRouteBuilder, routeReadyMessage } from '../daily-route/daily-route.js';
 import { openPayment } from '../payments/payment.js';
-import { clients, routeSettlements } from '../../core/store.js';
+import { clients, persistBusinessData, routeSettlements } from '../../core/store.js';
+import { filterClientCards } from '../clients/directory.js';
 import { openCustomModal } from '../../ui/custom-modal.js';
 import { showView } from '../../ui/navigation.js';
 
@@ -50,6 +51,16 @@ export function updateCashChip(totalText) {
 export function renderHomeRowActions() {
   const rows = [...document.querySelectorAll('#inicio .home-client-row')];
   rows.forEach(row => {
+    // Asa para cambiar el orden de los clientes (como en «Ruta diaria»).
+    if (!row.querySelector('.home-drag-handle')) {
+      const handle = document.createElement('span');
+      handle.className = 'home-drag-handle';
+      handle.dataset.homeAction = 'drag';
+      handle.textContent = '⠿';
+      handle.title = 'Mantén presionado y arrastra para cambiar el orden';
+      handle.setAttribute('aria-hidden', 'true');
+      row.querySelector('.home-row-open')?.before(handle);
+    }
     if (row.querySelector('.home-row-actions')) return;
     const actions = document.createElement('div');
     actions.className = 'home-row-actions';
@@ -81,6 +92,71 @@ export function renderHomeRowActions() {
   document.querySelector('#home-route-hint').hidden = searching || organized || state.userRole !== 'worker';
 }
 
+/**
+ * Ordenar los clientes del Inicio arrastrando el asa ⠿ (dedo o mouse). Se suelta antes del
+ * cliente de abajo o después, según la mitad de la fila; el orden se guarda en la ruta del día.
+ */
+let homeDrag = null;
+
+function homeRowsVisible() {
+  return [...document.querySelectorAll('#inicio .home-client-row')].filter(row => !row.hidden);
+}
+
+function homeDropSpot(x, y) {
+  const row = document.elementFromPoint(x, y)?.closest('#inicio .home-client-row');
+  if (!row || row.hidden) return null;
+  const rect = row.getBoundingClientRect();
+  const after = y > rect.top + rect.height / 2;
+  const visible = homeRowsVisible();
+  const next = after ? visible[visible.indexOf(row) + 1] : row;
+  return { row, after, beforeId: next ? next.dataset.client : null };
+}
+
+function clearHomeDropMarks() {
+  document.querySelectorAll('#inicio .home-client-row.is-drop-before, #inicio .home-client-row.is-drop-after').forEach(row => row.classList.remove('is-drop-before', 'is-drop-after'));
+}
+
+function mountHomeReorder() {
+  const list = document.querySelector('#inicio .client-list');
+  list.addEventListener('pointerdown', event => {
+    const handle = event.target.closest('.home-drag-handle');
+    const row = handle?.closest('.home-client-row');
+    if (!row || state.userRole !== 'worker' || !hasBuiltRoute()) return;
+    event.preventDefault();
+    handle.setPointerCapture?.(event.pointerId);
+    homeDrag = { id: row.dataset.client, pointerId: event.pointerId, startY: event.clientY, moved: false, row };
+  });
+  window.addEventListener('pointermove', event => {
+    if (!homeDrag || event.pointerId !== homeDrag.pointerId) return;
+    if (!homeDrag.moved && Math.abs(event.clientY - homeDrag.startY) > 6) { homeDrag.moved = true; homeDrag.row.classList.add('is-dragging'); }
+    if (!homeDrag.moved) return;
+    event.preventDefault();
+    clearHomeDropMarks();
+    const spot = homeDropSpot(event.clientX, event.clientY);
+    if (spot && spot.row !== homeDrag.row) spot.row.classList.add(spot.after ? 'is-drop-after' : 'is-drop-before');
+    // Cerca de los bordes de la pantalla se desplaza sola para llegar a clientes lejanos.
+    if (event.clientY < 70) window.scrollBy(0, -12);
+    else if (event.clientY > window.innerHeight - 90) window.scrollBy(0, 12);
+  }, { passive: false });
+  const finish = event => {
+    if (!homeDrag || event.pointerId !== homeDrag.pointerId) return;
+    const drag = homeDrag;
+    homeDrag = null;
+    drag.row.classList.remove('is-dragging');
+    clearHomeDropMarks();
+    if (!drag.moved || event.type === 'pointercancel') return;
+    const spot = homeDropSpot(event.clientX, event.clientY);
+    if (!spot || spot.row === drag.row) return;
+    if (moveInRoute(drag.id, spot.beforeId === drag.id ? null : spot.beforeId)) {
+      persistBusinessData();
+      filterClientCards();
+      renderRouteBuilder();
+    }
+  };
+  window.addEventListener('pointerup', finish);
+  window.addEventListener('pointercancel', finish);
+}
+
 /** Registra los listeners del módulo. Se invoca una sola vez desde app.js. */
 export function mount() {
   PANELS.forEach(([toggleSelector, panelSelector]) => {
@@ -90,9 +166,10 @@ export function mount() {
       if (open) document.querySelector(panelSelector).scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     });
   });
+  mountHomeReorder();
   document.querySelector('#inicio .client-list').addEventListener('click', event => {
     const action = event.target.closest('[data-home-action]');
-    if (!action) return;
+    if (!action || action.dataset.homeAction === 'drag') return;
     const clientId = action.closest('[data-client]')?.dataset.client;
     const client = clients[clientId];
     if (!client) return;
