@@ -16,6 +16,7 @@ import { formatMoney } from '../../shared/format.js';
 import { compressClientPhoto } from '../../shared/media.js';
 import { showToast } from '../../ui/toast.js';
 import { showView } from '../../ui/navigation.js';
+import { openCustomModal } from '../../ui/custom-modal.js';
 import { closeVisit } from '../daily-route/daily-route.js';
 
 /** Comprobante elegido: captura de la galería («Subir captura») o foto («Tomar foto»). */
@@ -45,6 +46,25 @@ function updatePaymentMethod() {
   const isTransfer = document.querySelector('input[name="method"]:checked')?.value === 'transfer';
   voucherField.hidden = !isTransfer;
   voucherFile.required = false;
+}
+
+/** El abono canceló la cartulina: ¿renovar el crédito? (Renovar abre el flujo de la ficha.) */
+function offerRenewal(clientId, returnHome) {
+  const client = clients[clientId];
+  if (!client) return;
+  // Cerrar con la ✕ (o con «atrás») cuenta como «No».
+  const closeButton = document.querySelector('#custom-modal-close');
+  const goHome = () => { if (returnHome) showView('inicio'); };
+  closeButton.addEventListener('click', goHome, { once: true });
+  openCustomModal({
+    title: 'Cartulina cancelada',
+    description: `Con este abono ${client.name} pagó toda la deuda. ¿Desea renovarle el crédito?`,
+    submitLabel: 'Sí, renovar',
+    cancelLabel: returnHome ? 'No, volver al inicio' : 'No renovar',
+    // Se abre después de que esta ventana se cierre, para que no la cierre a ella.
+    onSubmit: () => { closeButton.removeEventListener('click', goHome); window.setTimeout(() => document.querySelector('#renew-client')?.click(), 0); },
+    onCancel: () => { closeButton.removeEventListener('click', goHome); goHome(); },
+  });
 }
 
 /** Registra los listeners del módulo. Se invoca una sola vez desde app.js. */
@@ -140,7 +160,10 @@ export function mount() {
     const backView = state.previousView;
     openClient(state.activeClient);
     state.previousView = backView;
-    if (returnHome) showView('inicio');
+    // Si con este abono pagó toda la deuda, se pregunta si desea renovar; si no, se cierra y
+    // (si el abono se hizo desde el Inicio) se vuelve al Inicio.
+    if (Number(client.balance) <= 0) offerRenewal(state.activeClient, returnHome);
+    else if (returnHome) showView('inicio');
     showToast(missingTransferEvidence ? `Abono de ${formatMoney(amount)} registrado para ${client.name}. Falta adjuntar la evidencia.` : `Abono de ${formatMoney(amount)} registrado para ${client.name}.`);
   });
   const voucherCamera = document.querySelector('#voucher-camera');

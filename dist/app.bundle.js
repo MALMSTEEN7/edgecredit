@@ -6751,6 +6751,15 @@ function createMethodIcon(method) {
   return icon;
 }
 
+/** Fecha de vencimiento de la cartulina (inicio del crédito + días del plazo), o ''. */
+function creditDueDate(client) {
+  const totalDays = Number(client.totalDays) || 0;
+  if (!client.creditStartDate || !totalDays) return '';
+  const due = new Date(`${client.creditStartDate}T12:00:00`);
+  due.setDate(due.getDate() + totalDays);
+  return localDateISO(due);
+}
+
 /** Fecha corta del historial, como en la tarjeta de la ruta diaria: «24-oct-26». */
 function shortHistoryDate(iso) {
   const [year, month, day] = String(iso || '').split('-').map(Number);
@@ -7064,14 +7073,18 @@ function openClient(clientId) {
   document.querySelector('.progress-ring').style.setProperty('--progress', `${progressPercent * 3.6}deg`);
   document.querySelector('.progress-center > strong').textContent = `${progressPercent}%`;
   document.querySelector('.progress-ring').setAttribute('aria-label', `${progressPercent} por ciento pagado`);
+  // Fecha en que se entregó el crédito y fecha en que vence (inicio + días del plazo).
   const day = creditDay(client);
-  document.querySelector('#route-day').textContent = `Día ${day} / ${client.totalDays} días`;
   const overdueDays = Math.max(0, day - client.totalDays);
-  // Admin y trabajador ven lo mismo: los días que faltan o, ya vencida, los días de mora.
   const settled = Number(client.balance) <= 0;
-  document.querySelector('#route-days-label').textContent = settled ? 'Cartulina pagada' : overdueDays > 0 ? 'Días de mora' : 'Días restantes para finalizar';
-  document.querySelector('#route-days-left').textContent = settled ? `Pagada en ${day} ${day === 1 ? 'día' : 'días'}` : overdueDays > 0 ? `${overdueDays} ${overdueDays === 1 ? 'día' : 'días'}` : `Faltan ${Math.max(0, client.totalDays - day)} días`;
-  document.querySelector('#route-days-left').classList.toggle('is-overdue', !settled && overdueDays > 0);
+  const dueISO = creditDueDate(client);
+  document.querySelector('#route-day').textContent = client.creditStartDate ? formatDate(client.creditStartDate) : '—';
+  document.querySelector('#route-days-label').textContent = 'F. de vencimiento';
+  const due = document.querySelector('#route-days-left');
+  due.textContent = dueISO ? formatDate(dueISO) : '—';
+  // Vencida y sin pagar: la fecha en rojo y, al tocarla, cuántos días de mora lleva.
+  due.classList.toggle('is-overdue', !settled && overdueDays > 0);
+  due.title = !settled && overdueDays > 0 ? `Vencida hace ${overdueDays} ${overdueDays === 1 ? 'día' : 'días'}` : settled ? 'Cartulina pagada' : `Faltan ${Math.max(0, client.totalDays - day)} días`;
   document.querySelector('#detail-installment').textContent = formatMoney(client.installment);
   document.querySelector('#detail-id').textContent = client.id;
   document.querySelector('#detail-address').textContent = client.address;
@@ -8695,6 +8708,17 @@ function setTodayRouteOrder(order, route = state.workerRoute) {
   if (!state.dailyRouteOrder[route].length) delete state.dailyRouteDates[route];
 }
 
+/**
+ * Mueve un cliente dentro de la ruta armada (desde el Inicio): queda antes de `beforeId`, o al
+ * final si es null. Es la misma lista de «Ruta diaria», así que el orden se ve igual en ambas.
+ */
+function moveInRoute(id, beforeId, route = state.workerRoute) {
+  const order = [...storedRouteOrder(route)];
+  if (!order.includes(id) || id === beforeId) return false;
+  setTodayRouteOrder(moveId(order, id, beforeId), route);
+  return true;
+}
+
 /** Día de la semana y fecha para la que ya se puede armar la ruta: «miércoles 29 de octubre». */
 function planDayLabel(route = state.workerRoute) {
   return new Date(`${routePlanDate(route)}T12:00:00`).toLocaleDateString('es-CO', { weekday: 'long', day: 'numeric', month: 'long' });
@@ -9213,6 +9237,7 @@ function __mount_operationsListModule() {
 
 
 
+
 /** Comprobante elegido: captura de la galería («Subir captura») o foto («Tomar foto»). */
 function chosenVoucher() {
   return voucherFile.files?.[0] || document.querySelector('#voucher-camera').files?.[0] || null;
@@ -9240,6 +9265,25 @@ function updatePaymentMethod() {
   const isTransfer = document.querySelector('input[name="method"]:checked')?.value === 'transfer';
   voucherField.hidden = !isTransfer;
   voucherFile.required = false;
+}
+
+/** El abono canceló la cartulina: ¿renovar el crédito? (Renovar abre el flujo de la ficha.) */
+function offerRenewal(clientId, returnHome) {
+  const client = clients[clientId];
+  if (!client) return;
+  // Cerrar con la ✕ (o con «atrás») cuenta como «No».
+  const closeButton = document.querySelector('#custom-modal-close');
+  const goHome = () => { if (returnHome) showView('inicio'); };
+  closeButton.addEventListener('click', goHome, { once: true });
+  openCustomModal({
+    title: 'Cartulina cancelada',
+    description: `Con este abono ${client.name} pagó toda la deuda. ¿Desea renovarle el crédito?`,
+    submitLabel: 'Sí, renovar',
+    cancelLabel: returnHome ? 'No, volver al inicio' : 'No renovar',
+    // Se abre después de que esta ventana se cierre, para que no la cierre a ella.
+    onSubmit: () => { closeButton.removeEventListener('click', goHome); window.setTimeout(() => document.querySelector('#renew-client')?.click(), 0); },
+    onCancel: () => { closeButton.removeEventListener('click', goHome); goHome(); },
+  });
 }
 
 /** Registra los listeners del módulo. Se invoca una sola vez desde app.js. */
@@ -9335,7 +9379,10 @@ function __mount_paymentModule() {
     const backView = state.previousView;
     openClient(state.activeClient);
     state.previousView = backView;
-    if (returnHome) showView('inicio');
+    // Si con este abono pagó toda la deuda, se pregunta si desea renovar; si no, se cierra y
+    // (si el abono se hizo desde el Inicio) se vuelve al Inicio.
+    if (Number(client.balance) <= 0) offerRenewal(state.activeClient, returnHome);
+    else if (returnHome) showView('inicio');
     showToast(missingTransferEvidence ? `Abono de ${formatMoney(amount)} registrado para ${client.name}. Falta adjuntar la evidencia.` : `Abono de ${formatMoney(amount)} registrado para ${client.name}.`);
   });
   const voucherCamera = document.querySelector('#voucher-camera');
@@ -9620,6 +9667,7 @@ function __mount_expensesModule() {
 
 
 
+
 const PANELS = [['#toggle-home-cash', '#home-cash-panel'], ['#toggle-home-metrics', '#home-metrics-panel']];
 
 function setPanel(toggleSelector, panelSelector, open) {
@@ -9659,6 +9707,16 @@ function updateCashChip(totalText) {
 function renderHomeRowActions() {
   const rows = [...document.querySelectorAll('#inicio .home-client-row')];
   rows.forEach(row => {
+    // Asa para cambiar el orden de los clientes (como en «Ruta diaria»).
+    if (!row.querySelector('.home-drag-handle')) {
+      const handle = document.createElement('span');
+      handle.className = 'home-drag-handle';
+      handle.dataset.homeAction = 'drag';
+      handle.textContent = '⠿';
+      handle.title = 'Mantén presionado y arrastra para cambiar el orden';
+      handle.setAttribute('aria-hidden', 'true');
+      row.querySelector('.home-row-open')?.before(handle);
+    }
     if (row.querySelector('.home-row-actions')) return;
     const actions = document.createElement('div');
     actions.className = 'home-row-actions';
@@ -9690,6 +9748,71 @@ function renderHomeRowActions() {
   document.querySelector('#home-route-hint').hidden = searching || organized || state.userRole !== 'worker';
 }
 
+/**
+ * Ordenar los clientes del Inicio arrastrando el asa ⠿ (dedo o mouse). Se suelta antes del
+ * cliente de abajo o después, según la mitad de la fila; el orden se guarda en la ruta del día.
+ */
+let homeDrag = null;
+
+function homeRowsVisible() {
+  return [...document.querySelectorAll('#inicio .home-client-row')].filter(row => !row.hidden);
+}
+
+function homeDropSpot(x, y) {
+  const row = document.elementFromPoint(x, y)?.closest('#inicio .home-client-row');
+  if (!row || row.hidden) return null;
+  const rect = row.getBoundingClientRect();
+  const after = y > rect.top + rect.height / 2;
+  const visible = homeRowsVisible();
+  const next = after ? visible[visible.indexOf(row) + 1] : row;
+  return { row, after, beforeId: next ? next.dataset.client : null };
+}
+
+function clearHomeDropMarks() {
+  document.querySelectorAll('#inicio .home-client-row.is-drop-before, #inicio .home-client-row.is-drop-after').forEach(row => row.classList.remove('is-drop-before', 'is-drop-after'));
+}
+
+function mountHomeReorder() {
+  const list = document.querySelector('#inicio .client-list');
+  list.addEventListener('pointerdown', event => {
+    const handle = event.target.closest('.home-drag-handle');
+    const row = handle?.closest('.home-client-row');
+    if (!row || state.userRole !== 'worker' || !hasBuiltRoute()) return;
+    event.preventDefault();
+    handle.setPointerCapture?.(event.pointerId);
+    homeDrag = { id: row.dataset.client, pointerId: event.pointerId, startY: event.clientY, moved: false, row };
+  });
+  window.addEventListener('pointermove', event => {
+    if (!homeDrag || event.pointerId !== homeDrag.pointerId) return;
+    if (!homeDrag.moved && Math.abs(event.clientY - homeDrag.startY) > 6) { homeDrag.moved = true; homeDrag.row.classList.add('is-dragging'); }
+    if (!homeDrag.moved) return;
+    event.preventDefault();
+    clearHomeDropMarks();
+    const spot = homeDropSpot(event.clientX, event.clientY);
+    if (spot && spot.row !== homeDrag.row) spot.row.classList.add(spot.after ? 'is-drop-after' : 'is-drop-before');
+    // Cerca de los bordes de la pantalla se desplaza sola para llegar a clientes lejanos.
+    if (event.clientY < 70) window.scrollBy(0, -12);
+    else if (event.clientY > window.innerHeight - 90) window.scrollBy(0, 12);
+  }, { passive: false });
+  const finish = event => {
+    if (!homeDrag || event.pointerId !== homeDrag.pointerId) return;
+    const drag = homeDrag;
+    homeDrag = null;
+    drag.row.classList.remove('is-dragging');
+    clearHomeDropMarks();
+    if (!drag.moved || event.type === 'pointercancel') return;
+    const spot = homeDropSpot(event.clientX, event.clientY);
+    if (!spot || spot.row === drag.row) return;
+    if (moveInRoute(drag.id, spot.beforeId === drag.id ? null : spot.beforeId)) {
+      persistBusinessData();
+      filterClientCards();
+      renderRouteBuilder();
+    }
+  };
+  window.addEventListener('pointerup', finish);
+  window.addEventListener('pointercancel', finish);
+}
+
 /** Registra los listeners del módulo. Se invoca una sola vez desde app.js. */
 function __mount_homeModule() {
   PANELS.forEach(([toggleSelector, panelSelector]) => {
@@ -9699,9 +9822,10 @@ function __mount_homeModule() {
       if (open) document.querySelector(panelSelector).scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     });
   });
+  mountHomeReorder();
   document.querySelector('#inicio .client-list').addEventListener('click', event => {
     const action = event.target.closest('[data-home-action]');
-    if (!action) return;
+    if (!action || action.dataset.homeAction === 'drag') return;
     const clientId = action.closest('[data-client]')?.dataset.client;
     const client = clients[clientId];
     if (!client) return;

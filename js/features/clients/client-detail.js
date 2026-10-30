@@ -65,6 +65,15 @@ function createMethodIcon(method) {
   return icon;
 }
 
+/** Fecha de vencimiento de la cartulina (inicio del crédito + días del plazo), o ''. */
+function creditDueDate(client) {
+  const totalDays = Number(client.totalDays) || 0;
+  if (!client.creditStartDate || !totalDays) return '';
+  const due = new Date(`${client.creditStartDate}T12:00:00`);
+  due.setDate(due.getDate() + totalDays);
+  return localDateISO(due);
+}
+
 /** Fecha corta del historial, como en la tarjeta de la ruta diaria: «24-oct-26». */
 function shortHistoryDate(iso) {
   const [year, month, day] = String(iso || '').split('-').map(Number);
@@ -378,14 +387,18 @@ export function openClient(clientId) {
   document.querySelector('.progress-ring').style.setProperty('--progress', `${progressPercent * 3.6}deg`);
   document.querySelector('.progress-center > strong').textContent = `${progressPercent}%`;
   document.querySelector('.progress-ring').setAttribute('aria-label', `${progressPercent} por ciento pagado`);
+  // Fecha en que se entregó el crédito y fecha en que vence (inicio + días del plazo).
   const day = creditDay(client);
-  document.querySelector('#route-day').textContent = `Día ${day} / ${client.totalDays} días`;
   const overdueDays = Math.max(0, day - client.totalDays);
-  // Admin y trabajador ven lo mismo: los días que faltan o, ya vencida, los días de mora.
   const settled = Number(client.balance) <= 0;
-  document.querySelector('#route-days-label').textContent = settled ? 'Cartulina pagada' : overdueDays > 0 ? 'Días de mora' : 'Días restantes para finalizar';
-  document.querySelector('#route-days-left').textContent = settled ? `Pagada en ${day} ${day === 1 ? 'día' : 'días'}` : overdueDays > 0 ? `${overdueDays} ${overdueDays === 1 ? 'día' : 'días'}` : `Faltan ${Math.max(0, client.totalDays - day)} días`;
-  document.querySelector('#route-days-left').classList.toggle('is-overdue', !settled && overdueDays > 0);
+  const dueISO = creditDueDate(client);
+  document.querySelector('#route-day').textContent = client.creditStartDate ? formatDate(client.creditStartDate) : '—';
+  document.querySelector('#route-days-label').textContent = 'F. de vencimiento';
+  const due = document.querySelector('#route-days-left');
+  due.textContent = dueISO ? formatDate(dueISO) : '—';
+  // Vencida y sin pagar: la fecha en rojo y, al tocarla, cuántos días de mora lleva.
+  due.classList.toggle('is-overdue', !settled && overdueDays > 0);
+  due.title = !settled && overdueDays > 0 ? `Vencida hace ${overdueDays} ${overdueDays === 1 ? 'día' : 'días'}` : settled ? 'Cartulina pagada' : `Faltan ${Math.max(0, client.totalDays - day)} días`;
   document.querySelector('#detail-installment').textContent = formatMoney(client.installment);
   document.querySelector('#detail-id').textContent = client.id;
   document.querySelector('#detail-address').textContent = client.address;

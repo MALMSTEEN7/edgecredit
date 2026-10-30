@@ -1129,3 +1129,35 @@
   color: var(--warning, #f5a623);
   font-weight: 700;
 }
+
+/* Asa para ordenar los clientes del Inicio (como en «Ruta diaria»). */
+.home-drag-handle {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 36px;
+  color: var(--muted);
+  font-size: 19px;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.home-drag-handle:active {
+  cursor: grabbing;
+}
+
+.view#inicio .home-client-row.is-dragging {
+  opacity: .5;
+}
+
+/* Dónde va a quedar: una línea azul arriba o abajo de la fila. */
+.view#inicio .home-client-row.is-drop-before {
+  box-shadow: 0 -3px 0 0 var(--primary);
+}
+
+.view#inicio .home-client-row.is-drop-after {
+  box-shadow: 0 3px 0 0 var(--primary);
+}
