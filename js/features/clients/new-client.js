@@ -16,7 +16,7 @@ import { generalInsuranceAmount, resolveInsurance } from '../../domain/insurance
 import { MAX_ACTIVE_CARDS_PER_PERSON, activeCardIds, canAddCard, personCardIds, personKey } from '../../domain/person-cards.js';
 import { localDateISO } from '../../shared/dates.js';
 import { PAYDAY_OPTIONS, nextWeekdayDate, shiftDays, weekdayOf } from '../../domain/card-color.js';
-import { formatMoney, normalizeSearch } from '../../shared/format.js';
+import { formatDate, formatMoney, normalizeSearch } from '../../shared/format.js';
 import { compressClientPhoto } from '../../shared/media.js';
 import { LOCATION_FAILURE_LABELS, hasCoordinates, isApproximateLocation, locateDevice } from '../../shared/geo.js';
 import { showToast } from '../../ui/toast.js';
@@ -208,6 +208,7 @@ function updateSundayPayday() {
 function openNewClientModal() {
   if (state.userRole !== 'worker' && state.userRole !== 'admin') return;
   newClientError.textContent = '';
+  hideExistingSuggestions();
   newClientForm.reset();
   document.querySelector('#client-photo-preview').hidden = true;
   document.querySelector('#client-photo-preview').removeAttribute('src');
@@ -289,6 +290,7 @@ function openLinkedModal(sourceId, mode) {
 }
 
 export function closeNewClientModal() {
+  hideExistingSuggestions();
   newClientModal.hidden = true;
   newClientModal.classList.remove('active');
   newClientForm.reset();
@@ -449,8 +451,113 @@ let creatingClient = false; // evita crear dos veces si pulsan «Crear» mientra
 export function onClientRenewed(callback) { onRenewed = callback; }
 
 /** Registra los listeners del módulo. Se invoca una sola vez desde app.js. */
+// ── Persona que ya existe en el sistema ──
+// Al escribir la cédula o el nombre de un cliente nuevo, debajo del campo aparecen las personas
+// que ya están registradas. Al elegir una se cargan todos sus datos:
+//  - si su cartulina está cancelada, se abre como «Renovar crédito» (misma foto, dirección,
+//    ubicación y referencias; queda enlazada a la cartulina anterior);
+//  - si tiene cartulinas activas, como «Otra cartulina» (o se avisa si ya tiene el máximo).
+
+/** Personas registradas cuyo nombre o cédula coincide con lo escrito (máximo 5). */
+function existingPeople(field, text) {
+  const digits = String(text || '').replace(/\D/g, '');
+  const words = normalizeSearch(text).trim().split(/\s+/).filter(Boolean);
+  if (field === 'idNumber' ? digits.length < 4 : words.join('').length < 3) return [];
+  const seen = new Set();
+  const people = [];
+  Object.keys(clients).forEach(id => {
+    const client = clients[id];
+    const key = personKey(client?.id);
+    if (!client || !key || seen.has(key)) return;
+    const matches = field === 'idNumber'
+      ? String(client.id || '').replace(/\D/g, '').includes(digits)
+      : words.every(word => normalizeSearch(client.name).includes(word));
+    if (!matches) return;
+    seen.add(key);
+    const cards = personCardIds(clients, client.id);
+    const latest = clients[cards.at(-1)];
+    const active = activeCardIds(clients, client.id);
+    const renewable = cards.filter(cardId => canRenew(cardId)).at(-1) || null;
+    const person = { latest, active: active.length, renewSource: active.length ? null : renewable, extraSource: active.length ? active.at(-1) : null };
+    if (person.renewSource || person.extraSource) people.push(person);
+  });
+  // Primero las coincidencias exactas de cédula y las cartulinas canceladas (lo que se pidió).
+  return people.sort((a, b) => Number(Boolean(b.renewSource)) - Number(Boolean(a.renewSource)) || String(a.latest.name).localeCompare(String(b.latest.name), 'es')).slice(0, 5);
+}
+
+function hideExistingSuggestions() {
+  document.querySelector('#existing-person-suggestions')?.remove();
+}
+
+function renderExistingSuggestions(input) {
+  hideExistingSuggestions();
+  if (linkMode || input.readOnly) return;
+  const people = existingPeople(input.name, input.value);
+  if (!people.length) return;
+  const box = document.createElement('div');
+  box.id = 'existing-person-suggestions';
+  box.className = 'existing-person-suggestions';
+  box.setAttribute('role', 'listbox');
+  box.setAttribute('aria-label', 'Personas que ya están en el sistema');
+  const title = document.createElement('p');
+  title.className = 'existing-person-title';
+  title.textContent = 'Ya está en el sistema · toca para usar sus datos';
+  box.append(title);
+  people.forEach(person => {
+    const { latest } = person;
+    const option = document.createElement('button');
+    option.type = 'button';
+    option.className = 'existing-person-option';
+    option.setAttribute('role', 'option');
+    option.dataset.existingRenew = person.renewSource || '';
+    option.dataset.existingExtra = person.extraSource || '';
+    const name = document.createElement('strong');
+    name.textContent = latest.name;
+    const meta = document.createElement('small');
+    const routeName = routeSettlements[latest.route]?.name || latest.route || '';
+    const status = person.active ? `${person.active} cartulina${person.active === 1 ? '' : 's'} activa${person.active === 1 ? '' : 's'}`
+      : latest.settledAt ? `Cancelada el ${formatDate(latest.settledAt)}` : 'Cancelada';
+    meta.textContent = [`Cédula ${latest.id}`, status, routeName && `Ruta ${routeName}`].filter(Boolean).join(' · ');
+    const action = document.createElement('span');
+    action.className = `existing-person-action ${person.active ? 'is-active' : ''}`;
+    action.textContent = person.renewSource ? 'Renovar' : canAddCard(clients, latest.id) ? 'Otra cartulina' : 'Máximo de cartulinas';
+    const copy = document.createElement('span');
+    copy.className = 'existing-person-copy';
+    copy.append(name, meta);
+    option.append(copy, action);
+    box.append(option);
+  });
+  input.closest('label').after(box);
+}
+
+function useExistingPerson(option) {
+  const renew = option.dataset.existingRenew;
+  const extra = option.dataset.existingExtra;
+  hideExistingSuggestions();
+  if (renew && clients[renew]) {
+    openRenewalModal(renew);
+    showToast(`Se cargaron los datos de ${clients[renew].name}. Solo falta el valor del nuevo préstamo.`);
+  } else if (extra && clients[extra]) {
+    openExtraCardModal(extra);
+    if (linkMode === 'extra') showToast(`${clients[extra].name} ya tiene cartulina activa: se abrió como «Otra cartulina» con sus datos.`);
+  }
+}
+
 export function mount() {
   document.querySelector('#route-position-search').addEventListener('input', renderPositionResults);
+  ['name', 'idNumber'].forEach(field => {
+    const input = newClientForm.elements[field];
+    input.addEventListener('input', () => renderExistingSuggestions(input));
+    input.addEventListener('focus', () => renderExistingSuggestions(input));
+  });
+  newClientForm.addEventListener('click', event => {
+    const option = event.target.closest('.existing-person-option');
+    if (option) useExistingPerson(option);
+  });
+  // Al pasar a otro campo (que no sea la lista) se ocultan.
+  newClientForm.addEventListener('focusin', event => {
+    if (!event.target.closest('.existing-person-suggestions') && !['name', 'idNumber'].includes(event.target.name)) hideExistingSuggestions();
+  });
   document.querySelector('#route-position-results').addEventListener('click', event => {
     const option = event.target.closest('[data-position-client]');
     if (option) selectPosition(option.dataset.positionClient);
