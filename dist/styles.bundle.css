@@ -5268,6 +5268,80 @@ html.session-restoring .login-gateway .session-splash,
   }
 }
 
+/* Cliente nuevo: personas que ya están en el sistema (debajo de cédula o nombre). */
+.existing-person-suggestions {
+  display: grid;
+  gap: 6px;
+  margin: -4px 0 4px;
+  padding: 8px;
+  border: 1px solid color-mix(in srgb, var(--primary) 40%, var(--line));
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--primary) 7%, var(--surface));
+}
+
+.existing-person-title {
+  margin: 0 2px 2px;
+  color: var(--primary);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.existing-person-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--card);
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.existing-person-option:hover,
+.existing-person-option:focus-visible {
+  border-color: var(--primary);
+  outline: 0;
+}
+
+.existing-person-copy {
+  min-width: 0;
+  flex: 1 1 auto;
+  display: grid;
+  gap: 2px;
+}
+
+.existing-person-copy strong {
+  overflow: hidden;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.existing-person-copy small {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.existing-person-action {
+  flex: 0 0 auto;
+  padding: 4px 9px;
+  border-radius: 999px;
+  background: var(--primary);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.existing-person-action.is-active {
+  background: color-mix(in srgb, #F9A825 18%, transparent);
+  color: #F9A825;
+}
+
 /* ── css/features/client-detail.css */
 /* features/client-detail · Ficha del cliente, progreso e historiales. */
 
