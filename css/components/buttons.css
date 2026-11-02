@@ -144,3 +144,32 @@
     min-height: 44px;
   }
 }
+
+/* Teléfono del cliente: al tocarlo se inicia la llamada (shared/phone.js). */
+.phone-icon {
+  width: 15px;
+  height: 15px;
+  flex: 0 0 auto;
+  fill: currentColor;
+}
+
+.phone-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--primary);
+  font-weight: 700;
+  text-decoration: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.phone-link:hover span,
+.phone-link:focus-visible span {
+  text-decoration: underline;
+}
+
+.phone-link:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+  border-radius: 6px;
+}

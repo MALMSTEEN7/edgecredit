@@ -10,7 +10,7 @@
  * Los abonos anteriores siguen en el historial, pero ya no cuentan para las cuotas nuevas.
  */
 
-import { paymentFrequencyDays } from '../core/config.js';
+import { installmentCount } from '../core/config.js';
 import { localDateISO } from '../shared/dates.js';
 import { formatMoney } from '../shared/format.js';
 import { GENERAL_INSURANCE_PERCENT } from './insurance.js';
@@ -43,9 +43,8 @@ function restartDate(client, today) {
 /** Calendario nuevo desde hoy para el saldo actual. */
 function restartSchedule(client, totalDays, today) {
   const days = Math.max(1, Math.round(Number(totalDays) || Number(client.totalDays) || 30));
-  const frequencyDays = paymentFrequencyDays[client.frequency] || 7;
   const startDate = restartDate(client, today);
-  const installments = Math.max(1, Math.ceil(days / frequencyDays));
+  const installments = installmentCount(days, client.frequency);
   // Los abonos anteriores quedan fuera de las cuotas nuevas (ciclo −1).
   (client.payments || []).forEach(payment => { payment.cycleIndex = -1; payment.beforeRestructure = true; });
   Object.assign(client, {

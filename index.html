@@ -34,7 +34,7 @@
   <link rel="icon" href="icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="icon-192.png">
   <meta name="apple-mobile-web-app-capable" content="yes">
-  <link rel="stylesheet" id="app-styles" href="dist/styles.bundle.css?v=f77bc9f60a">
+  <link rel="stylesheet" id="app-styles" href="dist/styles.bundle.css?v=1f8fe9d77f">
   <script>
     // Si hay una sesión guardada, al recargar se muestra «Cargando tu sesión…» en vez del
     // formulario de ingreso mientras la app la restaura (features/auth/session.js).
@@ -186,7 +186,7 @@
         <section class="detail-summary">
           <div class="progress-ring" role="img" aria-label="60 por ciento pagado"><div class="progress-center"><strong>60%</strong><span>PAGADO</span><b id="detail-balance">$ 600.000</b><small>saldo restante</small><em>Abonado <span id="detail-paid-amount">$ 0</span> / <span id="detail-total-amount">$ 0</span></em></div></div>
           <div class="detail-balance"><div class="remaining-heading"><span>Saldo restante</span><button class="interest-toggle" id="interest-toggle" type="button" aria-label="Sumar interés moratorio" aria-expanded="false" hidden>+</button></div><strong id="detail-balance-copy">$ 600.000</strong><div><span>Cuota actual</span><strong id="detail-installment">$ 75.000</strong></div></div>
-          <div class="route-metrics"><div><span>Fecha de crédito</span><strong id="route-day">—</strong></div><div><span id="route-days-label">F. de vencimiento</span><strong id="route-days-left">—</strong></div></div>
+          <div class="route-metrics"><div><span>Fecha de crédito</span><strong id="route-day">—</strong></div><div><span id="route-days-label">F. de vencimiento</span><strong id="route-days-left">—</strong></div></div><div class="detail-call" id="detail-call" hidden></div>
         </section>
         <section class="client-notes" aria-labelledby="client-notes-title">
           <div class="client-notes-head"><h2 id="client-notes-title">Notas del cliente</h2><small id="client-notes-meta">Visibles para el trabajador y el administrador</small></div>
@@ -452,7 +452,7 @@
           <div class="linked-photo" id="linked-photo" hidden><img id="linked-photo-img" alt="Foto registrada del cliente"><span id="linked-photo-text">Se usa la foto ya registrada de esta persona.</span></div>
           <label class="custom-field client-photo-field">Foto del cliente (opcional)<div class="file-picker-control"><input id="client-photo-input" class="photo-file-input" name="photo" type="file" accept="image/*" capture="environment" aria-label="Seleccionar foto del cliente"><span class="file-picker-button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h3l1.5-2h7L17 7h3v12H4z"/><circle cx="12" cy="13" r="3.5"/></svg><span>Tomar o elegir foto</span></span><span class="file-picker-name" id="client-photo-file-name">Ningún archivo seleccionado</span></div><img id="client-photo-preview" class="client-photo-preview" alt="Vista previa de la foto del cliente" hidden></label>
           <label class="custom-field">Monto del préstamo ($)<input data-money data-money-thousands name="principal" type="number" min="1" step="1" inputmode="numeric" required></label>
-          <label class="custom-field">Duración acordada del crédito (días)<input name="totalDays" type="number" min="1" step="1" inputmode="numeric" placeholder="Ej. 63" required></label>
+          <label class="custom-field">Duración acordada del crédito (días)<input name="totalDays" type="number" min="1" step="1" inputmode="numeric" placeholder="Ej. 63" required></label><p class="installments-hint" id="installments-hint" aria-live="polite" hidden></p>
           <label class="custom-field">Frecuencia de pago<select name="frequency" required><option value="monthly">Mensual</option><option value="biweekly">Quincenal</option><option value="weekly" selected>Semanal</option><option value="daily">Diario</option></select></label>
           <fieldset class="sunday-payday" id="sunday-payday" hidden><legend id="sunday-payday-title">Hoy es domingo · ¿qué día va a pagar?</legend><p id="sunday-payday-copy">La cartulina semanal se guarda con el día de cobro que elijas y toma su color. El crédito empieza a contar desde ese día.</p><div class="sunday-payday-options" id="sunday-payday-options"></div></fieldset>
           <label class="custom-field client-comment-field">Indicaciones del domicilio<textarea name="addressNotes" rows="3" placeholder="Cómo llegar: color de la casa, puntos de referencia, timbre…"></textarea></label>
@@ -512,7 +512,7 @@
     // al cambiar el sello, el navegador descarga el JS/CSS nuevo en vez de usar su caché.
     // Para desarrollar con los módulos sueltos, abre index.html?dev desde un servidor local.
     (() => {
-      const APP_VERSION = 'f77bc9f60a';
+      const APP_VERSION = '1f8fe9d77f';
       const dev = new URLSearchParams(location.search).has('dev') && location.protocol !== 'file:';
       if (dev) {
         document.getElementById('app-styles').href = 'styles.css';

@@ -13,6 +13,7 @@ import { renderAdminRoute } from '../admin/admin-shell.js';
 import { filterClientCards, removeClient, renderClientRows, setClientAvatar } from './directory.js';
 import { localDateISO } from '../../shared/dates.js';
 import { formatDate, formatMoney, routeKey } from '../../shared/format.js';
+import { formatPhone, phoneLink } from '../../shared/phone.js';
 import { openCustomModal } from '../../ui/custom-modal.js';
 import { showView } from '../../ui/navigation.js';
 import { showToast } from '../../ui/toast.js';
@@ -404,7 +405,21 @@ export function openClient(clientId) {
   document.querySelector('#detail-address').textContent = client.address;
   renderLocationLink(client);
   renderLocationPending(client);
-  document.querySelector('#detail-phone').textContent = client.phone;
+  // Teléfono: tocarlo inicia la llamada desde el celular.
+  const phone = document.querySelector('#detail-phone');
+  const link = phoneLink(client.phone, { name: client.name });
+  phone.replaceChildren(link || document.createTextNode(client.phone || '—'));
+  const call = document.querySelector('#detail-call');
+  const callLink = phoneLink(client.phone, { className: 'detail-call-link', name: client.name, label: '' });
+  call.hidden = !callLink;
+  call.replaceChildren();
+  if (callLink) {
+    const copy = document.createElement('span');
+    copy.className = 'detail-call-copy';
+    copy.append(Object.assign(document.createElement('small'), { textContent: 'Teléfono' }), Object.assign(document.createElement('strong'), { textContent: formatPhone(client.phone) }));
+    callLink.querySelector('span').replaceWith(copy, Object.assign(document.createElement('span'), { className: 'detail-call-action', textContent: 'Llamar' }));
+    call.append(callLink);
+  }
   document.querySelector('#detail-loan-total').textContent = formatMoney(client.total);
   document.querySelector('#detail-term').textContent = client.term;
   document.querySelector('#detail-frequency').textContent = paymentFrequencyLabels[client.frequency] || 'Semanal';

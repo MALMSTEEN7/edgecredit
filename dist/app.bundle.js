@@ -89,6 +89,15 @@ function backendErrorMessage(error, fallback = 'No se pudo completar la operaci�
 
 const paymentFrequencyDays = { daily: 1, weekly: 7, biweekly: 15, monthly: 30 };
 
+/**
+ * Número de cuotas de un plazo: los días se redondean al período más cercano, no hacia arriba.
+ * Un préstamo semanal a 30 días son 4 cuotas (4,3 semanas), no 5; a 35 días, 5.
+ */
+function installmentCount(totalDays, frequency) {
+  const days = Math.max(1, Math.round(Number(totalDays) || 0));
+  return Math.max(1, Math.round(days / (paymentFrequencyDays[frequency] || 7)));
+}
+
 const paymentFrequencyLabels = { daily: 'Diario', weekly: 'Semanal', biweekly: 'Quincenal', monthly: 'Mensual' };
 
 const adminPasswordHash = 'b5af2beb9b7fd5aa4eb21b61925bd3856793e54e0a39052fbcfaf5b477fd07f3';
@@ -2681,9 +2690,8 @@ function restartDate(client, today) {
 /** Calendario nuevo desde hoy para el saldo actual. */
 function restartSchedule(client, totalDays, today) {
   const days = Math.max(1, Math.round(Number(totalDays) || Number(client.totalDays) || 30));
-  const frequencyDays = paymentFrequencyDays[client.frequency] || 7;
   const startDate = restartDate(client, today);
-  const installments = Math.max(1, Math.ceil(days / frequencyDays));
+  const installments = installmentCount(days, client.frequency);
   // Los abonos anteriores quedan fuera de las cuotas nuevas (ciclo −1).
   (client.payments || []).forEach(payment => { payment.cycleIndex = -1; payment.beforeRestructure = true; });
   Object.assign(client, {
@@ -6710,6 +6718,7 @@ function __mount_twoFactorModule() {
 
 
 
+
 /** Dentro de la ficha: la «cicatriz» del historial de pagos de la cartulina. */
 function updatePaymentBehaviorUI(client) {
   const indicator = document.querySelector('#payment-behavior-indicator');
@@ -7090,7 +7099,21 @@ function openClient(clientId) {
   document.querySelector('#detail-address').textContent = client.address;
   renderLocationLink(client);
   renderLocationPending(client);
-  document.querySelector('#detail-phone').textContent = client.phone;
+  // Teléfono: tocarlo inicia la llamada desde el celular.
+  const phone = document.querySelector('#detail-phone');
+  const link = phoneLink(client.phone, { name: client.name });
+  phone.replaceChildren(link || document.createTextNode(client.phone || '—'));
+  const call = document.querySelector('#detail-call');
+  const callLink = phoneLink(client.phone, { className: 'detail-call-link', name: client.name, label: '' });
+  call.hidden = !callLink;
+  call.replaceChildren();
+  if (callLink) {
+    const copy = document.createElement('span');
+    copy.className = 'detail-call-copy';
+    copy.append(Object.assign(document.createElement('small'), { textContent: 'Teléfono' }), Object.assign(document.createElement('strong'), { textContent: formatPhone(client.phone) }));
+    callLink.querySelector('span').replaceWith(copy, Object.assign(document.createElement('span'), { className: 'detail-call-action', textContent: 'Llamar' }));
+    call.append(callLink);
+  }
   document.querySelector('#detail-loan-total').textContent = formatMoney(client.total);
   document.querySelector('#detail-term').textContent = client.term;
   document.querySelector('#detail-frequency').textContent = paymentFrequencyLabels[client.frequency] || 'Semanal';
@@ -8199,6 +8222,7 @@ function openNewClientModal() {
   setLinkedMode(null);
   updateInsurancePreview();
   updateSundayPayday();
+  updateInstallmentsHint();
   newClientModal.hidden = false;
   newClientModal.classList.add('active');
   document.body.classList.add('modal-open');
@@ -8252,6 +8276,7 @@ function openLinkedModal(sourceId, mode) {
   if (source.altAddress) { setAltAddressOpen(true); document.querySelector('#alt-address-input').value = source.altAddress; }
   if (state.userRole === 'admin') document.querySelector('#admin-interest-percent').value = source.interestPercent ?? 20;
   updateInsurancePreview();
+  updateInstallmentsHint();
   window.setTimeout(() => fields.principal.focus(), 30);
 }
 
@@ -8285,7 +8310,7 @@ function addNewClient(values, photoData = '', insurance, gps = null) {
   const initials = name.split(/\s+/).slice(0, 2).map(part => part[0]).join('').toUpperCase();
   const totalDays = Math.max(1, Math.round(Number(values.totalDays)));
   const frequency = paymentFrequencyDays[values.frequency] ? values.frequency : 'weekly';
-  const installments = Math.max(1, Math.ceil(totalDays / paymentFrequencyDays[frequency]));
+  const installments = installmentCount(totalDays, frequency);
   const assignedRoute = source ? source.route : isAdmin ? routeSelect.value : state.workerRoute;
   const route = routeSettlements[assignedRoute];
   const noBaseImpact = isAdmin && document.querySelector('#admin-no-base-impact').checked;
@@ -8417,6 +8442,20 @@ let creatingClient = false; // evita crear dos veces si pulsan «Crear» mientra
 function onClientRenewed(callback) { onRenewed = callback; }
 
 /** Registra los listeners del módulo. Se invoca una sola vez desde app.js. */
+/** Debajo de los días del plazo: cuántas cuotas salen («Son 4 cuotas semanales»). */
+const INSTALLMENT_WORDS = { daily: ['cuota diaria', 'cuotas diarias'], weekly: ['cuota semanal', 'cuotas semanales'], biweekly: ['cuota quincenal', 'cuotas quincenales'], monthly: ['cuota mensual', 'cuotas mensuales'] };
+function updateInstallmentsHint() {
+  const hint = document.querySelector('#installments-hint');
+  if (!hint) return;
+  const days = Number(newClientForm.elements.totalDays.value);
+  const frequency = paymentFrequencyDays[newClientForm.elements.frequency.value] ? newClientForm.elements.frequency.value : 'weekly';
+  hint.hidden = !(days > 0);
+  if (!(days > 0)) return;
+  const count = installmentCount(days, frequency);
+  const words = INSTALLMENT_WORDS[frequency] || [`cuota ${paymentFrequencyLabels[frequency]}`, 'cuotas'];
+  hint.textContent = `Son ${count} ${count === 1 ? words[0] : words[1]}.`;
+}
+
 // ── Persona que ya existe en el sistema ──
 // Al escribir la cédula o el nombre de un cliente nuevo, debajo del campo aparecen las personas
 // que ya están registradas. Al elegir una se cargan todos sus datos:
@@ -8511,6 +8550,10 @@ function useExistingPerson(option) {
 
 function __mount_newClientModule() {
   document.querySelector('#route-position-search').addEventListener('input', renderPositionResults);
+  ['totalDays', 'frequency'].forEach(field => {
+    newClientForm.elements[field].addEventListener('input', updateInstallmentsHint);
+    newClientForm.elements[field].addEventListener('change', updateInstallmentsHint);
+  });
   ['name', 'idNumber'].forEach(field => {
     const input = newClientForm.elements[field];
     input.addEventListener('input', () => renderExistingSuggestions(input));
@@ -8624,6 +8667,7 @@ function __mount_newClientModule() {
 
 
 
+
 /** Tarjeta con «Más información» abierta (`modo:id`). Solo una a la vez. */
 let openRouteInfo = null;
 /** Filtro de la biblioteca por calificación: all | good | irregular | bad. */
@@ -8666,6 +8710,7 @@ function routeCardInfo(clientId) {
   // Días atrasados como el sistema anterior: negativo = días que faltan para vencer.
   const lateDays = totalDays ? creditDay(client) - totalDays : null;
   const rows = [
+    ['Teléfono', client.phone],
     ['Valor del crédito', formatMoney(client.total)],
     ['Saldo actual', formatMoney(client.balance)],
     ['Plazo', totalDays ? `${totalDays} días` : client.term],
@@ -8682,7 +8727,9 @@ function routeCardInfo(clientId) {
     const term = document.createElement('dt');
     term.textContent = label;
     const detail = document.createElement('dd');
-    detail.textContent = value;
+    // El teléfono es un enlace: al tocarlo se inicia la llamada.
+    const call = label === 'Teléfono' ? phoneLink(value, { name: client.name }) : null;
+    if (call) detail.append(call); else detail.textContent = value;
     if (label === 'Días atrasados') detail.classList.toggle('is-late', lateDays > 0);
     item.append(term, detail);
     list.append(item);
@@ -9775,6 +9822,7 @@ function __mount_expensesModule() {
 
 
 
+
 const PANELS = [['#toggle-home-cash', '#home-cash-panel'], ['#toggle-home-metrics', '#home-metrics-panel']];
 
 function setPanel(toggleSelector, panelSelector, open) {
@@ -9838,6 +9886,15 @@ function renderHomeRowActions() {
     skip.dataset.homeAction = 'no-payment';
     skip.textContent = 'No pagó hoy';
     actions.append(pay, skip);
+    // Llamar al cliente desde el Inicio (abre el marcador del celular).
+    const client = clients[row.dataset.client];
+    const call = phoneLink(client?.phone, { className: 'home-action-call', name: client?.name, label: '' });
+    if (call) {
+      call.dataset.homeAction = 'call';
+      call.title = `Llamar al ${call.getAttribute('aria-label').split(' al ').pop()}`;
+      actions.append(call);
+    }
+    actions.classList.toggle('has-call', Boolean(call));
     row.append(actions);
   });
   const anyVisible = rows.some(row => !row.hidden);
@@ -9932,7 +9989,7 @@ function __mount_homeModule() {
   mountHomeReorder();
   document.querySelector('#inicio .client-list').addEventListener('click', event => {
     const action = event.target.closest('[data-home-action]');
-    if (!action || action.dataset.homeAction === 'drag') return;
+    if (!action || action.dataset.homeAction === 'drag' || action.dataset.homeAction === 'call') return;
     const clientId = action.closest('[data-client]')?.dataset.client;
     const client = clients[clientId];
     if (!client) return;
@@ -10317,6 +10374,60 @@ function compressClientPhoto(file, { maxDimension = 480, quality = 0.76 } = {}) 
     };
     reader.readAsDataURL(file);
   });
+}
+
+// ── js/shared/phone.js
+/**
+ * shared/phone · Teléfono del cliente: formato para leerlo y enlace para llamar.
+ *
+ * Un enlace `tel:` abre el marcador del celular con el número listo (funciona en la web app
+ * igual que en una app instalada). En un computador abre la aplicación de llamadas que tenga.
+ */
+
+/** Solo dígitos (conserva un «+» inicial de código de país). Vacío si no hay número. */
+function phoneDigits(phone) {
+  const raw = String(phone || '').trim();
+  const digits = raw.replace(/\D/g, '');
+  if (digits.length < 7) return '';
+  return raw.startsWith('+') ? `+${digits}` : digits;
+}
+
+/** «3112223344» → «311 222 3344» (otros largos se dejan como vienen). */
+function formatPhone(phone) {
+  const digits = phoneDigits(phone);
+  if (!digits) return String(phone || '').trim();
+  return /^\d{10}$/.test(digits) ? `${digits.slice(0, 3)} ${digits.slice(3, 6)} ${digits.slice(6)}` : digits;
+}
+
+const PHONE_ICON_PATH = 'M6.6 10.8a15.1 15.1 0 0 0 6.6 6.6l2.2-2.2a1 1 0 0 1 1-.25 11.4 11.4 0 0 0 3.6.57 1 1 0 0 1 1 1V20a1 1 0 0 1-1 1A17 17 0 0 1 3 4a1 1 0 0 1 1-1h3.5a1 1 0 0 1 1 1c0 1.25.2 2.45.57 3.57a1 1 0 0 1-.25 1z';
+
+/** Ícono de teléfono (SVG) para los botones de llamar. */
+function phoneIcon() {
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('aria-hidden', 'true');
+  svg.classList.add('phone-icon');
+  const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  path.setAttribute('d', PHONE_ICON_PATH);
+  svg.append(path);
+  return svg;
+}
+
+/**
+ * Enlace para llamar al cliente (o null si no tiene un número válido).
+ * `label`: texto visible (por defecto, el número con formato).
+ */
+function phoneLink(phone, { className = 'phone-link', label, name = '' } = {}) {
+  const digits = phoneDigits(phone);
+  if (!digits) return null;
+  const link = document.createElement('a');
+  link.className = className;
+  link.href = `tel:${digits}`;
+  link.setAttribute('aria-label', `Llamar${name ? ` a ${name}` : ''} al ${formatPhone(phone)}`);
+  link.append(phoneIcon(), Object.assign(document.createElement('span'), { textContent: label ?? formatPhone(phone) }));
+  // Dentro de tarjetas que abren la ficha al tocarlas: llamar no abre la ficha.
+  link.addEventListener('click', event => event.stopPropagation());
+  return link;
 }
 
 // ── js/shared/totp.js

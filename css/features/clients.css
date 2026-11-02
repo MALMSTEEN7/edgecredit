@@ -323,3 +323,11 @@
   background: color-mix(in srgb, #F9A825 18%, transparent);
   color: #F9A825;
 }
+
+/* Debajo de los días del plazo: cuántas cuotas salen. */
+.installments-hint {
+  margin: -6px 0 2px;
+  color: var(--primary);
+  font-size: 12px;
+  font-weight: 700;
+}
