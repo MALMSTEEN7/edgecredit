@@ -1161,3 +1161,33 @@
 .view#inicio .home-client-row.is-drop-after {
   box-shadow: 0 3px 0 0 var(--primary);
 }
+
+/* Inicio: botón para llamar al cliente junto a «Registrar cuota» y «No pagó hoy». */
+.home-row-actions.has-call {
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) 44px;
+}
+
+.home-action-call {
+  min-height: 42px;
+  display: inline-grid;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, var(--success) 45%, var(--line));
+  border-radius: 11px;
+  background: color-mix(in srgb, var(--success) 12%, var(--surface));
+  color: var(--success);
+  text-decoration: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.home-action-call .phone-icon {
+  width: 18px;
+  height: 18px;
+}
+
+.home-action-call span:empty {
+  display: none;
+}
+
+.home-action-call:active {
+  transform: scale(.97);
+}

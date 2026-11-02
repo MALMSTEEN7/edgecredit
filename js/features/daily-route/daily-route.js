@@ -10,6 +10,7 @@ import { renderPendingRequests } from '../admin/pending.js';
 import { clientAvatarWithProgress, filterClientCards, renderClientRows } from '../clients/directory.js';
 import { localDate, localDateISO } from '../../shared/dates.js';
 import { formatDate, formatMoney, routeKey } from '../../shared/format.js';
+import { phoneLink } from '../../shared/phone.js';
 import { moveId } from '../../shared/math.js';
 import { openCustomModal } from '../../ui/custom-modal.js';
 import { showToast } from '../../ui/toast.js';
@@ -59,6 +60,7 @@ function routeCardInfo(clientId) {
   // Días atrasados como el sistema anterior: negativo = días que faltan para vencer.
   const lateDays = totalDays ? creditDay(client) - totalDays : null;
   const rows = [
+    ['Teléfono', client.phone],
     ['Valor del crédito', formatMoney(client.total)],
     ['Saldo actual', formatMoney(client.balance)],
     ['Plazo', totalDays ? `${totalDays} días` : client.term],
@@ -75,7 +77,9 @@ function routeCardInfo(clientId) {
     const term = document.createElement('dt');
     term.textContent = label;
     const detail = document.createElement('dd');
-    detail.textContent = value;
+    // El teléfono es un enlace: al tocarlo se inicia la llamada.
+    const call = label === 'Teléfono' ? phoneLink(value, { name: client.name }) : null;
+    if (call) detail.append(call); else detail.textContent = value;
     if (label === 'Días atrasados') detail.classList.toggle('is-late', lateDays > 0);
     item.append(term, detail);
     list.append(item);

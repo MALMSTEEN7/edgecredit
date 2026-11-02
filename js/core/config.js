@@ -4,6 +4,15 @@
 
 export const paymentFrequencyDays = { daily: 1, weekly: 7, biweekly: 15, monthly: 30 };
 
+/**
+ * Número de cuotas de un plazo: los días se redondean al período más cercano, no hacia arriba.
+ * Un préstamo semanal a 30 días son 4 cuotas (4,3 semanas), no 5; a 35 días, 5.
+ */
+export function installmentCount(totalDays, frequency) {
+  const days = Math.max(1, Math.round(Number(totalDays) || 0));
+  return Math.max(1, Math.round(days / (paymentFrequencyDays[frequency] || 7)));
+}
+
 export const paymentFrequencyLabels = { daily: 'Diario', weekly: 'Semanal', biweekly: 'Quincenal', monthly: 'Mensual' };
 
 export const adminPasswordHash = 'b5af2beb9b7fd5aa4eb21b61925bd3856793e54e0a39052fbcfaf5b477fd07f3';

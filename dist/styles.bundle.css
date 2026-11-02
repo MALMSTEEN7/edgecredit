@@ -599,6 +599,35 @@ button {
   }
 }
 
+/* Teléfono del cliente: al tocarlo se inicia la llamada (shared/phone.js). */
+.phone-icon {
+  width: 15px;
+  height: 15px;
+  flex: 0 0 auto;
+  fill: currentColor;
+}
+
+.phone-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--primary);
+  font-weight: 700;
+  text-decoration: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.phone-link:hover span,
+.phone-link:focus-visible span {
+  text-decoration: underline;
+}
+
+.phone-link:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
 /* ── css/components/forms.css */
 /* components/forms · Campos, buscador, selector de archivos e interruptores. */
 
@@ -5015,6 +5044,36 @@ html.session-restoring .login-gateway .session-splash,
   box-shadow: 0 3px 0 0 var(--primary);
 }
 
+/* Inicio: botón para llamar al cliente junto a «Registrar cuota» y «No pagó hoy». */
+.home-row-actions.has-call {
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) 44px;
+}
+
+.home-action-call {
+  min-height: 42px;
+  display: inline-grid;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, var(--success) 45%, var(--line));
+  border-radius: 11px;
+  background: color-mix(in srgb, var(--success) 12%, var(--surface));
+  color: var(--success);
+  text-decoration: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.home-action-call .phone-icon {
+  width: 18px;
+  height: 18px;
+}
+
+.home-action-call span:empty {
+  display: none;
+}
+
+.home-action-call:active {
+  transform: scale(.97);
+}
+
 /* ── css/features/clients.css */
 /* features/clients · Listas y tarjetas de clientes. */
 
@@ -5340,6 +5399,14 @@ html.session-restoring .login-gateway .session-splash,
 .existing-person-action.is-active {
   background: color-mix(in srgb, #F9A825 18%, transparent);
   color: #F9A825;
+}
+
+/* Debajo de los días del plazo: cuántas cuotas salen. */
+.installments-hint {
+  margin: -6px 0 2px;
+  color: var(--primary);
+  font-size: 12px;
+  font-weight: 700;
 }
 
 /* ── css/features/client-detail.css */
@@ -6578,6 +6645,67 @@ button.evidence-link:active {
 /* Encabezados Fecha · Abono · Saldo más claros para que se lean mejor. */
 #payment-history-list > li.history-payment-head {
   color: color-mix(in srgb, var(--text) 88%, var(--muted));
+  font-weight: 800;
+}
+
+/* Ficha: teléfono con botón «Llamar» debajo de las fechas del crédito. */
+.detail-call {
+  margin-top: 10px;
+}
+
+.detail-call-link {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--card);
+  color: var(--text);
+  text-decoration: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.detail-call-link:hover,
+.detail-call-link:focus-visible {
+  border-color: var(--primary);
+  outline: 0;
+}
+
+.detail-call-link .phone-icon {
+  width: 38px;
+  height: 38px;
+  padding: 10px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--success) 16%, transparent);
+  fill: var(--success);
+}
+
+.detail-call-copy {
+  min-width: 0;
+  flex: 1 1 auto;
+  display: grid;
+  gap: 2px;
+}
+
+.detail-call-copy small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.detail-call-copy strong {
+  font-size: 18px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: .3px;
+}
+
+.detail-call-action {
+  flex: 0 0 auto;
+  padding: 8px 14px;
+  border-radius: 999px;
+  background: var(--success);
+  color: #fff;
+  font-size: 13px;
   font-weight: 800;
 }
 

@@ -11,6 +11,7 @@ import { clients, persistBusinessData, routeSettlements } from '../../core/store
 import { filterClientCards } from '../clients/directory.js';
 import { openCustomModal } from '../../ui/custom-modal.js';
 import { showView } from '../../ui/navigation.js';
+import { phoneLink } from '../../shared/phone.js';
 
 const PANELS = [['#toggle-home-cash', '#home-cash-panel'], ['#toggle-home-metrics', '#home-metrics-panel']];
 
@@ -75,6 +76,15 @@ export function renderHomeRowActions() {
     skip.dataset.homeAction = 'no-payment';
     skip.textContent = 'No pagó hoy';
     actions.append(pay, skip);
+    // Llamar al cliente desde el Inicio (abre el marcador del celular).
+    const client = clients[row.dataset.client];
+    const call = phoneLink(client?.phone, { className: 'home-action-call', name: client?.name, label: '' });
+    if (call) {
+      call.dataset.homeAction = 'call';
+      call.title = `Llamar al ${call.getAttribute('aria-label').split(' al ').pop()}`;
+      actions.append(call);
+    }
+    actions.classList.toggle('has-call', Boolean(call));
     row.append(actions);
   });
   const anyVisible = rows.some(row => !row.hidden);
@@ -169,7 +179,7 @@ export function mount() {
   mountHomeReorder();
   document.querySelector('#inicio .client-list').addEventListener('click', event => {
     const action = event.target.closest('[data-home-action]');
-    if (!action || action.dataset.homeAction === 'drag') return;
+    if (!action || action.dataset.homeAction === 'drag' || action.dataset.homeAction === 'call') return;
     const clientId = action.closest('[data-client]')?.dataset.client;
     const client = clients[clientId];
     if (!client) return;

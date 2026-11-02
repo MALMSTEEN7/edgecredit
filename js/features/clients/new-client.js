@@ -3,7 +3,7 @@
  * (10% general o valor propio con motivo) y solicitudes de excepción de interés.
  */
 
-import { paymentFrequencyDays } from '../../core/config.js';
+import { installmentCount, paymentFrequencyDays, paymentFrequencyLabels } from '../../core/config.js';
 import { customModal, interestModal, modal, newClientError, newClientForm, newClientModal, routeSelect } from '../../core/dom.js';
 import { state } from '../../core/state.js';
 import { clients, pendingRequests, persistBusinessData, routeSettlements } from '../../core/store.js';
@@ -233,6 +233,7 @@ function openNewClientModal() {
   setLinkedMode(null);
   updateInsurancePreview();
   updateSundayPayday();
+  updateInstallmentsHint();
   newClientModal.hidden = false;
   newClientModal.classList.add('active');
   document.body.classList.add('modal-open');
@@ -286,6 +287,7 @@ function openLinkedModal(sourceId, mode) {
   if (source.altAddress) { setAltAddressOpen(true); document.querySelector('#alt-address-input').value = source.altAddress; }
   if (state.userRole === 'admin') document.querySelector('#admin-interest-percent').value = source.interestPercent ?? 20;
   updateInsurancePreview();
+  updateInstallmentsHint();
   window.setTimeout(() => fields.principal.focus(), 30);
 }
 
@@ -319,7 +321,7 @@ function addNewClient(values, photoData = '', insurance, gps = null) {
   const initials = name.split(/\s+/).slice(0, 2).map(part => part[0]).join('').toUpperCase();
   const totalDays = Math.max(1, Math.round(Number(values.totalDays)));
   const frequency = paymentFrequencyDays[values.frequency] ? values.frequency : 'weekly';
-  const installments = Math.max(1, Math.ceil(totalDays / paymentFrequencyDays[frequency]));
+  const installments = installmentCount(totalDays, frequency);
   const assignedRoute = source ? source.route : isAdmin ? routeSelect.value : state.workerRoute;
   const route = routeSettlements[assignedRoute];
   const noBaseImpact = isAdmin && document.querySelector('#admin-no-base-impact').checked;
@@ -451,6 +453,20 @@ let creatingClient = false; // evita crear dos veces si pulsan «Crear» mientra
 export function onClientRenewed(callback) { onRenewed = callback; }
 
 /** Registra los listeners del módulo. Se invoca una sola vez desde app.js. */
+/** Debajo de los días del plazo: cuántas cuotas salen («Son 4 cuotas semanales»). */
+const INSTALLMENT_WORDS = { daily: ['cuota diaria', 'cuotas diarias'], weekly: ['cuota semanal', 'cuotas semanales'], biweekly: ['cuota quincenal', 'cuotas quincenales'], monthly: ['cuota mensual', 'cuotas mensuales'] };
+function updateInstallmentsHint() {
+  const hint = document.querySelector('#installments-hint');
+  if (!hint) return;
+  const days = Number(newClientForm.elements.totalDays.value);
+  const frequency = paymentFrequencyDays[newClientForm.elements.frequency.value] ? newClientForm.elements.frequency.value : 'weekly';
+  hint.hidden = !(days > 0);
+  if (!(days > 0)) return;
+  const count = installmentCount(days, frequency);
+  const words = INSTALLMENT_WORDS[frequency] || [`cuota ${paymentFrequencyLabels[frequency]}`, 'cuotas'];
+  hint.textContent = `Son ${count} ${count === 1 ? words[0] : words[1]}.`;
+}
+
 // ── Persona que ya existe en el sistema ──
 // Al escribir la cédula o el nombre de un cliente nuevo, debajo del campo aparecen las personas
 // que ya están registradas. Al elegir una se cargan todos sus datos:
@@ -545,6 +561,10 @@ function useExistingPerson(option) {
 
 export function mount() {
   document.querySelector('#route-position-search').addEventListener('input', renderPositionResults);
+  ['totalDays', 'frequency'].forEach(field => {
+    newClientForm.elements[field].addEventListener('input', updateInstallmentsHint);
+    newClientForm.elements[field].addEventListener('change', updateInstallmentsHint);
+  });
   ['name', 'idNumber'].forEach(field => {
     const input = newClientForm.elements[field];
     input.addEventListener('input', () => renderExistingSuggestions(input));
