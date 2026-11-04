@@ -34,7 +34,7 @@
   <link rel="icon" href="icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="icon-192.png">
   <meta name="apple-mobile-web-app-capable" content="yes">
-  <link rel="stylesheet" id="app-styles" href="dist/styles.bundle.css?v=1f8fe9d77f">
+  <link rel="stylesheet" id="app-styles" href="dist/styles.bundle.css?v=5ed3d512f9">
   <script>
     // Si hay una sesión guardada, al recargar se muestra «Cargando tu sesión…» en vez del
     // formulario de ingreso mientras la app la restaura (features/auth/session.js).
@@ -149,6 +149,7 @@
           <button type="button" class="directory-filter filter-good" data-directory-filter="good" role="radio" aria-checked="false"><i aria-hidden="true"></i>Buenos <span data-filter-count="good">0</span></button>
           <button type="button" class="directory-filter filter-irregular" data-directory-filter="irregular" role="radio" aria-checked="false"><i aria-hidden="true"></i>Regulares <span data-filter-count="irregular">0</span></button>
           <button type="button" class="directory-filter filter-bad" data-directory-filter="bad" role="radio" aria-checked="false"><i aria-hidden="true"></i>Malos <span data-filter-count="bad">0</span></button>
+          <button type="button" class="directory-filter filter-clavo" data-directory-filter="clavo" role="radio" aria-checked="false" title="Clientes con saldo que no abonan hace meses"><i aria-hidden="true"></i>Clavos <span data-filter-count="clavo">0</span></button>
           <button type="button" class="directory-filter filter-cancelled" data-directory-filter="cancelled" role="radio" aria-checked="false"><i aria-hidden="true"></i>Canceladas <span data-filter-count="cancelled">0</span></button>
         </div>
         <p class="directory-empty" id="directory-empty" hidden>No hay cartulinas en este filtro.</p>
@@ -330,7 +331,7 @@
       </section>
       <section class="admin-content admin-section-panel" data-admin-panel="reports" hidden>
         <div class="admin-section-intro"><div><p class="eyebrow">ANÁLISIS FINANCIERO · <span id="report-route-name">RUTA</span></p><h2>Reportes Financieros</h2><p>Consolidados de operación y distribución de resultados.</p></div></div>
-        <div class="report-tabs" role="tablist" aria-label="Periodo de reporte"><button class="report-tab is-active" type="button" role="tab" aria-selected="true" data-report-tab="weekly">Cierre Semanal</button><button class="report-tab" type="button" role="tab" aria-selected="false" data-report-tab="monthly">Cierre Mensual</button></div>
+        <div class="report-tabs" role="tablist" aria-label="Periodo de reporte"><button class="report-tab is-active" type="button" role="tab" aria-selected="true" data-report-tab="weekly">Cierre Semanal</button><button class="report-tab" type="button" role="tab" aria-selected="false" data-report-tab="portfolio">Cartera</button><button class="report-tab" type="button" role="tab" aria-selected="false" data-report-tab="monthly">Cierre Mensual</button></div>
         <section class="report-panel" data-report-panel="weekly">
           <div class="report-heading">
             <div><p class="eyebrow">CIERRE SEMANAL · <span data-report-year>2026</span></p><h3>Consolidado por semanas</h3></div>
@@ -349,6 +350,22 @@
           </div>
           <div class="report-metrics"><article><span>Cobro de la semana</span><strong id="weekly-collections">$ 0</strong></article><article><span>Descuadre de la semana</span><strong id="weekly-difference">$ 0</strong><small>Se reinicia cada sábado</small></article><article class="salary-card"><label for="weekly-salary">Sueldo trabajador <span aria-hidden="true">✎</span></label><span class="salary-editor"><span aria-hidden="true">$</span><input data-money id="weekly-salary" type="number" min="0" step="1" inputmode="numeric" placeholder="0"></span><small id="weekly-salary-hint"></small></article></div>
           <p class="report-note" id="weekly-note">Gastos, otros gastos y salida de caja se pueden corregir directamente en la tabla. Cada fecha queda guardada en el libro diario del cobro.</p>
+        </section>
+        <section class="report-panel portfolio-panel" data-report-panel="portfolio" hidden>
+          <div class="report-heading">
+            <div><p class="eyebrow">CARTERA · RUTA <span id="portfolio-route-name">—</span></p><h3 id="portfolio-title">Dinero por recoger</h3></div>
+            <div class="portfolio-modes" role="group" aria-label="Qué sumar"><button type="button" class="portfolio-mode is-active" data-portfolio-mode="all" aria-pressed="true">Toda la cartera</button><button type="button" class="portfolio-mode" data-portfolio-mode="clavos" aria-pressed="false"><i class="clavo-dot" aria-hidden="true"></i>Solo clavos</button></div>
+          </div>
+          <div class="portfolio-total-card"><span id="portfolio-total-label">Cartera total (con intereses y clavos)</span><strong id="portfolio-total">$ 0</strong><small id="portfolio-clavos-line"></small></div>
+          <div class="report-metrics portfolio-metrics">
+            <article><span>Capital por recoger</span><strong id="portfolio-capital">$ 0</strong></article>
+            <article><span>Intereses por recoger</span><strong id="portfolio-interest">$ 0</strong></article>
+            <article><span>Cartulinas</span><strong id="portfolio-count">0</strong></article>
+          </div>
+          <label class="portfolio-clavo-setting">Se considera clavo <select id="portfolio-clavo-months"></select></label>
+          <div class="report-table-wrap" id="portfolio-table-wrap" role="region" aria-label="Cartera por cliente. Desplaza horizontalmente para ver todas las columnas." tabindex="0"><table class="audit-table portfolio-table"><thead><tr><th scope="col">Cliente</th><th scope="col">Último abono</th><th class="numeric" scope="col">Capital</th><th class="numeric" scope="col">Intereses</th><th class="numeric" scope="col">Debe</th></tr></thead><tbody id="portfolio-body"></tbody><tfoot id="portfolio-foot"></tfoot></table></div>
+          <p class="report-note" id="portfolio-empty" hidden></p>
+          <p class="report-note">El saldo de cada cartulina ya incluye sus intereses; se separan en la misma proporción del préstamo. Clavo: cartulina con saldo sin ningún abono en el tiempo elegido (desde la entrega si nunca abonó).</p>
         </section>
         <section class="report-panel" data-report-panel="monthly" hidden>
           <div class="report-heading">
@@ -401,7 +418,7 @@
       <div class="modal-handle" aria-hidden="true"></div><button class="modal-close" type="button" aria-label="Cerrar" data-close-payment>×</button>
       <p class="eyebrow">NUEVO RECAUDO</p><h2 id="payment-title">Registrar pago</h2><p id="payment-description" class="modal-subtitle">Pago para <strong id="payment-client-name">—</strong></p>
       <form id="payment-form" novalidate>
-        <label class="amount-label" for="payment-amount">¿Cuánto recibiste?</label><div class="amount-input-wrap"><span>$</span><input data-money data-money-thousands id="payment-amount" name="amount" type="number" inputmode="decimal" min="1" step="1" placeholder="0" required></div>
+        <label class="amount-label" for="payment-amount">¿Cuánto recibiste?</label><div class="amount-input-wrap"><span>$</span><input data-money data-money-thousands id="payment-amount" name="amount" type="number" inputmode="decimal" min="1" step="1" placeholder="0" required></div><div class="payment-balance-preview" id="payment-balance-preview" aria-live="polite"><div class="payment-balance-item"><span>Debe ahora</span><strong id="payment-balance-now">$ 0</strong></div><span class="payment-balance-arrow" aria-hidden="true">→</span><div class="payment-balance-item is-after"><span id="payment-balance-after-label">Queda debiendo</span><strong id="payment-balance-after">$ 0</strong></div><small class="payment-balance-note" id="payment-balance-note"></small></div>
         <fieldset class="payment-method"><legend>Método de pago</legend><div class="method-options"><label class="method-option"><input type="radio" name="method" value="cash" checked><span class="method-card"><span aria-hidden="true">▣</span><strong>Efectivo</strong></span></label><label class="method-option"><input type="radio" name="method" value="transfer"><span class="method-card"><span aria-hidden="true">⇄</span><strong>Transf</strong></span></label></div></fieldset>
         <div class="voucher-field" id="voucher-field" hidden><span class="voucher-label" id="voucher-label">Comprobante de la transferencia (opcional)</span><div class="voucher-sources" role="group" aria-labelledby="voucher-label"><label class="file-picker-control voucher-source"><input id="voucher-file" class="photo-file-input" type="file" accept="image/*" aria-label="Subir captura o imagen del comprobante desde la galería"><span class="file-picker-button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v14H4z"/><path d="m4 16 4.5-4.5 3.5 3.5 2.5-2.5L20 18"/><circle cx="15.5" cy="9" r="1.5"/></svg><span>Subir captura</span></span></label><label class="file-picker-control voucher-source"><input id="voucher-camera" class="photo-file-input" type="file" accept="image/*" capture="environment" aria-label="Tomar foto del comprobante con la cámara"><span class="file-picker-button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h3l1.5-2h7L17 7h3v12H4z"/><circle cx="12" cy="13" r="3.5"/></svg><span>Tomar foto</span></span></label></div><span class="file-picker-name voucher-file-name" id="voucher-file-name" aria-live="polite">Ningún archivo seleccionado</span><small>Si no la adjuntas, el abono quedará marcado como pendiente de evidencia.</small></div>
         <button class="primary-button submit-payment" type="submit">Confirmar pago <span aria-hidden="true">→</span></button>
@@ -512,7 +529,7 @@
     // al cambiar el sello, el navegador descarga el JS/CSS nuevo en vez de usar su caché.
     // Para desarrollar con los módulos sueltos, abre index.html?dev desde un servidor local.
     (() => {
-      const APP_VERSION = '1f8fe9d77f';
+      const APP_VERSION = '5ed3d512f9';
       const dev = new URLSearchParams(location.search).has('dev') && location.protocol !== 'file:';
       if (dev) {
         document.getElementById('app-styles').href = 'styles.css';

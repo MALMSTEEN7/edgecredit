@@ -8,6 +8,7 @@
  * Cierre mensual: seguros del periodo con «Cuadrar seguros».
  */
 
+import { renderPortfolioReport } from './portfolio-report.js';
 import { routeSelect } from '../../core/dom.js';
 import { state } from '../../core/state.js';
 import { clients, persistBusinessData } from '../../core/store.js';
@@ -113,6 +114,7 @@ export function renderRouteReports(route) {
   renderCashBox(route);
   renderWeeklyAudit(route, monthValue);
   renderMonthlyInsurance(route, monthValue);
+  renderPortfolioReport();
 }
 
 // ── Caja del cobro ──

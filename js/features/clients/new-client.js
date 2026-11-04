@@ -20,6 +20,7 @@ import { formatDate, formatMoney, normalizeSearch } from '../../shared/format.js
 import { compressClientPhoto } from '../../shared/media.js';
 import { LOCATION_FAILURE_LABELS, hasCoordinates, isApproximateLocation, locateDevice } from '../../shared/geo.js';
 import { showToast } from '../../ui/toast.js';
+import { roundToThousand } from '../../shared/math.js';
 
 // Cartulina de origen cuando el modal está en modo «Renovar crédito» (linkMode 'renew')
 // o «Otra cartulina» para la misma persona (linkMode 'extra').
@@ -316,7 +317,8 @@ function addNewClient(values, photoData = '', insurance, gps = null) {
   const mode = source ? linkMode : null;
   const interestPercent = isAdmin ? Number(values.adminInterestPercent) : 20;
   const today = localDateISO();
-  const total = Math.round(principal * (1 + interestPercent / 100));
+  // Valor total y cuota redondeados a miles (como los seguros): 388.800 → 389.000.
+  const total = roundToThousand(principal * (1 + interestPercent / 100));
   const name = values.name.trim();
   const initials = name.split(/\s+/).slice(0, 2).map(part => part[0]).join('').toUpperCase();
   const totalDays = Math.max(1, Math.round(Number(values.totalDays)));
@@ -326,7 +328,7 @@ function addNewClient(values, photoData = '', insurance, gps = null) {
   const route = routeSettlements[assignedRoute];
   const noBaseImpact = isAdmin && document.querySelector('#admin-no-base-impact').checked;
   clients[clientId] = {
-    name, initials, route: assignedRoute, balance: total, principal, installment: Math.ceil(total / installments),
+    name, initials, route: assignedRoute, balance: total, principal, installment: Math.max(1, roundToThousand(total / installments)),
     status: 'Al día', late: false, id: values.idNumber.trim(), address: values.address.trim(), altAddress: (values.altAddress || '').trim(), addressHistory: [], phone: values.phone.trim(),
     total, term: `${totalDays} días`, breakdown: `${formatMoney(principal)} / ${formatMoney(total - principal)}`,
     paid: 0, installments, progress: 0, routeDay: 1, totalDays, generalInterest: 0,

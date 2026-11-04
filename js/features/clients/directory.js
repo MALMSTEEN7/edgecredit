@@ -16,6 +16,7 @@ import { openCustomModal } from '../../ui/custom-modal.js';
 import { showView } from '../../ui/navigation.js';
 import { renderHomeHeader, renderHomeRowActions } from '../worker/home.js';
 import { cardLabel, isActiveCard } from '../../domain/person-cards.js';
+import { isClavo } from '../../domain/portfolio.js';
 import { paintCardColorBand } from '../../domain/card-color.js';
 
 /**
@@ -152,17 +153,20 @@ function directoryCategory(client) {
 }
 
 function matchesDirectoryFilter(client) {
+  // Clavos: cartulinas con saldo sin abonar hace meses (Reportes › Cartera elige cuántos).
+  if (directoryFilter === 'clavo') return isClavo(client);
   const category = directoryCategory(client);
   if (directoryFilter === 'active') return category !== 'cancelled';
   return category === directoryFilter;
 }
 
 function renderDirectoryFilterCounts(route) {
-  const counts = { active: 0, good: 0, irregular: 0, bad: 0, cancelled: 0 };
+  const counts = { active: 0, good: 0, irregular: 0, bad: 0, cancelled: 0, clavo: 0 };
   Object.values(clients).forEach(client => {
     if (!client || client.route !== route) return;
     const category = directoryCategory(client);
     counts[category] += 1;
+    if (isClavo(client)) counts.clavo += 1;
     if (category !== 'cancelled') counts.active += 1;
   });
   Object.entries(counts).forEach(([key, value]) => {

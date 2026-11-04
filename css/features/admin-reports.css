@@ -848,3 +848,126 @@
   color: var(--muted);
   font-size: 11px;
 }
+
+/* ── Reportes › Cartera ── */
+.portfolio-modes {
+  display: inline-flex;
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+}
+
+.portfolio-mode {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 34px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 999px;
+  background: none;
+  color: var(--muted);
+  font: 700 12px 'DM Sans', sans-serif;
+  cursor: pointer;
+}
+
+.portfolio-mode.is-active {
+  background: var(--primary);
+  color: #fff;
+}
+
+.portfolio-mode:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+.clavo-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #AB47BC;
+}
+
+.portfolio-total-card {
+  display: grid;
+  gap: 6px;
+  margin: 4px 0 12px;
+  padding: 18px;
+  border: 1px solid color-mix(in srgb, var(--primary) 35%, var(--line));
+  border-radius: 16px;
+  background: linear-gradient(145deg, var(--card), color-mix(in srgb, var(--primary) 8%, var(--card)));
+}
+
+.portfolio-total-card span {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.portfolio-total-card strong {
+  color: var(--text);
+  font: 800 clamp(1.8rem, 4vw, 2.4rem) Manrope, sans-serif;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -.5px;
+}
+
+.portfolio-total-card small {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.portfolio-panel[data-mode="clavos"] .portfolio-total-card {
+  border-color: color-mix(in srgb, #AB47BC 45%, var(--line));
+}
+
+.portfolio-metrics {
+  margin-bottom: 12px;
+}
+
+.portfolio-clavo-setting {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 12px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.portfolio-clavo-setting select {
+  height: 36px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text);
+  font: 600 12px 'DM Sans', sans-serif;
+}
+
+.portfolio-table {
+  min-width: 640px;
+}
+
+.portfolio-table tbody td:nth-child(2) {
+  color: var(--muted);
+  text-align: left !important;
+}
+
+.clavo-tag {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: color-mix(in srgb, #AB47BC 20%, transparent);
+  color: #CE93D8;
+  font-size: 10px;
+  font-weight: 800;
+  vertical-align: 1px;
+}
+
+:root[data-theme="light"] .clavo-tag {
+  color: #7B1FA2;
+}

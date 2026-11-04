@@ -11,6 +11,7 @@
  */
 
 import { installmentCount } from '../core/config.js';
+import { roundToThousand } from '../shared/math.js';
 import { localDateISO } from '../shared/dates.js';
 import { formatMoney } from '../shared/format.js';
 import { GENERAL_INSURANCE_PERCENT } from './insurance.js';
@@ -20,11 +21,11 @@ export const FINANCE_INTEREST_PERCENT = 20;
 /** Seguros generales sobre el monto extra de un retanqueo (los mismos 10 % de un préstamo). */
 export const GENERAL_RETANQUEO = { insurancePercent: GENERAL_INSURANCE_PERCENT };
 
-/** Valor de un porcentaje o, si se escribió, el monto exacto. */
+/** Valor de un porcentaje (redondeado a miles) o, si se escribió, el monto exacto. */
 export function percentOrAmount(base, percent, exactAmount) {
   const exact = Number(exactAmount);
   if (String(exactAmount ?? '').trim() !== '' && Number.isFinite(exact) && exact >= 0) return Math.round(exact);
-  return Math.round((Number(base) || 0) * (Number(percent) || 0) / 100);
+  return roundToThousand((Number(base) || 0) * (Number(percent) || 0) / 100);
 }
 
 /**
@@ -49,7 +50,7 @@ function restartSchedule(client, totalDays, today) {
   (client.payments || []).forEach(payment => { payment.cycleIndex = -1; payment.beforeRestructure = true; });
   Object.assign(client, {
     creditStartDate: startDate, totalDays: days, term: `${days} días`, routeDay: 1,
-    installments, installment: Math.ceil(Number(client.balance) / installments),
+    installments, installment: Math.max(1, roundToThousand(Number(client.balance) / installments)),
     paid: 0, paidPeriodIndexes: [], schedulePaidBaseline: 0, late: false, status: 'Al día', settledAt: null,
   });
 }

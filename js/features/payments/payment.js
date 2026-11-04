@@ -34,7 +34,34 @@ export function openPayment() {
   document.querySelector('#voucher-file-name').textContent = 'Ningún archivo seleccionado';
   document.querySelector('input[name="method"][value="cash"]').checked = true;
   updatePaymentMethod();
+  updateBalancePreview();
   window.setTimeout(() => amountInput.focus(), 40);
+}
+
+/**
+ * Debajo del monto: lo que debe el cliente ahora y en cuánto queda con el abono que se está
+ * escribiendo (se actualiza con cada número).
+ */
+function updateBalancePreview() {
+  const client = clients[state.activeClient];
+  if (!client) return;
+  const balance = Math.max(0, Number(client.balance) || 0);
+  const amount = Math.max(0, Number(amountInput.value) || 0);
+  const after = balance - amount;
+  document.querySelector('#payment-balance-now').textContent = formatMoney(balance);
+  const afterNode = document.querySelector('#payment-balance-after');
+  afterNode.textContent = formatMoney(Math.max(0, after));
+  const preview = document.querySelector('#payment-balance-preview');
+  preview.classList.toggle('is-settled', amount > 0 && after === 0);
+  preview.classList.toggle('is-over', after < 0);
+  preview.classList.toggle('has-amount', amount > 0);
+  document.querySelector('#payment-balance-after-label').textContent = amount > 0 && after === 0 ? 'Queda pagada' : 'Queda debiendo';
+  const installment = Number(client.installment) || 0;
+  document.querySelector('#payment-balance-note').textContent = after < 0
+    ? `El abono supera la deuda por ${formatMoney(-after)}.`
+    : amount > 0 && after === 0 ? 'Con este abono cancela toda la deuda.'
+    : amount > 0 ? `El saldo baja ${formatMoney(amount)}.${installment ? ` Cuota: ${formatMoney(installment)}.` : ''}`
+    : installment ? `Cuota: ${formatMoney(installment)}.` : '';
 }
 
 export function closePayment() {
@@ -73,6 +100,7 @@ export function mount() {
   document.querySelectorAll('[data-close-payment]').forEach(button => button.addEventListener('click', closePayment));
   document.querySelectorAll('input[name="method"]').forEach(input => input.addEventListener('change', updatePaymentMethod));
   modal.addEventListener('click', event => { if (event.target === modal) closePayment(); });
+  amountInput.addEventListener('input', updateBalancePreview);
   paymentForm.addEventListener('submit', async event => {
     event.preventDefault();
     const returnHome = state.paymentFromHome; // openClient() lo reinicia más abajo

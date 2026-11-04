@@ -16,6 +16,7 @@ import { renderRouteBuilder } from '../daily-route/daily-route.js';
 import { formatDate, formatMoney, routeKey } from '../../shared/format.js';
 import { openCustomModal } from '../../ui/custom-modal.js';
 import { showToast } from '../../ui/toast.js';
+import { roundToThousand } from '../../shared/math.js';
 
 const REQUEST_TITLES = { interest: 'Excepción de interés', insurance: 'Excepción de seguros', 'route-correction': 'Corrección de visita o pago', finance: 'Solicitud de financiación', retanqueo: 'Solicitud de retanqueo' };
 
@@ -133,9 +134,9 @@ function resolvePendingRequest(requestId, approved, approvedValue) {
     if (client) {
       if (request.type === 'interest') {
         client.interestPercent = approvedValue;
-        client.total = Math.round(client.principal * (1 + approvedValue / 100));
+        client.total = roundToThousand(client.principal * (1 + approvedValue / 100));
         client.balance = client.total;
-        client.installment = Math.ceil(client.total / client.installments);
+        client.installment = Math.max(1, roundToThousand(client.total / client.installments));
         client.breakdown = `${formatMoney(client.principal)} / ${formatMoney(client.total - client.principal)}`;
       } else client.insurancePercent = approvedValue;
     }
