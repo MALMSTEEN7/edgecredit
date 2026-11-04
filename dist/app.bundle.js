@@ -1537,10 +1537,12 @@ function startDateForPayday(client, weekday) {
  * seguros se cobran al entregar el préstamo, así que entran a la caja ese mismo día.
  */
 
+
 const GENERAL_INSURANCE_PERCENT = 10;
 
+/** 10% del capital, redondeado a miles (22.300 → 22.000; 22.600 → 23.000). */
 function generalInsuranceAmount(principal) {
-  return Math.round((Number(principal) || 0) * GENERAL_INSURANCE_PERCENT / 100);
+  return roundToThousand((Number(principal) || 0) * GENERAL_INSURANCE_PERCENT / 100);
 }
 
 /** Seguros de una cartulina, compatible con datos antiguos guardados en porcentaje. */
@@ -2645,6 +2647,98 @@ function canAddCard(clients, idNumber) {
   return activeCardIds(clients, idNumber).length < MAX_ACTIVE_CARDS_PER_PERSON;
 }
 
+// ── js/domain/portfolio.js
+/**
+ * domain/portfolio · Cartera de un cobro: el dinero que aún está en la calle.
+ *
+ * - Cartera = la suma de lo que deben las cartulinas activas (saldo), que ya incluye los
+ *   intereses que faltan por cobrar. Se separa en capital e intereses en la misma proporción
+ *   del préstamo (si prestó 100 y debe pagar 120, de cada peso que falta 1/6 es interés).
+ * - Clavo = cartulina con saldo que no ha abonado nada en más de N meses (desde su último
+ *   abono, o desde la entrega si nunca abonó). N lo elige el admin (2 meses por defecto) y se
+ *   recuerda en este dispositivo; lo usan Reportes › Cartera y el filtro del Directorio.
+ */
+
+
+const CLAVO_MONTH_OPTIONS = [2, 3, 6, 12];
+const CLAVO_KEY = 'edgecredit-clavo-months';
+
+function clavoMonths() {
+  try {
+    const value = Number(localStorage.getItem(CLAVO_KEY));
+    return CLAVO_MONTH_OPTIONS.includes(value) ? value : 2;
+  } catch { return 2; }
+}
+
+function setClavoMonths(months) {
+  try { localStorage.setItem(CLAVO_KEY, String(months)); } catch { /* opcional */ }
+}
+
+/** Último abono (fecha) o, si nunca abonó, la fecha de entrega del crédito. */
+function lastPaymentDate(client) {
+  const last = (client?.payments || [])
+    .filter(payment => Number(payment.amount) > 0 && payment.date)
+    .map(payment => String(payment.date))
+    .sort()
+    .at(-1);
+  return last || client?.lastPaymentDate || client?.creditStartDate || '';
+}
+
+/** Fecha límite: quien no abona desde antes de esta fecha es clavo. */
+function clavoCutoff(months = clavoMonths(), today = localDateISO()) {
+  const [year, month, day] = today.split('-').map(Number);
+  const cutoff = new Date(year, month - 1 - months, day);
+  return localDateISO(cutoff);
+}
+
+function isClavo(client, months = clavoMonths(), today = localDateISO()) {
+  if (!client || Number(client.balance) <= 0) return false;
+  const last = lastPaymentDate(client);
+  return Boolean(last) && last < clavoCutoff(months, today);
+}
+
+/** Días desde el último abono (o desde la entrega). */
+function daysWithoutPayment(client, today = localDateISO()) {
+  const last = lastPaymentDate(client);
+  if (!last) return null;
+  return Math.max(0, Math.round((Date.parse(`${today}T12:00:00`) - Date.parse(`${last}T12:00:00`)) / 86400000));
+}
+
+/** Parte del saldo que es interés (proporción del préstamo) y parte que es capital. */
+function splitBalance(client) {
+  const balance = Math.max(0, Number(client.balance) || 0);
+  const total = Number(client.total) || 0;
+  const principal = Number(client.principal) || 0;
+  const share = total > 0 && principal > 0 && total > principal ? (total - principal) / total : 0;
+  const interest = Math.round(balance * share);
+  return { balance, interest, capital: balance - interest };
+}
+
+/**
+ * Cartera del cobro: totales de todas las cartulinas activas y de los clavos, y una fila por
+ * cartulina (de la que más debe a la que menos).
+ */
+function routePortfolio(clients, routeId, { months = clavoMonths(), today = localDateISO() } = {}) {
+  const empty = () => ({ balance: 0, capital: 0, interest: 0, count: 0 });
+  const all = empty();
+  const clavos = empty();
+  const rows = [];
+  Object.entries(clients).forEach(([id, client]) => {
+    if (!client || client.route !== routeId || Number(client.balance) <= 0) return;
+    const part = splitBalance(client);
+    const clavo = isClavo(client, months, today);
+    [all, ...(clavo ? [clavos] : [])].forEach(sum => {
+      sum.balance += part.balance;
+      sum.capital += part.capital;
+      sum.interest += part.interest;
+      sum.count += 1;
+    });
+    rows.push({ id, client, ...part, clavo, last: lastPaymentDate(client), days: daysWithoutPayment(client, today) });
+  });
+  rows.sort((a, b) => b.balance - a.balance || String(a.client.name).localeCompare(String(b.client.name), 'es'));
+  return { all, clavos, rows, months };
+}
+
 // ── js/domain/restructure.js
 /**
  * domain/restructure · Cambios a una cartulina con saldo, hechos por el admin.
@@ -2662,16 +2756,17 @@ function canAddCard(clients, idNumber) {
 
 
 
+
 const RETANQUEO_INTEREST_PERCENT = 20;
 const FINANCE_INTEREST_PERCENT = 20;
 /** Seguros generales sobre el monto extra de un retanqueo (los mismos 10 % de un préstamo). */
 const GENERAL_RETANQUEO = { insurancePercent: GENERAL_INSURANCE_PERCENT };
 
-/** Valor de un porcentaje o, si se escribió, el monto exacto. */
+/** Valor de un porcentaje (redondeado a miles) o, si se escribió, el monto exacto. */
 function percentOrAmount(base, percent, exactAmount) {
   const exact = Number(exactAmount);
   if (String(exactAmount ?? '').trim() !== '' && Number.isFinite(exact) && exact >= 0) return Math.round(exact);
-  return Math.round((Number(base) || 0) * (Number(percent) || 0) / 100);
+  return roundToThousand((Number(base) || 0) * (Number(percent) || 0) / 100);
 }
 
 /**
@@ -2696,7 +2791,7 @@ function restartSchedule(client, totalDays, today) {
   (client.payments || []).forEach(payment => { payment.cycleIndex = -1; payment.beforeRestructure = true; });
   Object.assign(client, {
     creditStartDate: startDate, totalDays: days, term: `${days} días`, routeDay: 1,
-    installments, installment: Math.ceil(Number(client.balance) / installments),
+    installments, installment: Math.max(1, roundToThousand(Number(client.balance) / installments)),
     paid: 0, paidPeriodIndexes: [], schedulePaidBaseline: 0, late: false, status: 'Al día', settledAt: null,
   });
 }
@@ -4251,6 +4346,7 @@ function __mount_legacyImportModule() {
 
 
 
+
 const REQUEST_TITLES = { interest: 'Excepción de interés', insurance: 'Excepción de seguros', 'route-correction': 'Corrección de visita o pago', finance: 'Solicitud de financiación', retanqueo: 'Solicitud de retanqueo' };
 
 /** Lo que pidió el trabajador al financiar o retanquear, en una línea. */
@@ -4367,9 +4463,9 @@ function resolvePendingRequest(requestId, approved, approvedValue) {
     if (client) {
       if (request.type === 'interest') {
         client.interestPercent = approvedValue;
-        client.total = Math.round(client.principal * (1 + approvedValue / 100));
+        client.total = roundToThousand(client.principal * (1 + approvedValue / 100));
         client.balance = client.total;
-        client.installment = Math.ceil(client.total / client.installments);
+        client.installment = Math.max(1, roundToThousand(client.total / client.installments));
         client.breakdown = `${formatMoney(client.principal)} / ${formatMoney(client.total - client.principal)}`;
       } else client.insurancePercent = approvedValue;
     }
@@ -4606,17 +4702,24 @@ function createExpiryIndicator(label, dateValue) {
   return item;
 }
 
+/**
+ * Aviso de SOAT o técnico-mecánica por vencer (5 días antes, hasta el día en que vence). Pasada
+ * la fecha de vencimiento ya no se muestra. «No recordar más» se guarda en este dispositivo
+ * (el trabajador no puede modificar su perfil en el servidor) y vale para ESAS fechas: si el
+ * admin registra una fecha nueva, el recordatorio vuelve a funcionar.
+ */
 function showVehicleExpiryAlert(worker) {
   const expiring = [
     ['SOAT', worker.soatExpiry], ['Técnico-mecánica', worker.technicalExpiry]
-  ].map(([label, date]) => ({ label, date, days: daysUntil(date) })).filter(item => item.days !== null && item.days <= 5);
+  ].map(([label, date]) => ({ label, date, days: daysUntil(date) })).filter(item => item.days !== null && item.days >= 0 && item.days <= 5);
   if (!expiring.length) return;
-  // «No recordar más» silencia el aviso para ESTAS fechas; si el admin registra una fecha
-  // nueva (renovación), el recordatorio vuelve a funcionar.
   const dismissKey = expiring.map(item => `${item.label}:${item.date}`).join('|');
-  if (worker.expiryAlertDismissed === dismissKey) return;
+  const storageKey = `edgecredit-expiry-dismissed-${worker.id || worker.username || 'trabajador'}`;
+  let dismissedHere = '';
+  try { dismissedHere = localStorage.getItem(storageKey) || ''; } catch { /* opcional */ }
+  if (worker.expiryAlertDismissed === dismissKey || dismissedHere === dismissKey) return;
   const days = value => `${value} día${value === 1 ? '' : 's'}`;
-  const message = expiring.map(item => `${item.label}: ${item.days < 0 ? `vencido hace ${days(Math.abs(item.days))}` : item.days === 0 ? 'vence hoy' : `vence en ${days(item.days)}`} (${new Date(`${item.date}T00:00:00`).toLocaleDateString('es-CO')})`).join(' · ');
+  const message = expiring.map(item => `${item.label}: ${item.days === 0 ? 'vence hoy' : `vence en ${days(item.days)}`} (${new Date(`${item.date}T00:00:00`).toLocaleDateString('es-CO')})`).join(' · ');
   openCustomModal({
     title: 'Vencimiento vehicular próximo',
     description: `${worker.name}: ${message}. Programa la renovación para continuar operando.`,
@@ -4625,6 +4728,7 @@ function showVehicleExpiryAlert(worker) {
     cancelLabel: 'No recordar más',
     onCancel: () => {
       worker.expiryAlertDismissed = dismissKey;
+      try { localStorage.setItem(storageKey, dismissKey); } catch { /* opcional */ }
       persistBusinessData();
       showToast('No se volverá a mostrar este aviso hasta que se registre una nueva fecha de vencimiento.');
     },
@@ -4847,6 +4951,121 @@ function __mount_personnelModule() {
   });
 }
 
+// ── js/features/admin/portfolio-report.js
+/**
+ * features/admin/portfolio-report · Reportes financieros › Cartera.
+ *
+ * Muestra el dinero que el cobro seleccionado tiene repartido en clientes (saldos de las
+ * cartulinas activas, con sus intereses) y, con el botón «Solo clavos», lo que deben los
+ * clientes que no abonan hace meses (domain/portfolio.js).
+ */
+
+
+
+
+
+const pq = selector => document.querySelector(selector);
+let onlyClavos = false;
+
+function monthsLabel(months) {
+  return `${months} ${months === 1 ? 'mes' : 'meses'}`;
+}
+
+function waitingLabel(days) {
+  if (days === null || days === undefined) return '—';
+  if (days >= 365) { const years = Math.floor(days / 365); return `${years} año${years === 1 ? '' : 's'}${days % 365 >= 30 ? ` y ${Math.floor((days % 365) / 30)} m` : ''}`; }
+  if (days >= 60) return `${Math.floor(days / 30)} meses`;
+  return `${days} día${days === 1 ? '' : 's'}`;
+}
+
+function renderPortfolioReport() {
+  const panel = pq('[data-report-panel="portfolio"]');
+  if (!panel) return;
+  const routeId = routeSelect.value;
+  const route = routeSettlements[routeId];
+  if (!route) return;
+  const months = clavoMonths();
+  const portfolio = routePortfolio(clients, routeId, { months });
+  const view = onlyClavos ? portfolio.clavos : portfolio.all;
+  pq('#portfolio-route-name').textContent = String(route.name || routeId).toLocaleUpperCase('es');
+  pq('#portfolio-title').textContent = onlyClavos ? 'Lo que deben los clavos' : 'Dinero por recoger';
+  panel.dataset.mode = onlyClavos ? 'clavos' : 'all';
+  document.querySelectorAll('[data-portfolio-mode]').forEach(button => {
+    const active = (button.dataset.portfolioMode === 'clavos') === onlyClavos;
+    button.classList.toggle('is-active', active);
+    button.setAttribute('aria-pressed', String(active));
+  });
+  pq('#portfolio-total-label').textContent = onlyClavos ? 'Total de los clavos' : 'Cartera total (con intereses y clavos)';
+  pq('#portfolio-total').textContent = formatMoney(view.balance);
+  pq('#portfolio-capital').textContent = formatMoney(view.capital);
+  pq('#portfolio-interest').textContent = formatMoney(view.interest);
+  pq('#portfolio-count').textContent = `${view.count} ${view.count === 1 ? 'cartulina' : 'cartulinas'}`;
+  const share = portfolio.all.balance ? Math.round(portfolio.clavos.balance / portfolio.all.balance * 100) : 0;
+  pq('#portfolio-clavos-line').textContent = onlyClavos
+    ? `${share}% de la cartera de ${route.name} (${formatMoney(portfolio.all.balance)}) está en clavos: clientes sin abonar hace más de ${monthsLabel(months)}.`
+    : `Incluye ${formatMoney(portfolio.clavos.balance)} en ${portfolio.clavos.count} clavo${portfolio.clavos.count === 1 ? '' : 's'} (${share}% de la cartera): sin abonar hace más de ${monthsLabel(months)}.`;
+  const select = pq('#portfolio-clavo-months');
+  if (select && document.activeElement !== select) select.value = String(months);
+  const rows = onlyClavos ? portfolio.rows.filter(row => row.clavo).sort((a, b) => (b.days || 0) - (a.days || 0)) : portfolio.rows;
+  const body = pq('#portfolio-body');
+  body.replaceChildren(...rows.map(row => {
+    const tr = document.createElement('tr');
+    tr.classList.toggle('is-clavo', row.clavo);
+    const name = document.createElement('th');
+    name.scope = 'row';
+    name.textContent = row.client.name;
+    if (row.clavo) {
+      const tag = document.createElement('span');
+      tag.className = 'clavo-tag';
+      tag.textContent = 'Clavo';
+      name.append(' ', tag);
+    }
+    const last = document.createElement('td');
+    last.textContent = row.last ? `${formatDate(row.last)} · ${waitingLabel(row.days)}` : '—';
+    const capital = document.createElement('td');
+    capital.className = 'numeric';
+    capital.textContent = formatMoney(row.capital);
+    const interest = document.createElement('td');
+    interest.className = 'numeric';
+    interest.textContent = formatMoney(row.interest);
+    const balance = document.createElement('td');
+    balance.className = 'numeric';
+    balance.textContent = formatMoney(row.balance);
+    tr.append(name, last, capital, interest, balance);
+    return tr;
+  }));
+  const foot = pq('#portfolio-foot');
+  foot.replaceChildren();
+  if (rows.length) {
+    const tr = document.createElement('tr');
+    tr.innerHTML = '<th scope="row" colspan="2">Total</th><td class="numeric"></td><td class="numeric"></td><td class="numeric"></td>';
+    const cells = tr.querySelectorAll('td');
+    cells[0].textContent = formatMoney(view.capital);
+    cells[1].textContent = formatMoney(view.interest);
+    cells[2].textContent = formatMoney(view.balance);
+    foot.append(tr);
+  }
+  pq('#portfolio-empty').hidden = Boolean(rows.length);
+  pq('#portfolio-empty').textContent = onlyClavos ? `No hay clavos: todos los clientes de ${route.name} han abonado en los últimos ${monthsLabel(months)}.` : 'No hay cartulinas activas en este cobro.';
+  pq('#portfolio-table-wrap').hidden = !rows.length;
+}
+
+/** Registra los listeners del módulo. Se invoca una sola vez desde app.js. */
+function __mount_portfolioReportModule() {
+  const select = pq('#portfolio-clavo-months');
+  if (select) {
+    select.replaceChildren(...CLAVO_MONTH_OPTIONS.map(months => new Option(`Más de ${monthsLabel(months)} sin abonar`, String(months))));
+    select.value = String(clavoMonths());
+    select.addEventListener('change', () => { setClavoMonths(Number(select.value)); renderPortfolioReport(); });
+  }
+  document.querySelectorAll('[data-portfolio-mode]').forEach(button => button.addEventListener('click', () => {
+    onlyClavos = button.dataset.portfolioMode === 'clavos';
+    renderPortfolioReport();
+  }));
+  document.querySelector('[data-report-tab="portfolio"]')?.addEventListener('click', renderPortfolioReport);
+  routeSelect.addEventListener('change', renderPortfolioReport);
+}
+
 // ── js/features/admin/reports.js
 /**
  * features/admin/reports · Reportes financieros por cobro.
@@ -4857,6 +5076,7 @@ function __mount_personnelModule() {
  * en la misma tabla. La última semana del mes incluye el total del mes.
  * Cierre mensual: seguros del periodo con «Cuadrar seguros».
  */
+
 
 
 
@@ -4962,6 +5182,7 @@ function renderRouteReports(route) {
   renderCashBox(route);
   renderWeeklyAudit(route, monthValue);
   renderMonthlyInsurance(route, monthValue);
+  renderPortfolioReport();
 }
 
 // ── Caja del cobro ──
@@ -7665,6 +7886,7 @@ function __mount_clientDetailModule() {
 
 
 
+
 /**
  * Agrega las filas del cliente en el Inicio y el directorio. Al cargar muchos clientes de una vez
  * se pasa `{ refresh: false }` y se filtra una sola vez al final (filtrar por cada uno es muy lento).
@@ -7799,17 +8021,20 @@ function directoryCategory(client) {
 }
 
 function matchesDirectoryFilter(client) {
+  // Clavos: cartulinas con saldo sin abonar hace meses (Reportes › Cartera elige cuántos).
+  if (directoryFilter === 'clavo') return isClavo(client);
   const category = directoryCategory(client);
   if (directoryFilter === 'active') return category !== 'cancelled';
   return category === directoryFilter;
 }
 
 function renderDirectoryFilterCounts(route) {
-  const counts = { active: 0, good: 0, irregular: 0, bad: 0, cancelled: 0 };
+  const counts = { active: 0, good: 0, irregular: 0, bad: 0, cancelled: 0, clavo: 0 };
   Object.values(clients).forEach(client => {
     if (!client || client.route !== route) return;
     const category = directoryCategory(client);
     counts[category] += 1;
+    if (isClavo(client)) counts.clavo += 1;
     if (category !== 'cancelled') counts.active += 1;
   });
   Object.entries(counts).forEach(([key, value]) => {
@@ -7992,6 +8217,7 @@ function __mount_interestModule() {
  * features/clients/new-client · Alta de clientes, renovación de créditos, seguros
  * (10% general o valor propio con motivo) y solicitudes de excepción de interés.
  */
+
 
 
 
@@ -8305,7 +8531,8 @@ function addNewClient(values, photoData = '', insurance, gps = null) {
   const mode = source ? linkMode : null;
   const interestPercent = isAdmin ? Number(values.adminInterestPercent) : 20;
   const today = localDateISO();
-  const total = Math.round(principal * (1 + interestPercent / 100));
+  // Valor total y cuota redondeados a miles (como los seguros): 388.800 → 389.000.
+  const total = roundToThousand(principal * (1 + interestPercent / 100));
   const name = values.name.trim();
   const initials = name.split(/\s+/).slice(0, 2).map(part => part[0]).join('').toUpperCase();
   const totalDays = Math.max(1, Math.round(Number(values.totalDays)));
@@ -8315,7 +8542,7 @@ function addNewClient(values, photoData = '', insurance, gps = null) {
   const route = routeSettlements[assignedRoute];
   const noBaseImpact = isAdmin && document.querySelector('#admin-no-base-impact').checked;
   clients[clientId] = {
-    name, initials, route: assignedRoute, balance: total, principal, installment: Math.ceil(total / installments),
+    name, initials, route: assignedRoute, balance: total, principal, installment: Math.max(1, roundToThousand(total / installments)),
     status: 'Al día', late: false, id: values.idNumber.trim(), address: values.address.trim(), altAddress: (values.altAddress || '').trim(), addressHistory: [], phone: values.phone.trim(),
     total, term: `${totalDays} días`, breakdown: `${formatMoney(principal)} / ${formatMoney(total - principal)}`,
     paid: 0, installments, progress: 0, routeDay: 1, totalDays, generalInterest: 0,
@@ -9407,7 +9634,34 @@ function openPayment() {
   document.querySelector('#voucher-file-name').textContent = 'Ningún archivo seleccionado';
   document.querySelector('input[name="method"][value="cash"]').checked = true;
   updatePaymentMethod();
+  updateBalancePreview();
   window.setTimeout(() => amountInput.focus(), 40);
+}
+
+/**
+ * Debajo del monto: lo que debe el cliente ahora y en cuánto queda con el abono que se está
+ * escribiendo (se actualiza con cada número).
+ */
+function updateBalancePreview() {
+  const client = clients[state.activeClient];
+  if (!client) return;
+  const balance = Math.max(0, Number(client.balance) || 0);
+  const amount = Math.max(0, Number(amountInput.value) || 0);
+  const after = balance - amount;
+  document.querySelector('#payment-balance-now').textContent = formatMoney(balance);
+  const afterNode = document.querySelector('#payment-balance-after');
+  afterNode.textContent = formatMoney(Math.max(0, after));
+  const preview = document.querySelector('#payment-balance-preview');
+  preview.classList.toggle('is-settled', amount > 0 && after === 0);
+  preview.classList.toggle('is-over', after < 0);
+  preview.classList.toggle('has-amount', amount > 0);
+  document.querySelector('#payment-balance-after-label').textContent = amount > 0 && after === 0 ? 'Queda pagada' : 'Queda debiendo';
+  const installment = Number(client.installment) || 0;
+  document.querySelector('#payment-balance-note').textContent = after < 0
+    ? `El abono supera la deuda por ${formatMoney(-after)}.`
+    : amount > 0 && after === 0 ? 'Con este abono cancela toda la deuda.'
+    : amount > 0 ? `El saldo baja ${formatMoney(amount)}.${installment ? ` Cuota: ${formatMoney(installment)}.` : ''}`
+    : installment ? `Cuota: ${formatMoney(installment)}.` : '';
 }
 
 function closePayment() {
@@ -9446,6 +9700,7 @@ function __mount_paymentModule() {
   document.querySelectorAll('[data-close-payment]').forEach(button => button.addEventListener('click', closePayment));
   document.querySelectorAll('input[name="method"]').forEach(input => input.addEventListener('change', updatePaymentMethod));
   modal.addEventListener('click', event => { if (event.target === modal) closePayment(); });
+  amountInput.addEventListener('input', updateBalancePreview);
   paymentForm.addEventListener('submit', async event => {
     event.preventDefault();
     const returnHome = state.paymentFromHome; // openClient() lo reinicia más abajo
@@ -10336,6 +10591,16 @@ async function geocodeMunicipality(city, departmentName = '') {
 /**
  * shared/math · Reparto de montos y reordenamiento de listas. Funciones puras.
  */
+
+/**
+ * Redondea a miles de pesos: 22.300 → 22.000 y 22.600 → 23.000 (desde 500 sube). Montos
+ * menores a 1.000 se dejan como están para no quedar en cero.
+ */
+function roundToThousand(value) {
+  const amount = Number(value) || 0;
+  if (Math.abs(amount) < 1000) return Math.round(amount);
+  return Math.round(amount / 1000) * 1000;
+}
 
 function distributeAmount(total, count, index) {
   const base = Math.floor(total / count);
@@ -12604,6 +12869,7 @@ const adminShellModule = { mount: __mount_adminShellModule };
 const routePickerModule = { mount: __mount_routePickerModule };
 const settlementModule = { mount: __mount_settlementModule };
 const reportsModule = { mount: __mount_reportsModule };
+const portfolioReportModule = { mount: __mount_portfolioReportModule };
 const pendingModule = { mount: __mount_pendingModule };
 const personnelModule = { mount: __mount_personnelModule };
 const accessHoursModule = { mount: __mount_accessHoursModule };
@@ -12618,6 +12884,7 @@ const syncModule = { mount: __mount_syncModule };
  * Monta cada módulo (contenedor) y ejecuta la secuencia de arranque.
  * No contiene lógica de negocio: solo orquesta.
  */
+
 
 
 
@@ -12706,6 +12973,7 @@ const MODULES = [
   routePickerModule,
   settlementModule,
   reportsModule,
+  portfolioReportModule,
   pendingModule,
   personnelModule,
   accessHoursModule,

@@ -155,17 +155,24 @@ function createExpiryIndicator(label, dateValue) {
   return item;
 }
 
+/**
+ * Aviso de SOAT o técnico-mecánica por vencer (5 días antes, hasta el día en que vence). Pasada
+ * la fecha de vencimiento ya no se muestra. «No recordar más» se guarda en este dispositivo
+ * (el trabajador no puede modificar su perfil en el servidor) y vale para ESAS fechas: si el
+ * admin registra una fecha nueva, el recordatorio vuelve a funcionar.
+ */
 export function showVehicleExpiryAlert(worker) {
   const expiring = [
     ['SOAT', worker.soatExpiry], ['Técnico-mecánica', worker.technicalExpiry]
-  ].map(([label, date]) => ({ label, date, days: daysUntil(date) })).filter(item => item.days !== null && item.days <= 5);
+  ].map(([label, date]) => ({ label, date, days: daysUntil(date) })).filter(item => item.days !== null && item.days >= 0 && item.days <= 5);
   if (!expiring.length) return;
-  // «No recordar más» silencia el aviso para ESTAS fechas; si el admin registra una fecha
-  // nueva (renovación), el recordatorio vuelve a funcionar.
   const dismissKey = expiring.map(item => `${item.label}:${item.date}`).join('|');
-  if (worker.expiryAlertDismissed === dismissKey) return;
+  const storageKey = `edgecredit-expiry-dismissed-${worker.id || worker.username || 'trabajador'}`;
+  let dismissedHere = '';
+  try { dismissedHere = localStorage.getItem(storageKey) || ''; } catch { /* opcional */ }
+  if (worker.expiryAlertDismissed === dismissKey || dismissedHere === dismissKey) return;
   const days = value => `${value} día${value === 1 ? '' : 's'}`;
-  const message = expiring.map(item => `${item.label}: ${item.days < 0 ? `vencido hace ${days(Math.abs(item.days))}` : item.days === 0 ? 'vence hoy' : `vence en ${days(item.days)}`} (${new Date(`${item.date}T00:00:00`).toLocaleDateString('es-CO')})`).join(' · ');
+  const message = expiring.map(item => `${item.label}: ${item.days === 0 ? 'vence hoy' : `vence en ${days(item.days)}`} (${new Date(`${item.date}T00:00:00`).toLocaleDateString('es-CO')})`).join(' · ');
   openCustomModal({
     title: 'Vencimiento vehicular próximo',
     description: `${worker.name}: ${message}. Programa la renovación para continuar operando.`,
@@ -174,6 +181,7 @@ export function showVehicleExpiryAlert(worker) {
     cancelLabel: 'No recordar más',
     onCancel: () => {
       worker.expiryAlertDismissed = dismissKey;
+      try { localStorage.setItem(storageKey, dismissKey); } catch { /* opcional */ }
       persistBusinessData();
       showToast('No se volverá a mostrar este aviso hasta que se registre una nueva fecha de vencimiento.');
     },

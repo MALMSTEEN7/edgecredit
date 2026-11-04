@@ -258,3 +258,78 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* Registrar pago: lo que debe ahora → en cuánto queda con el abono que se escribe. */
+.payment-balance-preview {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: 4px 10px;
+  margin: 12px 0 4px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface);
+}
+
+.payment-balance-item {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.payment-balance-item.is-after {
+  text-align: right;
+}
+
+.payment-balance-item span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.payment-balance-item strong {
+  overflow: hidden;
+  color: var(--text);
+  font: 800 17px Manrope, sans-serif;
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.payment-balance-arrow {
+  color: var(--muted);
+  font-size: 18px;
+}
+
+.payment-balance-preview.has-amount .is-after strong {
+  color: var(--primary);
+}
+
+.payment-balance-preview.is-settled {
+  border-color: color-mix(in srgb, var(--success) 45%, var(--line));
+}
+
+.payment-balance-preview.is-settled .is-after strong,
+.payment-balance-preview.is-settled .payment-balance-note {
+  color: var(--success);
+}
+
+.payment-balance-preview.is-over {
+  border-color: color-mix(in srgb, var(--alert-color, #e53935) 50%, var(--line));
+}
+
+.payment-balance-preview.is-over .payment-balance-note {
+  color: var(--alert-color, #e53935);
+}
+
+.payment-balance-note {
+  grid-column: 1 / -1;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.payment-balance-note:empty {
+  display: none;
+}

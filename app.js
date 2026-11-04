@@ -29,6 +29,7 @@ import * as adminShellModule from './js/features/admin/admin-shell.js';
 import * as routePickerModule from './js/features/admin/route-picker.js';
 import * as settlementModule from './js/features/admin/settlement.js';
 import * as reportsModule from './js/features/admin/reports.js';
+import * as portfolioReportModule from './js/features/admin/portfolio-report.js';
 import * as pendingModule from './js/features/admin/pending.js';
 import * as personnelModule from './js/features/admin/personnel.js';
 import * as accessHoursModule from './js/features/admin/access-hours.js';
@@ -92,6 +93,7 @@ const MODULES = [
   routePickerModule,
   settlementModule,
   reportsModule,
+  portfolioReportModule,
   pendingModule,
   personnelModule,
   accessHoursModule,

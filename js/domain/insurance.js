@@ -6,10 +6,13 @@
  * seguros se cobran al entregar el préstamo, así que entran a la caja ese mismo día.
  */
 
+import { roundToThousand } from '../shared/math.js';
+
 export const GENERAL_INSURANCE_PERCENT = 10;
 
+/** 10% del capital, redondeado a miles (22.300 → 22.000; 22.600 → 23.000). */
 export function generalInsuranceAmount(principal) {
-  return Math.round((Number(principal) || 0) * GENERAL_INSURANCE_PERCENT / 100);
+  return roundToThousand((Number(principal) || 0) * GENERAL_INSURANCE_PERCENT / 100);
 }
 
 /** Seguros de una cartulina, compatible con datos antiguos guardados en porcentaje. */

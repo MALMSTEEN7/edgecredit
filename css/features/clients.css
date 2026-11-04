@@ -331,3 +331,6 @@
   font-size: 12px;
   font-weight: 700;
 }
+
+/* Filtro «Clavos» del directorio: clientes con saldo que no abonan hace meses. */
+.directory-filter.filter-clavo { --filter-color: #AB47BC; }
