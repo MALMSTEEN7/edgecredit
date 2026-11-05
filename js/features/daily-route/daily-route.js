@@ -15,7 +15,7 @@ import { moveId } from '../../shared/math.js';
 import { openCustomModal } from '../../ui/custom-modal.js';
 import { showToast } from '../../ui/toast.js';
 import { paintCardColorBand } from '../../domain/card-color.js';
-import { loanCount, personCardIds } from '../../domain/person-cards.js';
+import { loanNumber, loanTimeline } from '../../domain/person-cards.js';
 import { balancesAfterPayments, creditDay, inferClientPrincipal, paymentHistory, ratingSystemActive } from '../../domain/loan-schedule.js';
 
 /** Tarjeta con «Más información» abierta (`modo:id`). Solo una a la vez. */
@@ -40,10 +40,10 @@ const historyDate = iso => {
  */
 function loanStep(clientId) {
   const client = clients[clientId];
-  const ids = personCardIds(clients, client.id);
-  const position = Math.max(0, ids.indexOf(clientId));
-  const previous = position > 0 ? clients[ids[position - 1]] : null;
-  return { number: loanCount(clients, client.id).total, change: previous ? inferClientPrincipal(client) - inferClientPrincipal(previous) : null };
+  // Número de este préstamo en la historia de la persona (incluye los del sistema anterior).
+  const number = loanNumber(clients, clientId);
+  const previous = loanTimeline(clients, clientId).find(loan => loan.n === number - 1);
+  return { number, change: previous && Number(previous.amount) > 0 ? inferClientPrincipal(client) - Number(previous.amount) : null };
 }
 
 /** Información de la cartulina, para desplegar debajo de la tarjeta (lo que pide la oficina). */
