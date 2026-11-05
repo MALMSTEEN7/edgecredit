@@ -2816,6 +2816,76 @@ function canAddCard(clients, idNumber) {
   return activeCardIds(clients, idNumber).length < MAX_ACTIVE_CARDS_PER_PERSON;
 }
 
+// ── Número de préstamo e historial de préstamos ──
+//
+// Las cartulinas importadas traen `loanHistory` con los préstamos que la persona tuvo en el
+// sistema anterior ({ source, asOf, total, loans: [{ n, amount, start, end, days, active, code }] })
+// y la cartulina activa trae su número en `loanNumber` (p. ej. el préstamo #30 de la persona).
+// Las cartulinas que se crean después en EdgeCredit siguen la cuenta: #31, #32…
+
+/** Historial del sistema anterior de la persona (el más completo entre sus cartulinas), o null. */
+function personLoanHistory(clients, idNumber) {
+  return personCardIds(clients, idNumber)
+    .map(id => clients[id]?.loanHistory)
+    .filter(history => Array.isArray(history?.loans) && history.loans.length)
+    .sort((a, b) => Number(b.total || b.loans.length) - Number(a.total || a.loans.length))[0] || null;
+}
+
+const startOf = client => String(client?.creditStartDate || '');
+
+/** Número del préstamo de esta cartulina dentro de la historia de la persona (#1, #2…). */
+function loanNumber(clients, clientId) {
+  const client = clients[clientId];
+  if (!client) return 0;
+  if (Number(client.loanNumber) > 0) return Number(client.loanNumber);
+  const ids = personCardIds(clients, client.id);
+  const history = personLoanHistory(clients, client.id);
+  if (!history) return Math.max(1, ids.indexOf(clientId) + 1);
+  // Las que no traen número (creadas en EdgeCredit) siguen después del último del sistema anterior.
+  const base = Math.max(Number(history.total) || 0, ...history.loans.map(loan => Number(loan.n) || 0));
+  const later = ids.filter(id => !(Number(clients[id].loanNumber) > 0))
+    .sort((a, b) => startOf(clients[a]).localeCompare(startOf(clients[b])) || a.localeCompare(b));
+  return base + later.indexOf(clientId) + 1;
+}
+
+/** Cuántos préstamos lleva la persona en total (sistema anterior + EdgeCredit). */
+function personLoanTotal(clients, idNumber) {
+  const ids = personCardIds(clients, idNumber);
+  const history = personLoanHistory(clients, idNumber);
+  const historyTotal = history ? Math.max(Number(history.total) || 0, history.loans.length) : 0;
+  return Math.max(historyTotal, ids.length, ...ids.map(id => loanNumber(clients, id)));
+}
+
+/**
+ * Todos los préstamos de la persona, del más reciente al más antiguo: los del sistema anterior y
+ * las cartulinas de EdgeCredit. `current` marca el de la cartulina que se está viendo.
+ */
+function loanTimeline(clients, clientId) {
+  const client = clients[clientId];
+  if (!client) return [];
+  const history = personLoanHistory(clients, client.id);
+  const rows = new Map();
+  (history?.loans || []).forEach(loan => rows.set(Number(loan.n), { ...loan, n: Number(loan.n), source: 'legacy' }));
+  personCardIds(clients, client.id).forEach(id => {
+    const card = clients[id];
+    const n = loanNumber(clients, id);
+    const settled = Number(card.balance) <= 0;
+    const fromHistory = rows.get(n);
+    rows.set(n, {
+      ...(fromHistory || {}),
+      n,
+      amount: Number(card.principal) || Number(fromHistory?.amount) || Number(card.total) || 0,
+      start: startOf(card) || fromHistory?.start || '',
+      end: settled ? (card.settledAt || fromHistory?.end || '') : null,
+      active: !settled,
+      clientId: id,
+      current: id === clientId,
+      source: fromHistory ? 'legacy' : 'edgecredit',
+    });
+  });
+  return [...rows.values()].sort((a, b) => b.n - a.n);
+}
+
 // ── js/domain/portfolio.js
 /**
  * domain/portfolio · Cartera de un cobro: el dinero que aún está en la calle.
@@ -7335,6 +7405,7 @@ function renderHistory(client) {
   }
   document.querySelector('#interest-history-count').textContent = `${client.interestHistory.length} ${client.interestHistory.length === 1 ? 'recargo' : 'recargos'}`;
   renderRetanqueoHistory(client);
+  renderLoanHistory(client);
 }
 
 /** Reubica los abonos en sus cuotas cuando cambia la fecha de inicio de la cartulina. */
@@ -7351,6 +7422,59 @@ function startColorLabel(frequency, startDate) {
   if (weekdayOf(startDate) === 0) return `Domingo: no se permite (elige sábado o lunes)`;
   if (!color) return `${weekday} · las diarias no llevan color`;
   return frequency === 'weekly' ? `${color.label} · cobra los ${weekday}` : `${color.label} · inicia un ${weekday}`;
+}
+
+/** Días entre dos fechas (YYYY-MM-DD). */
+function daysBetween(from, to) {
+  const start = Date.parse(`${from}T12:00:00`);
+  const end = Date.parse(`${to}T12:00:00`);
+  return Number.isFinite(start) && Number.isFinite(end) ? Math.max(0, Math.round((end - start) / 86400000)) : null;
+}
+
+/**
+ * Historial de préstamos de la persona: los del sistema anterior (informe) y los de EdgeCredit,
+ * del más reciente al más antiguo, con su valor, entrega, cancelación y cuántos días duró.
+ */
+function renderLoanHistory(client) {
+  const rows = loanTimeline(clients, state.activeClient);
+  const list = document.querySelector('#loan-history-list');
+  list.replaceChildren();
+  const history = personLoanHistory(clients, client.id);
+  if (!rows.length) {
+    const empty = document.createElement('li');
+    empty.className = 'history-empty';
+    empty.textContent = 'Sin préstamos anteriores registrados.';
+    list.append(empty);
+  } else {
+    const head = document.createElement('li');
+    head.className = 'loan-history-head';
+    head.innerHTML = '<span>Préstamo</span><span>Entrega → cancelación</span><span>Valor</span>';
+    list.append(head);
+  }
+  rows.forEach(loan => {
+    const row = document.createElement('li');
+    row.className = 'loan-history-row';
+    row.classList.toggle('is-current', Boolean(loan.current));
+    row.classList.toggle('is-active', Boolean(loan.active));
+    const number = document.createElement('strong');
+    number.className = 'loan-history-number';
+    number.textContent = `#${loan.n}`;
+    const dates = document.createElement('span');
+    dates.className = 'loan-history-dates';
+    const days = loan.end ? (Number(loan.days) >= 0 && loan.days !== '' && loan.days != null ? Number(loan.days) : daysBetween(loan.start, loan.end)) : null;
+    const period = document.createElement('span');
+    period.textContent = `${loan.start ? shortHistoryDate(loan.start) : '—'} → ${loan.active ? 'activo' : loan.end ? shortHistoryDate(loan.end) : '—'}`;
+    const note = document.createElement('small');
+    note.textContent = loan.current ? 'Esta cartulina' : loan.active ? 'Cartulina activa' : days !== null ? `Duró ${days} día${days === 1 ? '' : 's'}` : '';
+    dates.append(period, note);
+    const amount = document.createElement('strong');
+    amount.className = 'loan-history-amount';
+    amount.textContent = formatMoney(loan.amount);
+    row.append(number, dates, amount);
+    list.append(row);
+  });
+  const total = personLoanTotal(clients, client.id);
+  document.querySelector('#loan-history-count').textContent = `${total} préstamo${total === 1 ? '' : 's'}${history?.source ? ` · ${history.source}` : ''}`;
 }
 
 /** Retanqueos de la cartulina (lo prestado de más, sus intereses y seguros, y cómo cambió el saldo). */
@@ -7582,7 +7706,11 @@ function openClient(clientId) {
   document.querySelector('#detail-loan-total').textContent = formatMoney(client.total);
   document.querySelector('#detail-term').textContent = client.term;
   document.querySelector('#detail-frequency').textContent = paymentFrequencyLabels[client.frequency] || 'Semanal';
-  document.querySelector('#detail-loan-count').textContent = loanCountLabel(loanCount(clients, client.id));
+  // Número de este préstamo en la historia de la persona (igual que «Préstamo #» en la ruta diaria).
+  const number = loanNumber(clients, state.activeClient);
+  const total = personLoanTotal(clients, client.id);
+  const retanqueos = loanCount(clients, client.id).retanqueos;
+  document.querySelector('#detail-loan-count').textContent = `Préstamo #${number}${total > number ? ` de ${total}` : ''}${retanqueos ? ` · ${retanqueos} retanqueo${retanqueos === 1 ? '' : 's'}` : ''}`;
   document.querySelector('#detail-breakdown').textContent = client.breakdown;
   renderAddressDetails(client);
   renderClientNotes(client);
@@ -8821,6 +8949,9 @@ function addNewClient(values, photoData = '', insurance, gps = null) {
     else created.addressHistory.push({ type: 'principal', address: source.address, replacedBy: created.address, location: source.location || null, changedAt, changedBy: by });
     if (created.altAddress === (source.altAddress || '')) created.altLocation = source.altLocation || null;
     else if (source.altAddress) created.addressHistory.push({ type: 'alternativa', address: source.altAddress, replacedBy: created.altAddress || '(eliminada)', location: source.altLocation || null, changedAt, changedBy: by });
+    // El historial de préstamos del sistema anterior sigue con la persona (el número sigue la cuenta).
+    const history = personLoanHistory(clients, source.id);
+    if (history) created.loanHistory = history;
     if (mode === 'renew') {
       created.renewedFrom = renewSourceId;
       created.renewalCount = (Number(source.renewalCount) || 0) + 1;
@@ -9161,10 +9292,10 @@ const historyDate = iso => {
  */
 function loanStep(clientId) {
   const client = clients[clientId];
-  const ids = personCardIds(clients, client.id);
-  const position = Math.max(0, ids.indexOf(clientId));
-  const previous = position > 0 ? clients[ids[position - 1]] : null;
-  return { number: loanCount(clients, client.id).total, change: previous ? inferClientPrincipal(client) - inferClientPrincipal(previous) : null };
+  // Número de este préstamo en la historia de la persona (incluye los del sistema anterior).
+  const number = loanNumber(clients, clientId);
+  const previous = loanTimeline(clients, clientId).find(loan => loan.n === number - 1);
+  return { number, change: previous && Number(previous.amount) > 0 ? inferClientPrincipal(client) - Number(previous.amount) : null };
 }
 
 /** Información de la cartulina, para desplegar debajo de la tarjeta (lo que pide la oficina). */

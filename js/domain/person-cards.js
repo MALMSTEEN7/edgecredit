@@ -69,3 +69,73 @@ export function cardLabel(clients, clientId) {
 export function canAddCard(clients, idNumber) {
   return activeCardIds(clients, idNumber).length < MAX_ACTIVE_CARDS_PER_PERSON;
 }
+
+// ── Número de préstamo e historial de préstamos ──
+//
+// Las cartulinas importadas traen `loanHistory` con los préstamos que la persona tuvo en el
+// sistema anterior ({ source, asOf, total, loans: [{ n, amount, start, end, days, active, code }] })
+// y la cartulina activa trae su número en `loanNumber` (p. ej. el préstamo #30 de la persona).
+// Las cartulinas que se crean después en EdgeCredit siguen la cuenta: #31, #32…
+
+/** Historial del sistema anterior de la persona (el más completo entre sus cartulinas), o null. */
+export function personLoanHistory(clients, idNumber) {
+  return personCardIds(clients, idNumber)
+    .map(id => clients[id]?.loanHistory)
+    .filter(history => Array.isArray(history?.loans) && history.loans.length)
+    .sort((a, b) => Number(b.total || b.loans.length) - Number(a.total || a.loans.length))[0] || null;
+}
+
+const startOf = client => String(client?.creditStartDate || '');
+
+/** Número del préstamo de esta cartulina dentro de la historia de la persona (#1, #2…). */
+export function loanNumber(clients, clientId) {
+  const client = clients[clientId];
+  if (!client) return 0;
+  if (Number(client.loanNumber) > 0) return Number(client.loanNumber);
+  const ids = personCardIds(clients, client.id);
+  const history = personLoanHistory(clients, client.id);
+  if (!history) return Math.max(1, ids.indexOf(clientId) + 1);
+  // Las que no traen número (creadas en EdgeCredit) siguen después del último del sistema anterior.
+  const base = Math.max(Number(history.total) || 0, ...history.loans.map(loan => Number(loan.n) || 0));
+  const later = ids.filter(id => !(Number(clients[id].loanNumber) > 0))
+    .sort((a, b) => startOf(clients[a]).localeCompare(startOf(clients[b])) || a.localeCompare(b));
+  return base + later.indexOf(clientId) + 1;
+}
+
+/** Cuántos préstamos lleva la persona en total (sistema anterior + EdgeCredit). */
+export function personLoanTotal(clients, idNumber) {
+  const ids = personCardIds(clients, idNumber);
+  const history = personLoanHistory(clients, idNumber);
+  const historyTotal = history ? Math.max(Number(history.total) || 0, history.loans.length) : 0;
+  return Math.max(historyTotal, ids.length, ...ids.map(id => loanNumber(clients, id)));
+}
+
+/**
+ * Todos los préstamos de la persona, del más reciente al más antiguo: los del sistema anterior y
+ * las cartulinas de EdgeCredit. `current` marca el de la cartulina que se está viendo.
+ */
+export function loanTimeline(clients, clientId) {
+  const client = clients[clientId];
+  if (!client) return [];
+  const history = personLoanHistory(clients, client.id);
+  const rows = new Map();
+  (history?.loans || []).forEach(loan => rows.set(Number(loan.n), { ...loan, n: Number(loan.n), source: 'legacy' }));
+  personCardIds(clients, client.id).forEach(id => {
+    const card = clients[id];
+    const n = loanNumber(clients, id);
+    const settled = Number(card.balance) <= 0;
+    const fromHistory = rows.get(n);
+    rows.set(n, {
+      ...(fromHistory || {}),
+      n,
+      amount: Number(card.principal) || Number(fromHistory?.amount) || Number(card.total) || 0,
+      start: startOf(card) || fromHistory?.start || '',
+      end: settled ? (card.settledAt || fromHistory?.end || '') : null,
+      active: !settled,
+      clientId: id,
+      current: id === clientId,
+      source: fromHistory ? 'legacy' : 'edgecredit',
+    });
+  });
+  return [...rows.values()].sort((a, b) => b.n - a.n);
+}

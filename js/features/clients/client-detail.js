@@ -22,7 +22,7 @@ import { bindImageViewer } from '../../ui/image-viewer.js';
 import { LOCATION_FAILURE_LABELS, hasCoordinates, isApproximateLocation, locateDevice } from '../../shared/geo.js';
 import { clientInsurance, generalInsuranceAmount, resolveInsurance } from '../../domain/insurance.js';
 import { canRenew, onClientRenewed } from './new-client.js';
-import { MAX_ACTIVE_CARDS_PER_PERSON, activeCardIds, canAddCard, loanCount, loanCountLabel } from '../../domain/person-cards.js';
+import { MAX_ACTIVE_CARDS_PER_PERSON, activeCardIds, canAddCard, loanCount, loanNumber, loanTimeline, personLoanHistory, personLoanTotal } from '../../domain/person-cards.js';
 import { PAYDAY_OPTIONS, cardColor, paintCardColorBand, shiftDays, startDateForPayday, weekdayOf } from '../../domain/card-color.js';
 import { FINANCE_INTEREST_PERCENT, GENERAL_RETANQUEO, RETANQUEO_INTEREST_PERCENT, financeCard, pendingRestructure, percentOrAmount, recordRetanqueoInRoute, retanqueoCard } from '../../domain/restructure.js';
 
@@ -177,6 +177,7 @@ export function renderHistory(client) {
   }
   document.querySelector('#interest-history-count').textContent = `${client.interestHistory.length} ${client.interestHistory.length === 1 ? 'recargo' : 'recargos'}`;
   renderRetanqueoHistory(client);
+  renderLoanHistory(client);
 }
 
 /** Reubica los abonos en sus cuotas cuando cambia la fecha de inicio de la cartulina. */
@@ -193,6 +194,59 @@ function startColorLabel(frequency, startDate) {
   if (weekdayOf(startDate) === 0) return `Domingo: no se permite (elige sábado o lunes)`;
   if (!color) return `${weekday} · las diarias no llevan color`;
   return frequency === 'weekly' ? `${color.label} · cobra los ${weekday}` : `${color.label} · inicia un ${weekday}`;
+}
+
+/** Días entre dos fechas (YYYY-MM-DD). */
+function daysBetween(from, to) {
+  const start = Date.parse(`${from}T12:00:00`);
+  const end = Date.parse(`${to}T12:00:00`);
+  return Number.isFinite(start) && Number.isFinite(end) ? Math.max(0, Math.round((end - start) / 86400000)) : null;
+}
+
+/**
+ * Historial de préstamos de la persona: los del sistema anterior (informe) y los de EdgeCredit,
+ * del más reciente al más antiguo, con su valor, entrega, cancelación y cuántos días duró.
+ */
+function renderLoanHistory(client) {
+  const rows = loanTimeline(clients, state.activeClient);
+  const list = document.querySelector('#loan-history-list');
+  list.replaceChildren();
+  const history = personLoanHistory(clients, client.id);
+  if (!rows.length) {
+    const empty = document.createElement('li');
+    empty.className = 'history-empty';
+    empty.textContent = 'Sin préstamos anteriores registrados.';
+    list.append(empty);
+  } else {
+    const head = document.createElement('li');
+    head.className = 'loan-history-head';
+    head.innerHTML = '<span>Préstamo</span><span>Entrega → cancelación</span><span>Valor</span>';
+    list.append(head);
+  }
+  rows.forEach(loan => {
+    const row = document.createElement('li');
+    row.className = 'loan-history-row';
+    row.classList.toggle('is-current', Boolean(loan.current));
+    row.classList.toggle('is-active', Boolean(loan.active));
+    const number = document.createElement('strong');
+    number.className = 'loan-history-number';
+    number.textContent = `#${loan.n}`;
+    const dates = document.createElement('span');
+    dates.className = 'loan-history-dates';
+    const days = loan.end ? (Number(loan.days) >= 0 && loan.days !== '' && loan.days != null ? Number(loan.days) : daysBetween(loan.start, loan.end)) : null;
+    const period = document.createElement('span');
+    period.textContent = `${loan.start ? shortHistoryDate(loan.start) : '—'} → ${loan.active ? 'activo' : loan.end ? shortHistoryDate(loan.end) : '—'}`;
+    const note = document.createElement('small');
+    note.textContent = loan.current ? 'Esta cartulina' : loan.active ? 'Cartulina activa' : days !== null ? `Duró ${days} día${days === 1 ? '' : 's'}` : '';
+    dates.append(period, note);
+    const amount = document.createElement('strong');
+    amount.className = 'loan-history-amount';
+    amount.textContent = formatMoney(loan.amount);
+    row.append(number, dates, amount);
+    list.append(row);
+  });
+  const total = personLoanTotal(clients, client.id);
+  document.querySelector('#loan-history-count').textContent = `${total} préstamo${total === 1 ? '' : 's'}${history?.source ? ` · ${history.source}` : ''}`;
 }
 
 /** Retanqueos de la cartulina (lo prestado de más, sus intereses y seguros, y cómo cambió el saldo). */
@@ -424,7 +478,11 @@ export function openClient(clientId) {
   document.querySelector('#detail-loan-total').textContent = formatMoney(client.total);
   document.querySelector('#detail-term').textContent = client.term;
   document.querySelector('#detail-frequency').textContent = paymentFrequencyLabels[client.frequency] || 'Semanal';
-  document.querySelector('#detail-loan-count').textContent = loanCountLabel(loanCount(clients, client.id));
+  // Número de este préstamo en la historia de la persona (igual que «Préstamo #» en la ruta diaria).
+  const number = loanNumber(clients, state.activeClient);
+  const total = personLoanTotal(clients, client.id);
+  const retanqueos = loanCount(clients, client.id).retanqueos;
+  document.querySelector('#detail-loan-count').textContent = `Préstamo #${number}${total > number ? ` de ${total}` : ''}${retanqueos ? ` · ${retanqueos} retanqueo${retanqueos === 1 ? '' : 's'}` : ''}`;
   document.querySelector('#detail-breakdown').textContent = client.breakdown;
   renderAddressDetails(client);
   renderClientNotes(client);

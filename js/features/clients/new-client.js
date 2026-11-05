@@ -13,7 +13,7 @@ import { renderRouteOperations } from '../admin/settlement.js';
 import { appendClientCards, renderClientRows } from './directory.js';
 import { updateCashTotal } from '../worker/cash-box.js';
 import { generalInsuranceAmount, resolveInsurance } from '../../domain/insurance.js';
-import { MAX_ACTIVE_CARDS_PER_PERSON, activeCardIds, canAddCard, personCardIds, personKey } from '../../domain/person-cards.js';
+import { MAX_ACTIVE_CARDS_PER_PERSON, activeCardIds, canAddCard, personCardIds, personKey, personLoanHistory } from '../../domain/person-cards.js';
 import { localDateISO } from '../../shared/dates.js';
 import { PAYDAY_OPTIONS, nextWeekdayDate, shiftDays, weekdayOf } from '../../domain/card-color.js';
 import { formatDate, formatMoney, normalizeSearch } from '../../shared/format.js';
@@ -363,6 +363,9 @@ function addNewClient(values, photoData = '', insurance, gps = null) {
     else created.addressHistory.push({ type: 'principal', address: source.address, replacedBy: created.address, location: source.location || null, changedAt, changedBy: by });
     if (created.altAddress === (source.altAddress || '')) created.altLocation = source.altLocation || null;
     else if (source.altAddress) created.addressHistory.push({ type: 'alternativa', address: source.altAddress, replacedBy: created.altAddress || '(eliminada)', location: source.altLocation || null, changedAt, changedBy: by });
+    // El historial de préstamos del sistema anterior sigue con la persona (el número sigue la cuenta).
+    const history = personLoanHistory(clients, source.id);
+    if (history) created.loanHistory = history;
     if (mode === 'renew') {
       created.renewedFrom = renewSourceId;
       created.renewalCount = (Number(source.renewalCount) || 0) + 1;

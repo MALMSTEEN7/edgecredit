@@ -6762,6 +6762,68 @@ button.evidence-link:active {
   font-weight: 800;
 }
 
+/* Historial de préstamos de la persona (sistema anterior + EdgeCredit). */
+#loan-history-list > li.loan-history-head,
+#loan-history-list > li.loan-history-row {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+}
+
+#loan-history-list > li.loan-history-head {
+  padding-top: 4px;
+  padding-bottom: 8px;
+  color: color-mix(in srgb, var(--text) 88%, var(--muted));
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: .3px;
+  text-transform: uppercase;
+}
+
+#loan-history-list > li.loan-history-head span:last-child,
+#loan-history-list .loan-history-amount {
+  text-align: right;
+}
+
+#loan-history-list .loan-history-number {
+  margin: 0;
+  color: var(--text);
+  font-size: 13px;
+  text-align: left;
+}
+
+#loan-history-list .loan-history-dates {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+  color: var(--text);
+  font-size: 12px;
+}
+
+#loan-history-list .loan-history-dates small {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+#loan-history-list .loan-history-amount {
+  margin: 0;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+#loan-history-list > li.loan-history-row.is-active .loan-history-number {
+  color: var(--primary);
+}
+
+#loan-history-list > li.loan-history-row.is-current {
+  margin: 0 -10px;
+  padding-left: 10px;
+  padding-right: 10px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--primary) 10%, transparent);
+}
+
 /* ── css/features/payment.css */
 /* features/payment · Modal de registro de pago. */
 
