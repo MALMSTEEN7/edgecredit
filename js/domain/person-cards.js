@@ -14,6 +14,32 @@ export function personKey(idNumber) {
   return raw.replace(/\D/g, '') || raw.toLocaleLowerCase('es');
 }
 
+/**
+ * ¿Las dos cadenas son iguales o difieren en un solo carácter (uno de más, uno de menos o uno
+ * cambiado)? Sirve para detectar a una persona ya registrada aunque se escriba con un número o
+ * una letra de diferencia.
+ */
+export function withinOneEdit(a, b) {
+  a = String(a ?? ''); b = String(b ?? '');
+  if (a === b) return true;
+  if (Math.abs(a.length - b.length) > 1) return false;
+  // Dos caracteres seguidos volteados (80513497 por 80513479) también cuentan como un error.
+  if (a.length === b.length) {
+    const diff = [...a].map((char, index) => (char === b[index] ? -1 : index)).filter(index => index >= 0);
+    if (diff.length === 2 && diff[1] === diff[0] + 1 && a[diff[0]] === b[diff[1]] && a[diff[1]] === b[diff[0]]) return true;
+  }
+  let i = 0, j = 0, edits = 0;
+  while (i < a.length && j < b.length) {
+    if (a[i] === b[j]) { i += 1; j += 1; continue; }
+    edits += 1;
+    if (edits > 1) return false;
+    if (a.length > b.length) i += 1;
+    else if (b.length > a.length) j += 1;
+    else { i += 1; j += 1; }
+  }
+  return edits + (a.length - i) + (b.length - j) <= 1;
+}
+
 /** Todas las cartulinas de la persona (activas, canceladas y renovadas), de la más antigua a la más reciente. */
 export function personCardIds(clients, idNumber) {
   const key = personKey(idNumber);

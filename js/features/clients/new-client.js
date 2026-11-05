@@ -13,7 +13,7 @@ import { renderRouteOperations } from '../admin/settlement.js';
 import { appendClientCards, renderClientRows } from './directory.js';
 import { updateCashTotal } from '../worker/cash-box.js';
 import { generalInsuranceAmount, resolveInsurance } from '../../domain/insurance.js';
-import { MAX_ACTIVE_CARDS_PER_PERSON, activeCardIds, canAddCard, personCardIds, cardLoanHistory, personKey } from '../../domain/person-cards.js';
+import { MAX_ACTIVE_CARDS_PER_PERSON, activeCardIds, canAddCard, personCardIds, cardLoanHistory, personKey, withinOneEdit } from '../../domain/person-cards.js';
 import { localDateISO } from '../../shared/dates.js';
 import { PAYDAY_OPTIONS, nextWeekdayDate, shiftDays, weekdayOf } from '../../domain/card-color.js';
 import { formatDate, formatMoney, normalizeSearch } from '../../shared/format.js';
@@ -479,6 +479,54 @@ function updateInstallmentsHint() {
 //    ubicación y referencias; queda enlazada a la cartulina anterior);
 //  - si tiene cartulinas activas, como «Otra cartulina» (o se avisa si ya tiene el máximo).
 
+const idDigits = value => String(value || '').replace(/\D/g, '');
+const nameKey = value => normalizeSearch(value).replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+const MIN_FUZZY_ID = 6;
+const MIN_FUZZY_NAME = 8;
+
+/** ¿La cédula escrita es la de esta cartulina, igual o con un solo número de diferencia? */
+function idLooksSame(client, idNumber) {
+  if (personKey(client?.id) && personKey(client.id) === personKey(idNumber)) return true;
+  const typed = idDigits(idNumber);
+  const own = idDigits(client?.id);
+  return typed.length >= MIN_FUZZY_ID && own.length >= MIN_FUZZY_ID && withinOneEdit(typed, own);
+}
+
+/** ¿El nombre escrito es el de esta cartulina, igual o con una sola letra de diferencia? */
+function nameLooksSame(client, name) {
+  const typed = nameKey(name);
+  return typed.length >= MIN_FUZZY_NAME && withinOneEdit(typed, nameKey(client?.name));
+}
+
+const firstName = value => nameKey(value).split(' ')[0] || '';
+
+/**
+ * Cartulina ya registrada que parece de la misma persona que se está ingresando, o null.
+ * - `block`: es la misma persona y no se deja registrar: cédula idéntica; cédula con un número
+ *   de diferencia y el mismo primer nombre (o con una letra de diferencia); o el nombre completo
+ *   igual o con una letra de diferencia.
+ * - `confirm`: la cédula tiene un número de diferencia pero el nombre es otro. Pasa mucho con
+ *   familiares (cédulas seguidas), así que se avisa y se deja seguir si lo confirman.
+ */
+function lookalikePerson(values) {
+  let similar = null;
+  for (const client of Object.values(clients)) {
+    if (!client) continue;
+    const exactId = Boolean(personKey(client.id)) && personKey(client.id) === personKey(values.idNumber);
+    if (exactId) return { client, field: 'idNumber', level: 'block' };
+    if (nameLooksSame(client, values.name)) return { client, field: 'name', level: 'block' };
+    if (idLooksSame(client, values.idNumber)) {
+      const typedFirst = firstName(values.name);
+      if (typedFirst && withinOneEdit(typedFirst, firstName(client.name))) return { client, field: 'idNumber', level: 'block' };
+      similar ||= { client, field: 'idNumber', level: 'confirm' };
+    }
+  }
+  return similar;
+}
+
+// Aviso de cédula parecida ya confirmado («es otra persona») para estos datos exactos.
+let confirmedLookalike = '';
+
 /** Personas registradas cuyo nombre o cédula coincide con lo escrito (máximo 5). */
 function existingPeople(field, text) {
   const digits = String(text || '').replace(/\D/g, '');
@@ -491,8 +539,8 @@ function existingPeople(field, text) {
     const key = personKey(client?.id);
     if (!client || !key || seen.has(key)) return;
     const matches = field === 'idNumber'
-      ? String(client.id || '').replace(/\D/g, '').includes(digits)
-      : words.every(word => normalizeSearch(client.name).includes(word));
+      ? String(client.id || '').replace(/\D/g, '').includes(digits) || idLooksSame(client, text)
+      : words.every(word => normalizeSearch(client.name).includes(word)) || nameLooksSame(client, text);
     if (!matches) return;
     seen.add(key);
     const cards = personCardIds(clients, client.id);
@@ -618,10 +666,25 @@ export function mount() {
     if (!newClientForm.reportValidity()) return;
     const values = Object.fromEntries(new FormData(newClientForm).entries());
     const linked = Boolean(renewSourceId && clients[renewSourceId] && linkMode);
-    if (!linked && Object.values(clients).some(client => personKey(client.id) === personKey(values.idNumber))) {
-      newClientError.textContent = 'Esa cédula ya está registrada. Para darle otro crédito, abre su ficha y usa «＋ Otra cartulina» (o «Renovar» si ya canceló).';
+    // Una persona que ya está en el sistema no se puede registrar de nuevo, ni con un número o
+    // una letra de diferencia: hay que elegirla en las sugerencias («Renovar» u «Otra cartulina»).
+    const lookalike = linked ? null : lookalikePerson(values);
+    const confirmKey = `${values.idNumber.trim()}|${nameKey(values.name)}`;
+    if (lookalike && !(lookalike.level === 'confirm' && confirmedLookalike === confirmKey)) {
+      const { client, field, level } = lookalike;
+      if (level === 'confirm') {
+        confirmedLookalike = confirmKey;
+        newClientError.textContent = `La cédula se parece mucho a la de ${client.name} (${client.id}). Si es la misma persona, selecciónala en las sugerencias. Si es otra persona (por ejemplo un familiar), revisa la cédula y vuelve a tocar «Crear» para confirmar.`;
+      } else {
+        confirmedLookalike = '';
+        newClientError.textContent = `${client.name} (cédula ${client.id}) ya está en el sistema${field === 'name' ? ' con un nombre igual o casi igual' : ''}. Selecciónalo en las sugerencias para usar sus datos («Renovar» u «Otra cartulina»); no se puede registrar como cliente nuevo.`;
+      }
+      const input = newClientForm.elements[field];
+      renderExistingSuggestions(input);
+      input.focus();
       return;
     }
+    confirmedLookalike = '';
     const interestException = document.querySelector('#interest-exception-toggle').checked;
     if (state.userRole === 'admin' && (!Number.isFinite(Number(values.adminInterestPercent)) || Number(values.adminInterestPercent) < 0 || Number(values.adminInterestPercent) > 100)) {
       newClientError.textContent = 'El porcentaje acordado debe estar entre 0 y 100.';
