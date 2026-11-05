@@ -17,8 +17,10 @@ import { formatDate, formatMoney, routeKey } from '../../shared/format.js';
 import { openCustomModal } from '../../ui/custom-modal.js';
 import { showToast } from '../../ui/toast.js';
 import { roundToThousand } from '../../shared/math.js';
+import { EXTERNAL_ROUTE, cancelBaseTransfer, retargetBaseTransfer } from '../../domain/base-transfer.js';
+import { syncRouteCollections } from '../../domain/ledger.js';
 
-const REQUEST_TITLES = { interest: 'Excepción de interés', insurance: 'Excepción de seguros', 'route-correction': 'Corrección de visita o pago', finance: 'Solicitud de financiación', retanqueo: 'Solicitud de retanqueo' };
+const REQUEST_TITLES = { 'base-transfer': 'Traspaso de base', interest: 'Excepción de interés', insurance: 'Excepción de seguros', 'route-correction': 'Corrección de visita o pago', finance: 'Solicitud de financiación', retanqueo: 'Solicitud de retanqueo' };
 
 /** Lo que pidió el trabajador al financiar o retanquear, en una línea. */
 function restructureSummary(request) {
@@ -76,10 +78,21 @@ export function renderPendingRequests() {
       : request.type === 'route-correction' && request.paymentAmount ? `Abono del ${formatDate(request.visitDate)}: registrado ${formatMoney(request.paymentAmount)} → correcto ${formatMoney(request.requestedAmount)}. Motivo: ${request.comment || 'Sin comentario'}`
       : request.type === 'route-correction' && request.requestedAmount ? `Visita del ${formatDate(request.visitDate)} sin abono registrado → pagó ${formatMoney(request.requestedAmount)}. Motivo: ${request.comment || 'Sin comentario'}`
       : `${request.type === 'route-correction' ? 'Motivo enviado' : 'Acuerdo informado'}: ${request.comment || 'Sin comentario'}`;
+    if (request.type === 'base-transfer') {
+      // Traspaso de base: de qué cobro salió, a cuál llegó y cuándo.
+      const origin = routeSettlements[request.routeId]?.name || request.route;
+      const external = request.toRouteId === EXTERNAL_ROUTE;
+      details.textContent = `${origin} → ${request.toRouteName || request.toRouteId}${external ? ' (fuera de EdgeCredit)' : ''} · Envió ${request.workerName} · ${new Date(request.createdAt).toLocaleString('es-CO', { weekday: 'short', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' })}`;
+      value.textContent = `${formatMoney(request.amount)} salieron del efectivo de ${origin}${external ? '' : request.appliedTo === request.toRouteId ? ` y ya están en la base de ${request.toRouteName}` : ` · se suman a ${request.toRouteName} en cuanto este equipo lo procese`}.${request.comment ? ` Comentario: ${request.comment}` : ''}`;
+      card.classList.add('is-base-transfer');
+    }
     copy.append(title, details, value);
     const actions = document.createElement('div');
     actions.className = 'pending-actions';
-    [['approve', 'Aprobar'], ['reject', 'Rechazar']].forEach(([action, label]) => {
+    const buttons = request.type === 'base-transfer'
+      ? [['approve', 'Confirmar'], ['retarget', 'Cambiar destino'], ['reject', 'Anular']]
+      : [['approve', 'Aprobar'], ['reject', 'Rechazar']];
+    buttons.forEach(([action, label]) => {
       const button = document.createElement('button');
       button.type = 'button';
       button.dataset.pendingAction = action;
@@ -119,7 +132,7 @@ function resolvePendingRequest(requestId, approved, approvedValue) {
         client.balance = Math.max(0, Number(client.balance) - correctedAmount);
       }
       const route = routeSettlements[client.route];
-      if (route) route.collections = Math.max(0, Number(route.collections || 0) + collectionDelta);
+      if (route) syncRouteCollections(clients, { [client.route]: route });
       updatePaidAmountTotal(client);
       client.settledAt = Number(client.balance) <= 0 ? client.settledAt || request.visitDate : null;
       state.routeVisitOutcomes[key][request.clientId] = 'paid';
@@ -161,12 +174,60 @@ function resolvePendingRequest(requestId, approved, approvedValue) {
   showToast(approved ? 'Solicitud aprobada y aplicada al cliente.' : 'Solicitud rechazada.');
 }
 
+/** Traspaso de base en Pendientes: confirmar, corregir el cobro de destino o anular. */
+function handleBaseTransferAction(request, action) {
+  const done = message => { persistBusinessData(); renderPendingRequests(); renderAdminRoute(routeSelect.value); showToast(message); };
+  const amount = formatMoney(request.amount);
+  if (action === 'approve') {
+    request.status = 'approved';
+    request.resolvedAt = new Date().toISOString();
+    done(`Traspaso de ${amount} a ${request.toRouteName} confirmado.`);
+    return;
+  }
+  if (action === 'reject') {
+    openCustomModal({
+      title: 'Anular traspaso de base',
+      description: `Los ${amount} vuelven a la base de ${routeSettlements[request.routeId]?.name || request.route}${request.appliedTo && request.appliedTo !== EXTERNAL_ROUTE ? ` y se quitan de ${request.toRouteName}` : ''}.`,
+      submitLabel: 'Anular traspaso',
+      onSubmit: () => { cancelBaseTransfer(request, routeSettlements); done(`Traspaso anulado: ${amount} volvieron a ${request.route}.`); },
+    });
+    return;
+  }
+  // Cambiar destino: el dinero pasa al cobro correcto.
+  const options = Object.entries(routeSettlements)
+    .filter(([id]) => id !== request.routeId)
+    .map(([id, route]) => ({ value: id, label: `${route.name}${id === request.toRouteId ? ' (actual)' : ''}` }))
+    .sort((a, b) => a.label.localeCompare(b.label, 'es'));
+  options.push({ value: EXTERNAL_ROUTE, label: 'Otro cobro (aún no está en EdgeCredit)' });
+  openCustomModal({
+    title: 'Cambiar cobro de destino',
+    description: `${amount} que envió ${request.workerName} desde ${request.route}. Hoy están en ${request.toRouteName}. Elige a qué cobro debían ir.`,
+    fields: [
+      { name: 'to', label: 'Cobro correcto', type: 'select', options, value: request.toRouteId, required: true },
+      { name: 'externalName', label: 'Nombre del cobro (solo si es «Otro cobro»)', value: request.toRouteId === EXTERNAL_ROUTE ? request.toRouteName : '' },
+    ],
+    submitLabel: 'Pasar el dinero',
+    onSubmit: values => {
+      const external = values.to === EXTERNAL_ROUTE;
+      const toName = external ? String(values.externalName || '').trim() : routeSettlements[values.to]?.name || values.to;
+      if (external && toName.length < 2) { customModalError.textContent = 'Escribe el nombre del otro cobro.'; return false; }
+      if (values.to === request.toRouteId && toName === request.toRouteName) return undefined;
+      const before = request.toRouteName;
+      retargetBaseTransfer(request, routeSettlements, values.to, toName);
+      done(`${amount} pasaron de ${before} a ${toName}.`);
+      return undefined;
+    },
+  });
+}
+
 /** Registra los listeners del módulo. Se invoca una sola vez desde app.js. */
 export function mount() {
   pendingList.addEventListener('click', event => {
     const button = event.target.closest('[data-pending-action]');
     if (!button) return;
     const { pendingAction, pendingId } = button.dataset;
+    const transfer = pendingRequests.find(item => item.id === pendingId && item.type === 'base-transfer');
+    if (transfer) { handleBaseTransferAction(transfer, pendingAction); return; }
     if (pendingAction === 'approve') {
       const request = pendingRequests.find(item => item.id === pendingId);
       if (!request) return;

@@ -14,6 +14,7 @@ import { filterClientCards, removeClient, renderClientRows, setClientAvatar } fr
 import { localDateISO } from '../../shared/dates.js';
 import { formatDate, formatMoney, routeKey } from '../../shared/format.js';
 import { formatPhone, phoneLink } from '../../shared/phone.js';
+import { syncRouteCollections } from '../../domain/ledger.js';
 import { openCustomModal } from '../../ui/custom-modal.js';
 import { showView } from '../../ui/navigation.js';
 import { showToast } from '../../ui/toast.js';
@@ -925,7 +926,7 @@ export function mount() {
     if (button.dataset.paymentAction === 'delete') {
       openCustomModal({
         title: 'Eliminar abono', description: `Se eliminará el abono de ${formatDate(client.payments[index].date)}.`, submitLabel: 'Eliminar',
-        onSubmit: () => { const amount = Number(client.payments[index].amount) || 0; client.balance += amount; client.payments.splice(index, 1); if (routeSettlements[client.route]) routeSettlements[client.route].collections = Math.max(0, routeSettlements[client.route].collections - amount); updatePaidAmountTotal(client); client.settledAt = Number(client.balance) <= 0 ? client.settledAt || localDateISO() : null; syncCancelledCard(client, state.activeClient); persistBusinessData(); openClient(state.activeClient); }
+        onSubmit: () => { const amount = Number(client.payments[index].amount) || 0; client.balance += amount; client.payments.splice(index, 1); if (routeSettlements[client.route]) syncRouteCollections(clients, { [client.route]: routeSettlements[client.route] }); updatePaidAmountTotal(client); client.settledAt = Number(client.balance) <= 0 ? client.settledAt || localDateISO() : null; syncCancelledCard(client, state.activeClient); persistBusinessData(); openClient(state.activeClient); }
       });
     } else {
       const oldAmount = Number(client.payments[index].amount) || 0;
@@ -937,7 +938,7 @@ export function mount() {
           if (amount > oldAmount + Number(client.balance)) { customModalError.textContent = 'El monto corregido supera el saldo disponible.'; return false; }
           client.balance = Math.max(0, Number(client.balance) + oldAmount - amount);
           client.payments[index].amount = amount;
-          if (routeSettlements[client.route]) routeSettlements[client.route].collections = Math.max(0, routeSettlements[client.route].collections + amount - oldAmount);
+          if (routeSettlements[client.route]) syncRouteCollections(clients, { [client.route]: routeSettlements[client.route] });
           client.settledAt = client.balance <= 0 ? client.settledAt || localDateISO() : null;
           updatePaidAmountTotal(client); syncCancelledCard(client, state.activeClient); persistBusinessData(); openClient(state.activeClient);
         }

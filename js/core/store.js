@@ -125,6 +125,13 @@ export const security = {
   session: { idleHours: 12 },
 };
 
+/**
+ * Nombres de todos los cobros (id y nombre). El trabajador solo puede leer su propio cobro,
+ * así que el admin publica esta lista (app_settings «route_directory») para que el trabajador
+ * pueda elegir a qué cobro traspasar base.
+ */
+export const routeDirectory = [];
+
 // Con servidor configurado, cada guardado avisa a la sincronización (core/sync.js).
 const persistListeners = [];
 export function onPersist(listener) { persistListeners.push(listener); }

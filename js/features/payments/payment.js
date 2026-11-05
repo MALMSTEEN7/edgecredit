@@ -13,6 +13,7 @@ import { renderRouteBuilder, routeDayKey } from '../daily-route/daily-route.js';
 import { updateCashTotal } from '../worker/cash-box.js';
 import { localDateISO } from '../../shared/dates.js';
 import { formatMoney } from '../../shared/format.js';
+import { syncRouteCollections } from '../../domain/ledger.js';
 import { compressClientPhoto } from '../../shared/media.js';
 import { showToast } from '../../ui/toast.js';
 import { showView } from '../../ui/navigation.js';
@@ -163,7 +164,7 @@ export function mount() {
     // Con la calificación por puntos la demora la mide el calendario (domain/loan-schedule).
     if (!ratingSystemActive()) client.paymentWarning ||= paymentRisk.overdueDays > 0 || paymentRisk.explicitlyMissed || paymentRisk.latePaid;
     const route = routeSettlements[client.route];
-    if (route) route.collections += amount;
+    if (route) syncRouteCollections(clients, { [client.route]: route }); // el cobro se calcula de los abonos
     // Cualquier abono de hoy cierra la visita: el cliente sale del Inicio y queda con
     // el indicador "Abono registrado" en la ruta diaria.
     closeVisit(state.activeClient, 'paid', client.route);

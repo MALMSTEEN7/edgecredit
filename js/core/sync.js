@@ -21,7 +21,7 @@
 
 import { backend, backendErrorMessage } from './backend.js';
 import { state } from './state.js';
-import { clients, emptyRoute, pendingRequests, personnel, routeSettlements, security, shared, onPersist } from './store.js';
+import { clients, emptyRoute, pendingRequests, personnel, routeDirectory, routeSettlements, security, shared, onPersist } from './store.js';
 import { isWithinSchedule } from '../domain/access-schedule.js';
 import { routeKey } from '../shared/format.js';
 import { showToast } from '../ui/toast.js';
@@ -67,6 +67,25 @@ export function syncActive() { return Boolean(syncSession); }
 export function syncRole() { return syncSession?.role || null; }
 
 const stable = value => JSON.stringify(value ?? null);
+/**
+ * JSON con las claves ordenadas: el servidor (jsonb) devuelve las claves en otro orden, así que
+ * para saber si una fila recibida es el eco de lo propio se compara en esta forma.
+ */
+function canonical(value) {
+  if (Array.isArray(value)) return `[${value.map(item => (item === undefined ? 'null' : canonical(item))).join(',')}]`;
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value).filter(key => value[key] !== undefined).sort().map(key => `${JSON.stringify(key)}:${canonical(value[key])}`).join(',')}}`;
+  }
+  return JSON.stringify(value ?? null);
+}
+
+/** ¿La fila recibida tiene exactamente lo que ya se envió o recibió de ese registro? */
+function sameAsKnown(id, normalized) {
+  const known = lastSynced.get(id);
+  if (!known) return false;
+  if (known === stable(normalized)) return true;
+  try { return canonical(JSON.parse(known)) === canonical(normalized); } catch { return false; }
+}
 const outboxKey = () => `edgecredit-outbox-${syncSession?.userId}`;
 const rowId = (table, key) => `${table}:${key}`;
 
@@ -103,7 +122,16 @@ function profileRow(worker) {
   return { user_id: id, route_id: routeKey(worker.route), access_enabled: worker.accessEnabled !== false, data };
 }
 
-const settingsRows = () => [{ key: 'worker_access', data: security.workerAccess }, { key: 'session', data: security.session }];
+/** Lista de cobros (id y nombre) que el admin publica para los trabajadores (traspasos de base). */
+const routeDirectoryData = () => ({
+  routes: Object.entries(routeSettlements).map(([id, route]) => ({ id, name: route?.name || id })).sort((a, b) => a.name.localeCompare(b.name, 'es')),
+});
+
+const settingsRows = () => [
+  { key: 'worker_access', data: security.workerAccess },
+  { key: 'session', data: security.session },
+  { key: 'route_directory', data: routeDirectoryData() },
+];
 
 /** Filas actuales por tabla, según lo que este usuario puede escribir. */
 function collectRows() {
@@ -334,6 +362,10 @@ function applyRow(table, row, removed = false) {
     const index = personnel.findIndex(item => item.id === row.user_id);
     if (index >= 0) replaceObject(personnel[index], worker); else personnel.push(worker);
     lastSynced.set(id, stable(profileRow(personnel.find(item => item.id === row.user_id))));
+  } else if (table === 'app_settings' && row.key === 'route_directory') {
+    routeDirectory.splice(0, routeDirectory.length, ...((row.data?.routes || []).filter(item => item?.id)));
+    // Se recuerda la versión del servidor: si al admin le cambian los cobros, la vuelve a publicar.
+    lastSynced.set(id, stable({ key: row.key, data: row.data }));
   } else if (table === 'app_settings') {
     const target = row.key === 'worker_access' ? security.workerAccess : row.key === 'session' ? security.session : null;
     if (!target) return;
@@ -360,7 +392,8 @@ function receiveRow(table, row, removed = false) {
   if (key === undefined || key === null) return false;
   if (table === 'profiles' && syncSession.role === 'worker' && row.user_id !== syncSession.userId) return false;
   const id = rowId(table, key);
-  if (!removed && lastSynced.get(id) === stable(normalizeRow(table, row))) return false;
+  // Eco de lo propio (o sin cambios): no se aplica ni se repinta la pantalla.
+  if (!removed && sameAsKnown(id, normalizeRow(table, row))) return false;
   if (hasUnsentChanges(table, key)) { scheduleFlush(100); return false; }
   if (removed && !lastSynced.has(id) && !localRow(table, key)) return false;
   applyRow(table, row, removed);

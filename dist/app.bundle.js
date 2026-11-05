@@ -413,6 +413,13 @@ const security = {
   session: { idleHours: 12 },
 };
 
+/**
+ * Nombres de todos los cobros (id y nombre). El trabajador solo puede leer su propio cobro,
+ * así que el admin publica esta lista (app_settings «route_directory») para que el trabajador
+ * pueda elegir a qué cobro traspasar base.
+ */
+const routeDirectory = [];
+
 // Con servidor configurado, cada guardado avisa a la sincronización (core/sync.js).
 const persistListeners = [];
 function onPersist(listener) { persistListeners.push(listener); }
@@ -535,6 +542,25 @@ function syncActive() { return Boolean(syncSession); }
 function syncRole() { return syncSession?.role || null; }
 
 const stable = value => JSON.stringify(value ?? null);
+/**
+ * JSON con las claves ordenadas: el servidor (jsonb) devuelve las claves en otro orden, así que
+ * para saber si una fila recibida es el eco de lo propio se compara en esta forma.
+ */
+function canonical(value) {
+  if (Array.isArray(value)) return `[${value.map(item => (item === undefined ? 'null' : canonical(item))).join(',')}]`;
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value).filter(key => value[key] !== undefined).sort().map(key => `${JSON.stringify(key)}:${canonical(value[key])}`).join(',')}}`;
+  }
+  return JSON.stringify(value ?? null);
+}
+
+/** ¿La fila recibida tiene exactamente lo que ya se envió o recibió de ese registro? */
+function sameAsKnown(id, normalized) {
+  const known = lastSynced.get(id);
+  if (!known) return false;
+  if (known === stable(normalized)) return true;
+  try { return canonical(JSON.parse(known)) === canonical(normalized); } catch { return false; }
+}
 const outboxKey = () => `edgecredit-outbox-${syncSession?.userId}`;
 const rowId = (table, key) => `${table}:${key}`;
 
@@ -571,7 +597,16 @@ function profileRow(worker) {
   return { user_id: id, route_id: routeKey(worker.route), access_enabled: worker.accessEnabled !== false, data };
 }
 
-const settingsRows = () => [{ key: 'worker_access', data: security.workerAccess }, { key: 'session', data: security.session }];
+/** Lista de cobros (id y nombre) que el admin publica para los trabajadores (traspasos de base). */
+const routeDirectoryData = () => ({
+  routes: Object.entries(routeSettlements).map(([id, route]) => ({ id, name: route?.name || id })).sort((a, b) => a.name.localeCompare(b.name, 'es')),
+});
+
+const settingsRows = () => [
+  { key: 'worker_access', data: security.workerAccess },
+  { key: 'session', data: security.session },
+  { key: 'route_directory', data: routeDirectoryData() },
+];
 
 /** Filas actuales por tabla, según lo que este usuario puede escribir. */
 function collectRows() {
@@ -802,6 +837,10 @@ function applyRow(table, row, removed = false) {
     const index = personnel.findIndex(item => item.id === row.user_id);
     if (index >= 0) replaceObject(personnel[index], worker); else personnel.push(worker);
     lastSynced.set(id, stable(profileRow(personnel.find(item => item.id === row.user_id))));
+  } else if (table === 'app_settings' && row.key === 'route_directory') {
+    routeDirectory.splice(0, routeDirectory.length, ...((row.data?.routes || []).filter(item => item?.id)));
+    // Se recuerda la versión del servidor: si al admin le cambian los cobros, la vuelve a publicar.
+    lastSynced.set(id, stable({ key: row.key, data: row.data }));
   } else if (table === 'app_settings') {
     const target = row.key === 'worker_access' ? security.workerAccess : row.key === 'session' ? security.session : null;
     if (!target) return;
@@ -828,7 +867,8 @@ function receiveRow(table, row, removed = false) {
   if (key === undefined || key === null) return false;
   if (table === 'profiles' && syncSession.role === 'worker' && row.user_id !== syncSession.userId) return false;
   const id = rowId(table, key);
-  if (!removed && lastSynced.get(id) === stable(normalizeRow(table, row))) return false;
+  // Eco de lo propio (o sin cambios): no se aplica ni se repinta la pantalla.
+  if (!removed && sameAsKnown(id, normalizeRow(table, row))) return false;
   if (hasUnsentChanges(table, key)) { scheduleFlush(100); return false; }
   if (removed && !lastSynced.has(id) && !localRow(table, key)) return false;
   applyRow(table, row, removed);
@@ -1435,6 +1475,115 @@ function normalizeCancelledCards() {
   Object.entries(clients).forEach(([clientId, client]) => { if (Number(client.balance) <= 0) addCancelledCard(client, clientId, client.settledAt || localDateISO()); });
 }
 
+// ── js/domain/base-transfer.js
+/**
+ * domain/base-transfer · Traspasos de base entre cobros.
+ *
+ * Los cobros se prestan base entre ellos (p. ej. Don Matías le da $ 200.000 a Cerrito). El
+ * trabajador lo registra desde «Tu base hoy»: a su cobro se le resta en el acto y queda una
+ * solicitud «base-transfer» en Pendientes para que el admin la revise.
+ *
+ * El trabajador solo puede escribir en su propio cobro, así que el abono al cobro de destino lo
+ * hace el dispositivo del admin (applyPendingBaseTransfers, al recibir la solicitud). Cada cobro
+ * guarda los traspasos que recibió (`baseTransfersIn`) y los que envió (`baseTransfersOut`) con
+ * el id de la solicitud: así ninguno se cuenta dos veces aunque el admin tenga la app abierta
+ * en dos equipos, y queda la trazabilidad de cada movimiento.
+ */
+
+const EXTERNAL_ROUTE = '__external__';
+
+const nowISO = () => new Date().toISOString();
+
+/** El trabajador envía base: se resta de su cobro y se crea la solicitud para el admin. */
+function createBaseTransfer({ origin, originId, toId, toName, amount, worker, comment = '' }) {
+  const id = `request-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+  const at = nowISO();
+  const value = Math.round(Number(amount) || 0);
+  origin.base = Number(origin.base || 0) - value;
+  origin.baseTransfersOut ||= [];
+  origin.baseTransfersOut.push({ id, amount: value, to: toId, toName, at });
+  return {
+    id, type: 'base-transfer', routeId: originId, route: origin.name || originId,
+    toRouteId: toId, toRouteName: toName, amount: value, comment: String(comment || '').trim(),
+    workerId: worker?.id || '', workerName: worker?.name || 'Trabajador',
+    clientName: '', createdAt: at, status: 'pending', appliedTo: null, appliedAt: null,
+  };
+}
+
+/** Suma el traspaso a la base del cobro de destino (una sola vez). */
+function creditDestination(request, routes) {
+  const toId = request.toRouteId;
+  const dest = routes[toId];
+  if (!toId || toId === EXTERNAL_ROUTE || !dest) return false;
+  dest.baseTransfersIn ||= [];
+  if (!dest.baseTransfersIn.some(entry => entry.id === request.id)) {
+    dest.base = Number(dest.base || 0) + Number(request.amount || 0);
+    dest.baseTransfersIn.push({ id: request.id, amount: Number(request.amount || 0), from: request.routeId, fromName: request.route, at: nowISO() });
+  }
+  request.appliedTo = toId;
+  request.appliedAt ||= nowISO();
+  return true;
+}
+
+/** Quita el traspaso del cobro que lo había recibido (para cambiar el destino o anularlo). */
+function debitDestination(request, routes) {
+  const dest = routes[request.appliedTo];
+  if (dest?.baseTransfersIn?.some(entry => entry.id === request.id)) {
+    dest.base = Number(dest.base || 0) - Number(request.amount || 0);
+    dest.baseTransfersIn = dest.baseTransfersIn.filter(entry => entry.id !== request.id);
+  }
+  request.appliedTo = null;
+  request.appliedAt = null;
+}
+
+/** El admin corrige a qué cobro iba el dinero. */
+function retargetBaseTransfer(request, routes, toId, toName) {
+  debitDestination(request, routes);
+  request.toRouteId = toId;
+  request.toRouteName = toName;
+  const origin = routes[request.routeId];
+  const out = origin?.baseTransfersOut?.find(entry => entry.id === request.id);
+  if (out) { out.to = toId; out.toName = toName; }
+  creditDestination(request, routes);
+}
+
+/** El admin anula el traspaso: el dinero vuelve al cobro que lo envió. */
+function cancelBaseTransfer(request, routes) {
+  debitDestination(request, routes);
+  const origin = routes[request.routeId];
+  if (origin?.baseTransfersOut?.some(entry => entry.id === request.id)) {
+    origin.base = Number(origin.base || 0) + Number(request.amount || 0);
+    origin.baseTransfersOut = origin.baseTransfersOut.filter(entry => entry.id !== request.id);
+  }
+  request.status = 'rejected';
+  request.resolvedAt = nowISO();
+}
+
+/**
+ * Admin: acredita en su destino los traspasos que aún no se han aplicado. Devuelve true si
+ * cambió algo (para guardar).
+ */
+function applyPendingBaseTransfers(requests, routes) {
+  let changed = false;
+  requests.forEach(request => {
+    if (request?.type !== 'base-transfer' || request.status === 'rejected') return;
+    if (!request.toRouteId || request.toRouteId === EXTERNAL_ROUTE || request.appliedTo === request.toRouteId) return;
+    if (creditDestination(request, routes)) changed = true;
+  });
+  return changed;
+}
+
+/**
+ * Traspasos que movieron la base de un cobro después de un momento dado (ms): lo recibido menos
+ * lo enviado. Sirve para no perderlos cuando la base del día siguiente se recalcula del cierre.
+ */
+function baseTransfersSince(route, sinceTs) {
+  const after = entry => (Date.parse(entry.at) || 0) > sinceTs;
+  const received = (route?.baseTransfersIn || []).filter(after).reduce((sum, entry) => sum + Number(entry.amount || 0), 0);
+  const sent = (route?.baseTransfersOut || []).filter(after).reduce((sum, entry) => sum + Number(entry.amount || 0), 0);
+  return received - sent;
+}
+
 // ── js/domain/card-color.js
 /**
  * domain/card-color · Color de cada cartulina, como en el sistema anterior.
@@ -2005,6 +2154,26 @@ function pendingRoutePayments(clientsById, routeId, route) {
       .filter(payment => isPendingPayment(payment, cutoff, today))
       .map(payment => ({ clientId, client, payment })))
     .sort((a, b) => String(b.payment.at || `${b.payment.date}T00`).localeCompare(String(a.payment.at || `${a.payment.date}T00`)));
+}
+
+/**
+ * Cobro del día de la ruta: la suma de los abonos pendientes de cierre (los mismos de «Abonos
+ * del día»). Se calcula siempre de los abonos de cada cliente, así un guardado de otro
+ * dispositivo con una copia vieja de la ruta no puede dejarlo en cero.
+ */
+function routeCollections(clientsById, routeId, route) {
+  return pendingRoutePayments(clientsById, routeId, route).reduce((sum, { payment }) => sum + (Number(payment.amount) || 0), 0);
+}
+
+/** Pone en cada ruta su cobro calculado. Devuelve true si alguno cambió. */
+function syncRouteCollections(clientsById, routes) {
+  let changed = false;
+  Object.entries(routes || {}).forEach(([routeId, route]) => {
+    if (!route) return;
+    const amount = routeCollections(clientsById, routeId, route);
+    if (Number(route.collections || 0) !== amount) { route.collections = amount; changed = true; }
+  });
+  return changed;
 }
 
 /** Fecha y hora en que se registró un abono: «dom 26 oct · 3:05 p. m.» (sin hora si no se guardó). */
@@ -3153,6 +3322,7 @@ function __mount_accountSettingsModule() {
 
 
 
+
 /** «Hoy · 5 de octubre»: la fecha de la liquidación sale del reloj, no del marcado. */
 function renderRouteDate() {
   const label = new Intl.DateTimeFormat('es-CO', { weekday: 'long', day: 'numeric', month: 'long' }).format(new Date());
@@ -3220,13 +3390,21 @@ function renderAdminRoute(routeId) {
   const route = routeSettlements[routeId];
   if (!updateRouteAvailability() || !route) return;
   state.activeSettlement = route;
+  // El cobro sale de los abonos registrados desde el último cierre (no se escribe a mano).
+  syncRouteCollections(clients, { [routeId]: route });
   document.querySelector('#admin-title').textContent = `Cuadre de Caja - Ruta ${route.name}`;
-  document.querySelector('#metric-collections').value = route.collections;
-  document.querySelector('#metric-base').value = route.base;
-  document.querySelector('#metric-loans').value = route.loans;
-  document.querySelector('#metric-expenses').value = route.expenses;
-  document.querySelector('#metric-cash-delivered').value = route.cashDelivered;
-  document.querySelector('#metric-other-expenses').value = route.otherExpenses;
+  // El campo donde el admin está escribiendo no se reescribe: si llega un cambio de otro
+  // dispositivo mientras escribe, se veían números borrados o ceros de más.
+  const setField = (selector, value) => {
+    const input = document.querySelector(selector);
+    if (input && document.activeElement !== input) input.value = value;
+  };
+  setField('#metric-collections', route.collections);
+  setField('#metric-base', route.base);
+  setField('#metric-loans', route.loans);
+  setField('#metric-expenses', route.expenses);
+  setField('#metric-cash-delivered', route.cashDelivered);
+  setField('#metric-other-expenses', route.otherExpenses);
   renderRouteOperations(route);
   renderDayPayments(routeId);
   renderBaseBreakdown(routeId);
@@ -4347,7 +4525,9 @@ function __mount_legacyImportModule() {
 
 
 
-const REQUEST_TITLES = { interest: 'Excepción de interés', insurance: 'Excepción de seguros', 'route-correction': 'Corrección de visita o pago', finance: 'Solicitud de financiación', retanqueo: 'Solicitud de retanqueo' };
+
+
+const REQUEST_TITLES = { 'base-transfer': 'Traspaso de base', interest: 'Excepción de interés', insurance: 'Excepción de seguros', 'route-correction': 'Corrección de visita o pago', finance: 'Solicitud de financiación', retanqueo: 'Solicitud de retanqueo' };
 
 /** Lo que pidió el trabajador al financiar o retanquear, en una línea. */
 function restructureSummary(request) {
@@ -4405,10 +4585,21 @@ function renderPendingRequests() {
       : request.type === 'route-correction' && request.paymentAmount ? `Abono del ${formatDate(request.visitDate)}: registrado ${formatMoney(request.paymentAmount)} → correcto ${formatMoney(request.requestedAmount)}. Motivo: ${request.comment || 'Sin comentario'}`
       : request.type === 'route-correction' && request.requestedAmount ? `Visita del ${formatDate(request.visitDate)} sin abono registrado → pagó ${formatMoney(request.requestedAmount)}. Motivo: ${request.comment || 'Sin comentario'}`
       : `${request.type === 'route-correction' ? 'Motivo enviado' : 'Acuerdo informado'}: ${request.comment || 'Sin comentario'}`;
+    if (request.type === 'base-transfer') {
+      // Traspaso de base: de qué cobro salió, a cuál llegó y cuándo.
+      const origin = routeSettlements[request.routeId]?.name || request.route;
+      const external = request.toRouteId === EXTERNAL_ROUTE;
+      details.textContent = `${origin} → ${request.toRouteName || request.toRouteId}${external ? ' (fuera de EdgeCredit)' : ''} · Envió ${request.workerName} · ${new Date(request.createdAt).toLocaleString('es-CO', { weekday: 'short', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' })}`;
+      value.textContent = `${formatMoney(request.amount)} salieron del efectivo de ${origin}${external ? '' : request.appliedTo === request.toRouteId ? ` y ya están en la base de ${request.toRouteName}` : ` · se suman a ${request.toRouteName} en cuanto este equipo lo procese`}.${request.comment ? ` Comentario: ${request.comment}` : ''}`;
+      card.classList.add('is-base-transfer');
+    }
     copy.append(title, details, value);
     const actions = document.createElement('div');
     actions.className = 'pending-actions';
-    [['approve', 'Aprobar'], ['reject', 'Rechazar']].forEach(([action, label]) => {
+    const buttons = request.type === 'base-transfer'
+      ? [['approve', 'Confirmar'], ['retarget', 'Cambiar destino'], ['reject', 'Anular']]
+      : [['approve', 'Aprobar'], ['reject', 'Rechazar']];
+    buttons.forEach(([action, label]) => {
       const button = document.createElement('button');
       button.type = 'button';
       button.dataset.pendingAction = action;
@@ -4448,7 +4639,7 @@ function resolvePendingRequest(requestId, approved, approvedValue) {
         client.balance = Math.max(0, Number(client.balance) - correctedAmount);
       }
       const route = routeSettlements[client.route];
-      if (route) route.collections = Math.max(0, Number(route.collections || 0) + collectionDelta);
+      if (route) syncRouteCollections(clients, { [client.route]: route });
       updatePaidAmountTotal(client);
       client.settledAt = Number(client.balance) <= 0 ? client.settledAt || request.visitDate : null;
       state.routeVisitOutcomes[key][request.clientId] = 'paid';
@@ -4490,12 +4681,60 @@ function resolvePendingRequest(requestId, approved, approvedValue) {
   showToast(approved ? 'Solicitud aprobada y aplicada al cliente.' : 'Solicitud rechazada.');
 }
 
+/** Traspaso de base en Pendientes: confirmar, corregir el cobro de destino o anular. */
+function handleBaseTransferAction(request, action) {
+  const done = message => { persistBusinessData(); renderPendingRequests(); renderAdminRoute(routeSelect.value); showToast(message); };
+  const amount = formatMoney(request.amount);
+  if (action === 'approve') {
+    request.status = 'approved';
+    request.resolvedAt = new Date().toISOString();
+    done(`Traspaso de ${amount} a ${request.toRouteName} confirmado.`);
+    return;
+  }
+  if (action === 'reject') {
+    openCustomModal({
+      title: 'Anular traspaso de base',
+      description: `Los ${amount} vuelven a la base de ${routeSettlements[request.routeId]?.name || request.route}${request.appliedTo && request.appliedTo !== EXTERNAL_ROUTE ? ` y se quitan de ${request.toRouteName}` : ''}.`,
+      submitLabel: 'Anular traspaso',
+      onSubmit: () => { cancelBaseTransfer(request, routeSettlements); done(`Traspaso anulado: ${amount} volvieron a ${request.route}.`); },
+    });
+    return;
+  }
+  // Cambiar destino: el dinero pasa al cobro correcto.
+  const options = Object.entries(routeSettlements)
+    .filter(([id]) => id !== request.routeId)
+    .map(([id, route]) => ({ value: id, label: `${route.name}${id === request.toRouteId ? ' (actual)' : ''}` }))
+    .sort((a, b) => a.label.localeCompare(b.label, 'es'));
+  options.push({ value: EXTERNAL_ROUTE, label: 'Otro cobro (aún no está en EdgeCredit)' });
+  openCustomModal({
+    title: 'Cambiar cobro de destino',
+    description: `${amount} que envió ${request.workerName} desde ${request.route}. Hoy están en ${request.toRouteName}. Elige a qué cobro debían ir.`,
+    fields: [
+      { name: 'to', label: 'Cobro correcto', type: 'select', options, value: request.toRouteId, required: true },
+      { name: 'externalName', label: 'Nombre del cobro (solo si es «Otro cobro»)', value: request.toRouteId === EXTERNAL_ROUTE ? request.toRouteName : '' },
+    ],
+    submitLabel: 'Pasar el dinero',
+    onSubmit: values => {
+      const external = values.to === EXTERNAL_ROUTE;
+      const toName = external ? String(values.externalName || '').trim() : routeSettlements[values.to]?.name || values.to;
+      if (external && toName.length < 2) { customModalError.textContent = 'Escribe el nombre del otro cobro.'; return false; }
+      if (values.to === request.toRouteId && toName === request.toRouteName) return undefined;
+      const before = request.toRouteName;
+      retargetBaseTransfer(request, routeSettlements, values.to, toName);
+      done(`${amount} pasaron de ${before} a ${toName}.`);
+      return undefined;
+    },
+  });
+}
+
 /** Registra los listeners del módulo. Se invoca una sola vez desde app.js. */
 function __mount_pendingModule() {
   pendingList.addEventListener('click', event => {
     const button = event.target.closest('[data-pending-action]');
     if (!button) return;
     const { pendingAction, pendingId } = button.dataset;
+    const transfer = pendingRequests.find(item => item.id === pendingId && item.type === 'base-transfer');
+    if (transfer) { handleBaseTransferAction(transfer, pendingAction); return; }
     if (pendingAction === 'approve') {
       const request = pendingRequests.find(item => item.id === pendingId);
       if (!request) return;
@@ -5809,6 +6048,7 @@ function __mount_routePickerModule() {
 
 
 
+
 const CLOSURE_FIELDS = ['collections', 'base', 'loans', 'expenses', 'otherExpenses', 'cashDelivered'];
 
 /** Estado del cierre de hoy: 'closed' (enviado y sin cambios), 'changed' (editado después) o null. */
@@ -5893,7 +6133,9 @@ function applyCarriedBases(today = localDateISO()) {
     if (started) return;
     const carried = carriedBase(route, today, date => transfersOn(routeId, date));
     if (!carried) return;
-    route.base = carried.amount;
+    // Traspasos de base hechos después de ese cierre (ya movieron la base): se conservan.
+    const closedTs = Number(route.ledger?.[carried.date]?.closedTs) || 0;
+    route.base = carried.amount + (closedTs ? baseTransfersSince(route, closedTs) : 0);
     route.baseBank = 0;
     route.baseCarriedOn = today;
     route.baseCarriedFrom = carried.date;
@@ -6072,17 +6314,23 @@ function recalculateSettlement() {
 function __mount_settlementModule() {
   document.querySelector('#monday-base-save').addEventListener('click', saveMondayBase);
   document.querySelector('#settlement-other-note').addEventListener('click', openSettlementOtherNote);
+  // El cuadre se recalcula con cada número; se guarda (y se sube) cuando se deja de escribir.
+  let saveTimer = null;
   settlementInputs.forEach(input => input.addEventListener('input', () => {
     const field = input.dataset.settlementField;
+    if (field === 'collections' || !state.activeSettlement) return; // el cobro se calcula de los abonos
     const amount = Number(input.value);
-    if (!state.activeSettlement) return;
     state.activeSettlement[field] = Number.isFinite(amount) && amount >= 0 ? amount : 0;
     if (field === 'base') renderBaseBreakdown(routeSelect.value);
     recalculateSettlement();
-    persistBusinessData();
+    window.clearTimeout(saveTimer);
+    saveTimer = window.setTimeout(persistBusinessData, 700);
   }));
+  settlementInputs.forEach(input => input.addEventListener('change', () => { window.clearTimeout(saveTimer); persistBusinessData(); }));
   document.querySelector('#verify-close-route').addEventListener('click', () => {
     const submitRouteClosure = () => {
+      // Cobro del cierre: los abonos registrados desde el cierre anterior.
+      if (state.activeSettlement) syncRouteCollections(clients, { [routeSelect.value]: state.activeSettlement });
       const payload = {
         route: state.activeSettlement.name,
         collections: state.activeSettlement.collections,
@@ -6098,6 +6346,7 @@ function __mount_settlementModule() {
       window.dispatchEvent(new CustomEvent('edgecredit:route-close', { detail: payload }));
       const route = routeSettlements[routeSelect.value] || state.activeSettlement;
       const routeId = routeSelect.value;
+
       // Transferencias que entran a este cierre: también las de días anteriores sin cerrar.
       const transfers = pendingRoutePayments(clients, routeId, route)
         .filter(({ payment }) => payment.method === 'transfer')
@@ -6918,6 +7167,7 @@ function __mount_twoFactorModule() {
  * features/clients/client-detail · Ficha del cliente: saldo, progreso, historial
  * de abonos e intereses, y edición completa (solo admin).
  */
+
 
 
 
@@ -7840,7 +8090,7 @@ function __mount_clientDetailModule() {
     if (button.dataset.paymentAction === 'delete') {
       openCustomModal({
         title: 'Eliminar abono', description: `Se eliminará el abono de ${formatDate(client.payments[index].date)}.`, submitLabel: 'Eliminar',
-        onSubmit: () => { const amount = Number(client.payments[index].amount) || 0; client.balance += amount; client.payments.splice(index, 1); if (routeSettlements[client.route]) routeSettlements[client.route].collections = Math.max(0, routeSettlements[client.route].collections - amount); updatePaidAmountTotal(client); client.settledAt = Number(client.balance) <= 0 ? client.settledAt || localDateISO() : null; syncCancelledCard(client, state.activeClient); persistBusinessData(); openClient(state.activeClient); }
+        onSubmit: () => { const amount = Number(client.payments[index].amount) || 0; client.balance += amount; client.payments.splice(index, 1); if (routeSettlements[client.route]) syncRouteCollections(clients, { [client.route]: routeSettlements[client.route] }); updatePaidAmountTotal(client); client.settledAt = Number(client.balance) <= 0 ? client.settledAt || localDateISO() : null; syncCancelledCard(client, state.activeClient); persistBusinessData(); openClient(state.activeClient); }
       });
     } else {
       const oldAmount = Number(client.payments[index].amount) || 0;
@@ -7852,7 +8102,7 @@ function __mount_clientDetailModule() {
           if (amount > oldAmount + Number(client.balance)) { customModalError.textContent = 'El monto corregido supera el saldo disponible.'; return false; }
           client.balance = Math.max(0, Number(client.balance) + oldAmount - amount);
           client.payments[index].amount = amount;
-          if (routeSettlements[client.route]) routeSettlements[client.route].collections = Math.max(0, routeSettlements[client.route].collections + amount - oldAmount);
+          if (routeSettlements[client.route]) syncRouteCollections(clients, { [client.route]: routeSettlements[client.route] });
           client.settledAt = client.balance <= 0 ? client.settledAt || localDateISO() : null;
           updatePaidAmountTotal(client); syncCancelledCard(client, state.activeClient); persistBusinessData(); openClient(state.activeClient);
         }
@@ -9619,6 +9869,7 @@ function __mount_operationsListModule() {
 
 
 
+
 /** Comprobante elegido: captura de la galería («Subir captura») o foto («Tomar foto»). */
 function chosenVoucher() {
   return voucherFile.files?.[0] || document.querySelector('#voucher-camera').files?.[0] || null;
@@ -9763,7 +10014,7 @@ function __mount_paymentModule() {
     // Con la calificación por puntos la demora la mide el calendario (domain/loan-schedule).
     if (!ratingSystemActive()) client.paymentWarning ||= paymentRisk.overdueDays > 0 || paymentRisk.explicitlyMissed || paymentRisk.latePaid;
     const route = routeSettlements[client.route];
-    if (route) route.collections += amount;
+    if (route) syncRouteCollections(clients, { [client.route]: route }); // el cobro se calcula de los abonos
     // Cualquier abono de hoy cierra la visita: el cliente sale del Inicio y queda con
     // el indicador "Abono registrado" en la ruta diaria.
     closeVisit(state.activeClient, 'paid', client.route);
@@ -9821,6 +10072,9 @@ function __mount_paymentModule() {
 
 
 
+
+
+
 /** Momento en que se cerró hoy la ruta («Verificar y cerrar ruta»), o 0 si hoy no se ha cerrado. */
 function todayClosureTs(route) {
   return route?.lastClosure?.date === localDateISO() ? Date.parse(route.lastClosure.submittedAt) || 0 : 0;
@@ -9866,12 +10120,15 @@ function updateCashTotal() {
   balanceValues[1].textContent = formatMoney(bank);
   cashTotal.textContent = formatMoney(cash + bank);
   updateCashChip(cashTotal.textContent);
+  renderBaseTransfers();
   renderWorkerDailyMetrics();
 }
 
 function renderWorkerDailyMetrics() {
   const route = routeSettlements[state.workerRoute];
   if (!route) return;
+  // Cobro = abonos registrados desde el último cierre (igual que «Abonos del día»).
+  syncRouteCollections(clients, { [state.workerRoute]: route });
   document.querySelector('#worker-metrics-route').textContent = `Ruta ${route.name}`;
   document.querySelector('#worker-day-base').textContent = formatMoney(route.base || 0);
   document.querySelector('#worker-day-collections').textContent = formatMoney(route.collections || 0);
@@ -9948,8 +10205,77 @@ function renderWorkerDayPayments() {
     : 'Sin abonos';
 }
 
+// ── Traspaso de base a otro cobro ──
+
+/** Cobros a los que se puede enviar base (la lista que publica el admin, sin el propio). */
+function transferDestinations() {
+  const own = state.workerRoute;
+  const listed = routeDirectory.length ? routeDirectory : Object.entries(routeSettlements).map(([id, route]) => ({ id, name: route?.name || id }));
+  return listed.filter(item => item.id && item.id !== own);
+}
+
+/** Traspasos de base del cobro desde el último cierre: enviados (−) y recibidos (+). */
+function renderBaseTransfers() {
+  const route = workerRoute();
+  const list = document.querySelector('#base-transfer-list');
+  if (!route || !list) return;
+  const since = Date.parse(route.lastClosure?.submittedAt || '') || 0;
+  const recent = entry => (Date.parse(entry.at) || 0) > since;
+  const items = [
+    ...(route.baseTransfersOut || []).filter(recent).map(entry => ({ ...entry, sign: -1, label: `Enviado a ${entry.toName || entry.to}` })),
+    ...(route.baseTransfersIn || []).filter(recent).map(entry => ({ ...entry, sign: 1, label: `Recibido de ${entry.fromName || entry.from}` })),
+  ].sort((a, b) => String(b.at).localeCompare(String(a.at)));
+  list.hidden = !items.length;
+  list.replaceChildren(...items.map(item => {
+    const li = document.createElement('li');
+    li.className = item.sign < 0 ? 'is-out' : 'is-in';
+    const text = document.createElement('span');
+    text.textContent = `${item.label} · ${new Date(item.at).toLocaleTimeString('es-CO', { hour: 'numeric', minute: '2-digit' })}`;
+    const amount = document.createElement('strong');
+    amount.textContent = `${item.sign < 0 ? '−' : '+'} ${formatMoney(item.amount)}`;
+    li.append(text, amount);
+    return li;
+  }));
+}
+
+function openBaseTransfer() {
+  const route = workerRoute();
+  if (!route) return;
+  const destinations = transferDestinations();
+  const available = Math.max(0, cashInHand(route, todayCollectionsByMethod().cash));
+  openCustomModal({
+    title: 'Traspasar base a otro cobro',
+    description: `Sale de tu efectivo (tienes ${formatMoney(available)}) y se le suma a la base del cobro que elijas. El administrador lo verá en Pendientes.`,
+    fields: [
+      { name: 'amount', label: 'Monto a traspasar ($)', type: 'number', money: true, thousands: true, min: 1, step: 1, required: true },
+      { name: 'to', label: '¿A qué cobro?', type: 'select', required: true, options: [{ value: '', label: 'Elige el cobro' }, ...destinations.map(item => ({ value: item.id, label: item.name })), { value: EXTERNAL_ROUTE, label: 'Otro cobro (aún no está en EdgeCredit)' }] },
+      { name: 'externalName', label: 'Nombre del cobro (solo si es «Otro cobro»)', placeholder: 'Ej. Cúcuta' },
+      { name: 'comment', label: 'Comentario (opcional)', type: 'textarea', rows: 2, placeholder: 'Ej. Para préstamos de la tarde' },
+    ],
+    submitLabel: 'Traspasar',
+    onSubmit: values => {
+      const amount = Math.round(Number(values.amount));
+      if (!Number.isFinite(amount) || amount <= 0) { customModalError.textContent = 'Escribe un monto mayor que cero.'; return false; }
+      if (amount > available) { customModalError.textContent = `No tienes tanto efectivo: tienes ${formatMoney(available)}.`; return false; }
+      if (!values.to) { customModalError.textContent = 'Elige a qué cobro va el dinero.'; return false; }
+      const external = values.to === EXTERNAL_ROUTE;
+      const toName = external ? String(values.externalName || '').trim() : destinations.find(item => item.id === values.to)?.name || values.to;
+      if (external && toName.length < 2) { customModalError.textContent = 'Escribe el nombre del otro cobro.'; return false; }
+      const request = createBaseTransfer({ origin: route, originId: state.workerRoute, toId: values.to, toName, amount, worker: state.activeWorker, comment: values.comment });
+      // Sin servidor (o si este equipo tiene el cobro de destino) se acredita de una vez.
+      creditDestination(request, routeSettlements);
+      pendingRequests.unshift(request);
+      persistBusinessData();
+      updateCashTotal();
+      renderPendingRequests();
+      showToast(`${formatMoney(amount)} traspasados a ${toName}.`);
+    },
+  });
+}
+
 /** Registra los listeners del módulo. Se invoca una sola vez desde app.js. */
 function __mount_cashBoxModule() {
+  document.querySelector('#base-transfer-open').addEventListener('click', openBaseTransfer);
   document.querySelector('#save-work-base').addEventListener('click', () => {
     const value = Number(baseInput.value);
     if (!Number.isFinite(value) || value <= 0) {
@@ -12941,6 +13267,7 @@ const syncModule = { mount: __mount_syncModule };
 
 
 
+
 /**
  * Composición de módulos (equivalente a un docker-compose): cada entrada es un
  * contenedor autónomo que expone mount(). El orden importa solo para listeners
@@ -13010,6 +13337,7 @@ function boot() {
   // Cierres de caja: se guardan los últimos 4 meses (sin servidor, en este navegador).
   if (!backendEnabled() && pruneLedgers()) persistBusinessData();
   if (!backendEnabled() && applyCarriedBases()) persistBusinessData();
+  if (!backendEnabled() && syncRouteCollections(clients, routeSettlements)) persistBusinessData();
   window.setInterval(() => {
     if ((!backendEnabled() || syncRole() === 'admin') && pruneLedgers()) persistBusinessData();
     if ((!backendEnabled() || syncRole()) && applyCarriedBases()) { persistBusinessData(); updateCashTotal(); }
@@ -13048,6 +13376,10 @@ function refreshFromServer() {
   if ((state.userRole === 'admin' || syncRole() === 'admin') && pruneLedgers()) persistBusinessData();
   // Día nuevo: el efectivo del último cierre pasa a ser la base de hoy (admin o trabajador, el primero que entre).
   if (applyCarriedBases()) persistBusinessData();
+  // Cobro de cada ruta = abonos registrados desde su último cierre (no un acumulador que se pueda pisar).
+  if (syncRouteCollections(clients, routeSettlements)) persistBusinessData();
+  // Admin: los traspasos de base que mandaron los trabajadores se suman al cobro de destino.
+  if ((state.userRole === 'admin' || syncRole() === 'admin') && applyPendingBaseTransfers(pendingRequests, routeSettlements)) persistBusinessData();
   syncRouteSelect();
   state.activeSettlement = routeSettlements[routeSelect.value] || null;
   normalizeClientNotes();

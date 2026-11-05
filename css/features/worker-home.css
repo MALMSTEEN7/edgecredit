@@ -1191,3 +1191,53 @@
 .home-action-call:active {
   transform: scale(.97);
 }
+
+/* Tu base hoy: traspaso de base a otro cobro y lista de traspasos desde el último cierre. */
+.base-transfer-row {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.base-transfer-button {
+  width: 100%;
+  min-height: 42px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-weight: 700;
+}
+
+.base-transfer-list {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.base-transfer-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.base-transfer-list li strong {
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+}
+
+.base-transfer-list li.is-out strong {
+  color: var(--alert-color, #e53935);
+}
+
+.base-transfer-list li.is-in strong {
+  color: var(--success);
+}

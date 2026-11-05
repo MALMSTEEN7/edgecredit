@@ -2,11 +2,14 @@
  * features/worker/cash-box · Caja del trabajador (efectivo/bancos) y métricas del día.
  */
 
-import { baseInput, cashTotal } from '../../core/dom.js';
+import { baseInput, cashTotal, customModalError } from '../../core/dom.js';
 import { state } from '../../core/state.js';
-import { clients, persistBusinessData, routeSettlements } from '../../core/store.js';
+import { clients, pendingRequests, persistBusinessData, routeDirectory, routeSettlements } from '../../core/store.js';
+import { EXTERNAL_ROUTE, createBaseTransfer, creditDestination } from '../../domain/base-transfer.js';
+import { openCustomModal } from '../../ui/custom-modal.js';
+import { renderPendingRequests } from '../admin/pending.js';
 import { insuranceCollectedOn } from '../../domain/insurance.js';
-import { paymentStamp, pendingRoutePayments } from '../../domain/ledger.js';
+import { paymentStamp, pendingRoutePayments, syncRouteCollections } from '../../domain/ledger.js';
 import { localDateISO } from '../../shared/dates.js';
 import { formatMoney } from '../../shared/format.js';
 import { showToast } from '../../ui/toast.js';
@@ -58,12 +61,15 @@ export function updateCashTotal() {
   balanceValues[1].textContent = formatMoney(bank);
   cashTotal.textContent = formatMoney(cash + bank);
   updateCashChip(cashTotal.textContent);
+  renderBaseTransfers();
   renderWorkerDailyMetrics();
 }
 
 export function renderWorkerDailyMetrics() {
   const route = routeSettlements[state.workerRoute];
   if (!route) return;
+  // Cobro = abonos registrados desde el último cierre (igual que «Abonos del día»).
+  syncRouteCollections(clients, { [state.workerRoute]: route });
   document.querySelector('#worker-metrics-route').textContent = `Ruta ${route.name}`;
   document.querySelector('#worker-day-base').textContent = formatMoney(route.base || 0);
   document.querySelector('#worker-day-collections').textContent = formatMoney(route.collections || 0);
@@ -140,8 +146,77 @@ function renderWorkerDayPayments() {
     : 'Sin abonos';
 }
 
+// ── Traspaso de base a otro cobro ──
+
+/** Cobros a los que se puede enviar base (la lista que publica el admin, sin el propio). */
+function transferDestinations() {
+  const own = state.workerRoute;
+  const listed = routeDirectory.length ? routeDirectory : Object.entries(routeSettlements).map(([id, route]) => ({ id, name: route?.name || id }));
+  return listed.filter(item => item.id && item.id !== own);
+}
+
+/** Traspasos de base del cobro desde el último cierre: enviados (−) y recibidos (+). */
+function renderBaseTransfers() {
+  const route = workerRoute();
+  const list = document.querySelector('#base-transfer-list');
+  if (!route || !list) return;
+  const since = Date.parse(route.lastClosure?.submittedAt || '') || 0;
+  const recent = entry => (Date.parse(entry.at) || 0) > since;
+  const items = [
+    ...(route.baseTransfersOut || []).filter(recent).map(entry => ({ ...entry, sign: -1, label: `Enviado a ${entry.toName || entry.to}` })),
+    ...(route.baseTransfersIn || []).filter(recent).map(entry => ({ ...entry, sign: 1, label: `Recibido de ${entry.fromName || entry.from}` })),
+  ].sort((a, b) => String(b.at).localeCompare(String(a.at)));
+  list.hidden = !items.length;
+  list.replaceChildren(...items.map(item => {
+    const li = document.createElement('li');
+    li.className = item.sign < 0 ? 'is-out' : 'is-in';
+    const text = document.createElement('span');
+    text.textContent = `${item.label} · ${new Date(item.at).toLocaleTimeString('es-CO', { hour: 'numeric', minute: '2-digit' })}`;
+    const amount = document.createElement('strong');
+    amount.textContent = `${item.sign < 0 ? '−' : '+'} ${formatMoney(item.amount)}`;
+    li.append(text, amount);
+    return li;
+  }));
+}
+
+function openBaseTransfer() {
+  const route = workerRoute();
+  if (!route) return;
+  const destinations = transferDestinations();
+  const available = Math.max(0, cashInHand(route, todayCollectionsByMethod().cash));
+  openCustomModal({
+    title: 'Traspasar base a otro cobro',
+    description: `Sale de tu efectivo (tienes ${formatMoney(available)}) y se le suma a la base del cobro que elijas. El administrador lo verá en Pendientes.`,
+    fields: [
+      { name: 'amount', label: 'Monto a traspasar ($)', type: 'number', money: true, thousands: true, min: 1, step: 1, required: true },
+      { name: 'to', label: '¿A qué cobro?', type: 'select', required: true, options: [{ value: '', label: 'Elige el cobro' }, ...destinations.map(item => ({ value: item.id, label: item.name })), { value: EXTERNAL_ROUTE, label: 'Otro cobro (aún no está en EdgeCredit)' }] },
+      { name: 'externalName', label: 'Nombre del cobro (solo si es «Otro cobro»)', placeholder: 'Ej. Cúcuta' },
+      { name: 'comment', label: 'Comentario (opcional)', type: 'textarea', rows: 2, placeholder: 'Ej. Para préstamos de la tarde' },
+    ],
+    submitLabel: 'Traspasar',
+    onSubmit: values => {
+      const amount = Math.round(Number(values.amount));
+      if (!Number.isFinite(amount) || amount <= 0) { customModalError.textContent = 'Escribe un monto mayor que cero.'; return false; }
+      if (amount > available) { customModalError.textContent = `No tienes tanto efectivo: tienes ${formatMoney(available)}.`; return false; }
+      if (!values.to) { customModalError.textContent = 'Elige a qué cobro va el dinero.'; return false; }
+      const external = values.to === EXTERNAL_ROUTE;
+      const toName = external ? String(values.externalName || '').trim() : destinations.find(item => item.id === values.to)?.name || values.to;
+      if (external && toName.length < 2) { customModalError.textContent = 'Escribe el nombre del otro cobro.'; return false; }
+      const request = createBaseTransfer({ origin: route, originId: state.workerRoute, toId: values.to, toName, amount, worker: state.activeWorker, comment: values.comment });
+      // Sin servidor (o si este equipo tiene el cobro de destino) se acredita de una vez.
+      creditDestination(request, routeSettlements);
+      pendingRequests.unshift(request);
+      persistBusinessData();
+      updateCashTotal();
+      renderPendingRequests();
+      showToast(`${formatMoney(amount)} traspasados a ${toName}.`);
+    },
+  });
+}
+
 /** Registra los listeners del módulo. Se invoca una sola vez desde app.js. */
 export function mount() {
+  document.querySelector('#base-transfer-open').addEventListener('click', openBaseTransfer);
   document.querySelector('#save-work-base').addEventListener('click', () => {
     const value = Number(baseInput.value);
     if (!Number.isFinite(value) || value <= 0) {

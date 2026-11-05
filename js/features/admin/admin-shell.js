@@ -5,7 +5,8 @@
 
 import { adminView, operationsModal, routeSelect, gpsIndicator, workerView } from '../../core/dom.js';
 import { state } from '../../core/state.js';
-import { routeSettlements } from '../../core/store.js';
+import { clients, routeSettlements } from '../../core/store.js';
+import { syncRouteCollections } from '../../domain/ledger.js';
 import { renderClientMap } from './client-map.js';
 import { renderRouteEvidence } from './evidence.js';
 import { renderPendingRequests } from './pending.js';
@@ -85,13 +86,21 @@ export function renderAdminRoute(routeId) {
   const route = routeSettlements[routeId];
   if (!updateRouteAvailability() || !route) return;
   state.activeSettlement = route;
+  // El cobro sale de los abonos registrados desde el último cierre (no se escribe a mano).
+  syncRouteCollections(clients, { [routeId]: route });
   document.querySelector('#admin-title').textContent = `Cuadre de Caja - Ruta ${route.name}`;
-  document.querySelector('#metric-collections').value = route.collections;
-  document.querySelector('#metric-base').value = route.base;
-  document.querySelector('#metric-loans').value = route.loans;
-  document.querySelector('#metric-expenses').value = route.expenses;
-  document.querySelector('#metric-cash-delivered').value = route.cashDelivered;
-  document.querySelector('#metric-other-expenses').value = route.otherExpenses;
+  // El campo donde el admin está escribiendo no se reescribe: si llega un cambio de otro
+  // dispositivo mientras escribe, se veían números borrados o ceros de más.
+  const setField = (selector, value) => {
+    const input = document.querySelector(selector);
+    if (input && document.activeElement !== input) input.value = value;
+  };
+  setField('#metric-collections', route.collections);
+  setField('#metric-base', route.base);
+  setField('#metric-loans', route.loans);
+  setField('#metric-expenses', route.expenses);
+  setField('#metric-cash-delivered', route.cashDelivered);
+  setField('#metric-other-expenses', route.otherExpenses);
   renderRouteOperations(route);
   renderDayPayments(routeId);
   renderBaseBreakdown(routeId);
