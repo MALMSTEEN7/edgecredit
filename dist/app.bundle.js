@@ -4705,20 +4705,14 @@ function handleBaseTransferAction(request, action) {
     .filter(([id]) => id !== request.routeId)
     .map(([id, route]) => ({ value: id, label: `${route.name}${id === request.toRouteId ? ' (actual)' : ''}` }))
     .sort((a, b) => a.label.localeCompare(b.label, 'es'));
-  options.push({ value: EXTERNAL_ROUTE, label: 'Otro cobro (aún no está en EdgeCredit)' });
   openCustomModal({
     title: 'Cambiar cobro de destino',
     description: `${amount} que envió ${request.workerName} desde ${request.route}. Hoy están en ${request.toRouteName}. Elige a qué cobro debían ir.`,
-    fields: [
-      { name: 'to', label: 'Cobro correcto', type: 'select', options, value: request.toRouteId, required: true },
-      { name: 'externalName', label: 'Nombre del cobro (solo si es «Otro cobro»)', value: request.toRouteId === EXTERNAL_ROUTE ? request.toRouteName : '' },
-    ],
+    fields: [{ name: 'to', label: 'Cobro correcto', type: 'select', options, value: request.toRouteId, required: true }],
     submitLabel: 'Pasar el dinero',
     onSubmit: values => {
-      const external = values.to === EXTERNAL_ROUTE;
-      const toName = external ? String(values.externalName || '').trim() : routeSettlements[values.to]?.name || values.to;
-      if (external && toName.length < 2) { customModalError.textContent = 'Escribe el nombre del otro cobro.'; return false; }
-      if (values.to === request.toRouteId && toName === request.toRouteName) return undefined;
+      const toName = routeSettlements[values.to]?.name || values.to;
+      if (values.to === request.toRouteId) return undefined;
       const before = request.toRouteName;
       retargetBaseTransfer(request, routeSettlements, values.to, toName);
       done(`${amount} pasaron de ${before} a ${toName}.`);
@@ -10242,14 +10236,14 @@ function openBaseTransfer() {
   const route = workerRoute();
   if (!route) return;
   const destinations = transferDestinations();
+  if (!destinations.length) { showToast('Todavía no se ha cargado la lista de cobros. Intenta de nuevo en un momento.'); return; }
   const available = Math.max(0, cashInHand(route, todayCollectionsByMethod().cash));
   openCustomModal({
     title: 'Traspasar base a otro cobro',
     description: `Sale de tu efectivo (tienes ${formatMoney(available)}) y se le suma a la base del cobro que elijas. El administrador lo verá en Pendientes.`,
     fields: [
       { name: 'amount', label: 'Monto a traspasar ($)', type: 'number', money: true, thousands: true, min: 1, step: 1, required: true },
-      { name: 'to', label: '¿A qué cobro?', type: 'select', required: true, options: [{ value: '', label: 'Elige el cobro' }, ...destinations.map(item => ({ value: item.id, label: item.name })), { value: EXTERNAL_ROUTE, label: 'Otro cobro (aún no está en EdgeCredit)' }] },
-      { name: 'externalName', label: 'Nombre del cobro (solo si es «Otro cobro»)', placeholder: 'Ej. Cúcuta' },
+      { name: 'to', label: '¿A qué cobro?', type: 'select', required: true, options: [{ value: '', label: 'Elige el cobro' }, ...destinations.map(item => ({ value: item.id, label: item.name }))] },
       { name: 'comment', label: 'Comentario (opcional)', type: 'textarea', rows: 2, placeholder: 'Ej. Para préstamos de la tarde' },
     ],
     submitLabel: 'Traspasar',
@@ -10258,9 +10252,7 @@ function openBaseTransfer() {
       if (!Number.isFinite(amount) || amount <= 0) { customModalError.textContent = 'Escribe un monto mayor que cero.'; return false; }
       if (amount > available) { customModalError.textContent = `No tienes tanto efectivo: tienes ${formatMoney(available)}.`; return false; }
       if (!values.to) { customModalError.textContent = 'Elige a qué cobro va el dinero.'; return false; }
-      const external = values.to === EXTERNAL_ROUTE;
-      const toName = external ? String(values.externalName || '').trim() : destinations.find(item => item.id === values.to)?.name || values.to;
-      if (external && toName.length < 2) { customModalError.textContent = 'Escribe el nombre del otro cobro.'; return false; }
+      const toName = destinations.find(item => item.id === values.to)?.name || values.to;
       const request = createBaseTransfer({ origin: route, originId: state.workerRoute, toId: values.to, toName, amount, worker: state.activeWorker, comment: values.comment });
       // Sin servidor (o si este equipo tiene el cobro de destino) se acredita de una vez.
       creditDestination(request, routeSettlements);
