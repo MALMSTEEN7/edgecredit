@@ -8154,7 +8154,10 @@ function __mount_clientDetailModule() {
           customModalError.textContent = 'Las cuotas pagadas no pueden superar el total de cuotas.';
           return false;
         }
-        const duplicateId = Object.entries(clients).some(([id, item]) => id !== state.activeClient && item.id === values.id.trim());
+        // Una persona puede tener varias cartulinas con la misma cédula (otra cartulina, renovación,
+        // historial migrado): solo se valida si la cédula se cambió en esta edición.
+        const idChanged = values.id.trim() !== String(client.id || '').trim();
+        const duplicateId = idChanged && Object.entries(clients).some(([id, item]) => id !== state.activeClient && item.id === values.id.trim());
         if (duplicateId) { customModalError.textContent = 'Ya existe otro cliente con esa cédula.'; return false; }
         const newClientRoute = ensureRoute(values.route);
         if (!newClientRoute) { customModalError.textContent = 'Escribe el nombre de la ruta / cobro.'; return false; }
