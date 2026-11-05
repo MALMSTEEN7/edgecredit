@@ -5,7 +5,7 @@
 import { baseInput, cashTotal, customModalError } from '../../core/dom.js';
 import { state } from '../../core/state.js';
 import { clients, pendingRequests, persistBusinessData, routeDirectory, routeSettlements } from '../../core/store.js';
-import { EXTERNAL_ROUTE, createBaseTransfer, creditDestination } from '../../domain/base-transfer.js';
+import { createBaseTransfer, creditDestination } from '../../domain/base-transfer.js';
 import { openCustomModal } from '../../ui/custom-modal.js';
 import { renderPendingRequests } from '../admin/pending.js';
 import { insuranceCollectedOn } from '../../domain/insurance.js';
@@ -183,14 +183,14 @@ function openBaseTransfer() {
   const route = workerRoute();
   if (!route) return;
   const destinations = transferDestinations();
+  if (!destinations.length) { showToast('Todavía no se ha cargado la lista de cobros. Intenta de nuevo en un momento.'); return; }
   const available = Math.max(0, cashInHand(route, todayCollectionsByMethod().cash));
   openCustomModal({
     title: 'Traspasar base a otro cobro',
     description: `Sale de tu efectivo (tienes ${formatMoney(available)}) y se le suma a la base del cobro que elijas. El administrador lo verá en Pendientes.`,
     fields: [
       { name: 'amount', label: 'Monto a traspasar ($)', type: 'number', money: true, thousands: true, min: 1, step: 1, required: true },
-      { name: 'to', label: '¿A qué cobro?', type: 'select', required: true, options: [{ value: '', label: 'Elige el cobro' }, ...destinations.map(item => ({ value: item.id, label: item.name })), { value: EXTERNAL_ROUTE, label: 'Otro cobro (aún no está en EdgeCredit)' }] },
-      { name: 'externalName', label: 'Nombre del cobro (solo si es «Otro cobro»)', placeholder: 'Ej. Cúcuta' },
+      { name: 'to', label: '¿A qué cobro?', type: 'select', required: true, options: [{ value: '', label: 'Elige el cobro' }, ...destinations.map(item => ({ value: item.id, label: item.name }))] },
       { name: 'comment', label: 'Comentario (opcional)', type: 'textarea', rows: 2, placeholder: 'Ej. Para préstamos de la tarde' },
     ],
     submitLabel: 'Traspasar',
@@ -199,9 +199,7 @@ function openBaseTransfer() {
       if (!Number.isFinite(amount) || amount <= 0) { customModalError.textContent = 'Escribe un monto mayor que cero.'; return false; }
       if (amount > available) { customModalError.textContent = `No tienes tanto efectivo: tienes ${formatMoney(available)}.`; return false; }
       if (!values.to) { customModalError.textContent = 'Elige a qué cobro va el dinero.'; return false; }
-      const external = values.to === EXTERNAL_ROUTE;
-      const toName = external ? String(values.externalName || '').trim() : destinations.find(item => item.id === values.to)?.name || values.to;
-      if (external && toName.length < 2) { customModalError.textContent = 'Escribe el nombre del otro cobro.'; return false; }
+      const toName = destinations.find(item => item.id === values.to)?.name || values.to;
       const request = createBaseTransfer({ origin: route, originId: state.workerRoute, toId: values.to, toName, amount, worker: state.activeWorker, comment: values.comment });
       // Sin servidor (o si este equipo tiene el cobro de destino) se acredita de una vez.
       creditDestination(request, routeSettlements);

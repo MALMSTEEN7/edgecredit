@@ -198,20 +198,14 @@ function handleBaseTransferAction(request, action) {
     .filter(([id]) => id !== request.routeId)
     .map(([id, route]) => ({ value: id, label: `${route.name}${id === request.toRouteId ? ' (actual)' : ''}` }))
     .sort((a, b) => a.label.localeCompare(b.label, 'es'));
-  options.push({ value: EXTERNAL_ROUTE, label: 'Otro cobro (aún no está en EdgeCredit)' });
   openCustomModal({
     title: 'Cambiar cobro de destino',
     description: `${amount} que envió ${request.workerName} desde ${request.route}. Hoy están en ${request.toRouteName}. Elige a qué cobro debían ir.`,
-    fields: [
-      { name: 'to', label: 'Cobro correcto', type: 'select', options, value: request.toRouteId, required: true },
-      { name: 'externalName', label: 'Nombre del cobro (solo si es «Otro cobro»)', value: request.toRouteId === EXTERNAL_ROUTE ? request.toRouteName : '' },
-    ],
+    fields: [{ name: 'to', label: 'Cobro correcto', type: 'select', options, value: request.toRouteId, required: true }],
     submitLabel: 'Pasar el dinero',
     onSubmit: values => {
-      const external = values.to === EXTERNAL_ROUTE;
-      const toName = external ? String(values.externalName || '').trim() : routeSettlements[values.to]?.name || values.to;
-      if (external && toName.length < 2) { customModalError.textContent = 'Escribe el nombre del otro cobro.'; return false; }
-      if (values.to === request.toRouteId && toName === request.toRouteName) return undefined;
+      const toName = routeSettlements[values.to]?.name || values.to;
+      if (values.to === request.toRouteId) return undefined;
       const before = request.toRouteName;
       retargetBaseTransfer(request, routeSettlements, values.to, toName);
       done(`${amount} pasaron de ${before} a ${toName}.`);
