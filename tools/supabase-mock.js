@@ -70,12 +70,14 @@
     function query(table) {
       const filters = [];
       let action = 'select'; let payload = null; let opts = {}; let single = null;
+      let orderCol = null; let orderAsc = true; let rangeFrom = 0; let rangeTo = Infinity;
       const builder = {
         select() { return builder; },
         eq(col, val) { filters.push(r => r[col] === val); return builder; },
         gt(col, val) { filters.push(r => String(r[col] || '') > String(val)); return builder; },
-        order() { return builder; },
-        limit() { return builder; },
+        order(col, o) { orderCol = col; orderAsc = o?.ascending !== false; return builder; },
+        limit(n) { rangeTo = rangeFrom + n - 1; return builder; },
+        range(from, to) { rangeFrom = from; rangeTo = to; return builder; },
         in(col, vals) { filters.push(r => vals.includes(r[col])); return builder; },
         maybeSingle() { single = 'maybe'; return builder; },
         single() { single = 'one'; return builder; },
@@ -92,7 +94,10 @@
         const key = TABLE_KEYS[table];
         const match = r => filters.every(f => f(r));
         if (action === 'select') {
-          const data = rows.filter(r => visible(db, table, r) && match(r)).map(r => structuredClone(r));
+          let data = rows.filter(r => visible(db, table, r) && match(r)).map(r => structuredClone(r));
+          if (orderCol) data.sort((a, b) => (String(a[orderCol]) < String(b[orderCol]) ? -1 : String(a[orderCol]) > String(b[orderCol]) ? 1 : 0) * (orderAsc ? 1 : -1));
+          // Igual que PostgREST: como máximo `maxRows` filas por consulta (1.000 por defecto).
+          data = data.slice(rangeFrom, Math.min(rangeTo + 1, rangeFrom + (control.maxRows || 1000)));
           control.stats.selects += 1; control.stats.rows += data.length;
           control.stats.byTable[table] = (control.stats.byTable[table] || 0) + data.length;
           if (single) return { data: data[0] || null, error: single === 'one' && !data[0] ? { message: 'not found' } : null };

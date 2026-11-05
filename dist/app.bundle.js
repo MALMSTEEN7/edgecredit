@@ -887,14 +887,34 @@ async function serverNow(db) {
   return new Date(data).toISOString();
 }
 
+/**
+ * El servidor (PostgREST) entrega como máximo 1.000 filas por consulta: sin paginar, el admin
+ * se quedaba sin los clientes que pasaban de ese tope (p. ej. los recién ingresados). Se pide
+ * por páginas, ordenadas por la clave, hasta que una página llegue incompleta.
+ */
+const PAGE_SIZE = 500;
+
+async function fetchAllRows(buildQuery, key) {
+  const rows = [];
+  for (let from = 0; ; from += PAGE_SIZE) {
+    const { data, error } = await buildQuery().order(key, { ascending: true }).range(from, from + PAGE_SIZE - 1);
+    if (error) return { data: null, error };
+    rows.push(...(data || []));
+    if (!data || data.length < PAGE_SIZE) return { data: rows, error: null };
+  }
+}
+
 function tableQueries(db, since) {
   const tables = ['routes', 'route_state', 'clients', 'pending_requests', 'app_settings', 'profiles'];
   return tables.map(table => {
-    let query = db.from(table).select('*');
-    // El admin trae a todos los trabajadores; el trabajador solo su propio perfil (acceso activo o no).
-    if (table === 'profiles') query = syncSession.role === 'admin' ? query.eq('role', 'worker') : query.eq('user_id', syncSession.userId);
-    if (since) query = query.gt('updated_at', since);
-    return query.then(result => ({ table, ...result }));
+    const buildQuery = () => {
+      let query = db.from(table).select('*');
+      // El admin trae a todos los trabajadores; el trabajador solo su propio perfil (acceso activo o no).
+      if (table === 'profiles') query = syncSession.role === 'admin' ? query.eq('role', 'worker') : query.eq('user_id', syncSession.userId);
+      if (since) query = query.gt('updated_at', since);
+      return query;
+    };
+    return fetchAllRows(buildQuery, TABLE_KEYS[table]).then(result => ({ table, ...result }));
   });
 }
 
@@ -5203,9 +5223,12 @@ function __mount_personnelModule() {
         const department = findDepartment(values.department);
         if (!department) { customModalError.textContent = 'Selecciona el departamento donde trabaja.'; return false; }
         // ¿El cobro se abre con este trabajador? Entonces su monto de apertura es el capital
-        // inicial y entra a la caja. En un cobro que ya existe no toca la caja.
+        // inicial y entra a la caja. En un cobro que ya existe no toca la caja: tampoco en uno
+        // migrado del sistema anterior que ya tiene clientes aunque aún no tenga cierres (su
+        // capital ya está en la calle y la base sale del efectivo del último cierre).
         const existingRoute = routeSettlements[routeKey(values.route)];
-        const opensRoute = !existingRoute || (!existingRoute.cashBox?.openingDate && !Object.keys(existingRoute.ledger || {}).length && !(existingRoute.cashEntries || []).length);
+        const routeHasClients = Object.values(clients).some(client => client?.route === routeKey(values.route));
+        const opensRoute = !routeHasClients && (!existingRoute || (!existingRoute.cashBox?.openingDate && !Object.keys(existingRoute.ledger || {}).length && !(existingRoute.cashEntries || []).length));
         const routeId = ensureRoute(values.route);
         if (!routeId) { customModalError.textContent = 'Escribe el nombre de la ruta asignada.'; return false; }
         const worker = { id: `worker-${Date.now()}`, name: values.name.trim(), username, passwordHash, route: routeSettlements[routeId]?.name || values.route.trim(), department: department.name, city: values.city.trim(), motorcycle: values.motorcycle.trim(), plate: values.plate.trim().toUpperCase(), openingAmount: Number(values.openingAmount), soatExpiry: values.soatExpiry, technicalExpiry: values.technicalExpiry };

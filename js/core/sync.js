@@ -412,14 +412,34 @@ async function serverNow(db) {
   return new Date(data).toISOString();
 }
 
+/**
+ * El servidor (PostgREST) entrega como máximo 1.000 filas por consulta: sin paginar, el admin
+ * se quedaba sin los clientes que pasaban de ese tope (p. ej. los recién ingresados). Se pide
+ * por páginas, ordenadas por la clave, hasta que una página llegue incompleta.
+ */
+const PAGE_SIZE = 500;
+
+async function fetchAllRows(buildQuery, key) {
+  const rows = [];
+  for (let from = 0; ; from += PAGE_SIZE) {
+    const { data, error } = await buildQuery().order(key, { ascending: true }).range(from, from + PAGE_SIZE - 1);
+    if (error) return { data: null, error };
+    rows.push(...(data || []));
+    if (!data || data.length < PAGE_SIZE) return { data: rows, error: null };
+  }
+}
+
 function tableQueries(db, since) {
   const tables = ['routes', 'route_state', 'clients', 'pending_requests', 'app_settings', 'profiles'];
   return tables.map(table => {
-    let query = db.from(table).select('*');
-    // El admin trae a todos los trabajadores; el trabajador solo su propio perfil (acceso activo o no).
-    if (table === 'profiles') query = syncSession.role === 'admin' ? query.eq('role', 'worker') : query.eq('user_id', syncSession.userId);
-    if (since) query = query.gt('updated_at', since);
-    return query.then(result => ({ table, ...result }));
+    const buildQuery = () => {
+      let query = db.from(table).select('*');
+      // El admin trae a todos los trabajadores; el trabajador solo su propio perfil (acceso activo o no).
+      if (table === 'profiles') query = syncSession.role === 'admin' ? query.eq('role', 'worker') : query.eq('user_id', syncSession.userId);
+      if (since) query = query.gt('updated_at', since);
+      return query;
+    };
+    return fetchAllRows(buildQuery, TABLE_KEYS[table]).then(result => ({ table, ...result }));
   });
 }
 

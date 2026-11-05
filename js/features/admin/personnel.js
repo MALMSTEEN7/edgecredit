@@ -6,7 +6,7 @@
 import { customModalError, personnelList, routeSelect } from '../../core/dom.js';
 import { state } from '../../core/state.js';
 import { departmentOptions, findDepartment } from '../../core/geo-colombia.js';
-import { ensureRoute, persistBusinessData, personnel, pruneOrphanRoutes, routeSettlements } from '../../core/store.js';
+import { clients, ensureRoute, persistBusinessData, personnel, pruneOrphanRoutes, routeSettlements } from '../../core/store.js';
 import { renderAdminRoute, syncRouteSelect } from './admin-shell.js';
 import { fetchWorkerLocation } from '../worker/location.js';
 import { hashCredential } from '../../shared/crypto.js';
@@ -329,9 +329,12 @@ export function mount() {
         const department = findDepartment(values.department);
         if (!department) { customModalError.textContent = 'Selecciona el departamento donde trabaja.'; return false; }
         // ¿El cobro se abre con este trabajador? Entonces su monto de apertura es el capital
-        // inicial y entra a la caja. En un cobro que ya existe no toca la caja.
+        // inicial y entra a la caja. En un cobro que ya existe no toca la caja: tampoco en uno
+        // migrado del sistema anterior que ya tiene clientes aunque aún no tenga cierres (su
+        // capital ya está en la calle y la base sale del efectivo del último cierre).
         const existingRoute = routeSettlements[routeKey(values.route)];
-        const opensRoute = !existingRoute || (!existingRoute.cashBox?.openingDate && !Object.keys(existingRoute.ledger || {}).length && !(existingRoute.cashEntries || []).length);
+        const routeHasClients = Object.values(clients).some(client => client?.route === routeKey(values.route));
+        const opensRoute = !routeHasClients && (!existingRoute || (!existingRoute.cashBox?.openingDate && !Object.keys(existingRoute.ledger || {}).length && !(existingRoute.cashEntries || []).length));
         const routeId = ensureRoute(values.route);
         if (!routeId) { customModalError.textContent = 'Escribe el nombre de la ruta asignada.'; return false; }
         const worker = { id: `worker-${Date.now()}`, name: values.name.trim(), username, passwordHash, route: routeSettlements[routeId]?.name || values.route.trim(), department: department.name, city: values.city.trim(), motorcycle: values.motorcycle.trim(), plate: values.plate.trim().toUpperCase(), openingAmount: Number(values.openingAmount), soatExpiry: values.soatExpiry, technicalExpiry: values.technicalExpiry };
