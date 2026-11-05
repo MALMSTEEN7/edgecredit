@@ -40,7 +40,7 @@ import * as evidenceModule from './js/features/admin/evidence.js';
 import * as operationsListModule from './js/features/operations/operations-list.js';
 import { clientButtons, routeSelect } from './js/core/dom.js';
 import { state } from './js/core/state.js';
-import { clients, ensureRoute, hydrateBusinessData, pruneOrphanRoutes, normalizeClientNotes, normalizeGeoData, normalizeWorkerAccounts, persistBusinessData, personnel, routeSettlements, setLocalPersistence } from './js/core/store.js';
+import { clients, ensureRoute, pendingRequests, hydrateBusinessData, pruneOrphanRoutes, normalizeClientNotes, normalizeGeoData, normalizeWorkerAccounts, persistBusinessData, personnel, routeSettlements, setLocalPersistence } from './js/core/store.js';
 import { backendEnabled } from './js/core/backend.js';
 import * as syncModule from './js/core/sync.js';
 import { setRenderHook, syncRole } from './js/core/sync.js';
@@ -51,7 +51,8 @@ import { renderRouteBuilder } from './js/features/daily-route/daily-route.js';
 import { filterClientCards } from './js/features/clients/directory.js';
 import { normalizeClientSchedules, pruneExpiredPaymentHistories } from './js/domain/loan-schedule.js';
 import { normalizeCancelledCards } from './js/domain/accounting.js';
-import { ensureLedger, pruneOldLedger } from './js/domain/ledger.js';
+import { ensureLedger, pruneOldLedger, syncRouteCollections } from './js/domain/ledger.js';
+import { applyPendingBaseTransfers } from './js/domain/base-transfer.js';
 import { renderAdminRoute, syncRouteSelect } from './js/features/admin/admin-shell.js';
 import { renderPendingRequests } from './js/features/admin/pending.js';
 import { appendClientCards, renderClientRows } from './js/features/clients/directory.js';
@@ -130,6 +131,7 @@ function boot() {
   // Cierres de caja: se guardan los últimos 4 meses (sin servidor, en este navegador).
   if (!backendEnabled() && pruneLedgers()) persistBusinessData();
   if (!backendEnabled() && applyCarriedBases()) persistBusinessData();
+  if (!backendEnabled() && syncRouteCollections(clients, routeSettlements)) persistBusinessData();
   window.setInterval(() => {
     if ((!backendEnabled() || syncRole() === 'admin') && pruneLedgers()) persistBusinessData();
     if ((!backendEnabled() || syncRole()) && applyCarriedBases()) { persistBusinessData(); updateCashTotal(); }
@@ -168,6 +170,10 @@ function refreshFromServer() {
   if ((state.userRole === 'admin' || syncRole() === 'admin') && pruneLedgers()) persistBusinessData();
   // Día nuevo: el efectivo del último cierre pasa a ser la base de hoy (admin o trabajador, el primero que entre).
   if (applyCarriedBases()) persistBusinessData();
+  // Cobro de cada ruta = abonos registrados desde su último cierre (no un acumulador que se pueda pisar).
+  if (syncRouteCollections(clients, routeSettlements)) persistBusinessData();
+  // Admin: los traspasos de base que mandaron los trabajadores se suman al cobro de destino.
+  if ((state.userRole === 'admin' || syncRole() === 'admin') && applyPendingBaseTransfers(pendingRequests, routeSettlements)) persistBusinessData();
   syncRouteSelect();
   state.activeSettlement = routeSettlements[routeSelect.value] || null;
   normalizeClientNotes();

@@ -858,3 +858,18 @@
   flex-shrink: 0;
   max-width: 55%;
 }
+
+/* Cobro: se calcula solo con los abonos del día (no se escribe). */
+.settlement-auto-note {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.collections-card .editable-money {
+  background: color-mix(in srgb, var(--surface) 70%, transparent) !important;
+  border-style: dashed !important;
+}
+
+.collections-card .finance-amount[readonly] {
+  cursor: default;
+}

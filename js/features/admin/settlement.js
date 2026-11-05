@@ -5,8 +5,9 @@
 import { adminFeedback, routeSelect, settlementInputs } from '../../core/dom.js';
 import { state } from '../../core/state.js';
 import { clients, pendingRequests, persistBusinessData, routeSettlements } from '../../core/store.js';
-import { carriedBase, mondayBaseFor, otherExpensesNote, paymentStamp, pendingRoutePayments, recordClosure, setOtherExpensesNote } from '../../domain/ledger.js';
+import { carriedBase, mondayBaseFor, otherExpensesNote, paymentStamp, pendingRoutePayments, recordClosure, setOtherExpensesNote, syncRouteCollections } from '../../domain/ledger.js';
 import { insuranceCollectedOn } from '../../domain/insurance.js';
+import { baseTransfersSince } from '../../domain/base-transfer.js';
 import { cardLabel } from '../../domain/person-cards.js';
 import { localDateISO } from '../../shared/dates.js';
 import { formatMoney, routeKey } from '../../shared/format.js';
@@ -99,7 +100,9 @@ export function applyCarriedBases(today = localDateISO()) {
     if (started) return;
     const carried = carriedBase(route, today, date => transfersOn(routeId, date));
     if (!carried) return;
-    route.base = carried.amount;
+    // Traspasos de base hechos después de ese cierre (ya movieron la base): se conservan.
+    const closedTs = Number(route.ledger?.[carried.date]?.closedTs) || 0;
+    route.base = carried.amount + (closedTs ? baseTransfersSince(route, closedTs) : 0);
     route.baseBank = 0;
     route.baseCarriedOn = today;
     route.baseCarriedFrom = carried.date;
@@ -278,17 +281,23 @@ export function recalculateSettlement() {
 export function mount() {
   document.querySelector('#monday-base-save').addEventListener('click', saveMondayBase);
   document.querySelector('#settlement-other-note').addEventListener('click', openSettlementOtherNote);
+  // El cuadre se recalcula con cada número; se guarda (y se sube) cuando se deja de escribir.
+  let saveTimer = null;
   settlementInputs.forEach(input => input.addEventListener('input', () => {
     const field = input.dataset.settlementField;
+    if (field === 'collections' || !state.activeSettlement) return; // el cobro se calcula de los abonos
     const amount = Number(input.value);
-    if (!state.activeSettlement) return;
     state.activeSettlement[field] = Number.isFinite(amount) && amount >= 0 ? amount : 0;
     if (field === 'base') renderBaseBreakdown(routeSelect.value);
     recalculateSettlement();
-    persistBusinessData();
+    window.clearTimeout(saveTimer);
+    saveTimer = window.setTimeout(persistBusinessData, 700);
   }));
+  settlementInputs.forEach(input => input.addEventListener('change', () => { window.clearTimeout(saveTimer); persistBusinessData(); }));
   document.querySelector('#verify-close-route').addEventListener('click', () => {
     const submitRouteClosure = () => {
+      // Cobro del cierre: los abonos registrados desde el cierre anterior.
+      if (state.activeSettlement) syncRouteCollections(clients, { [routeSelect.value]: state.activeSettlement });
       const payload = {
         route: state.activeSettlement.name,
         collections: state.activeSettlement.collections,
@@ -304,6 +313,7 @@ export function mount() {
       window.dispatchEvent(new CustomEvent('edgecredit:route-close', { detail: payload }));
       const route = routeSettlements[routeSelect.value] || state.activeSettlement;
       const routeId = routeSelect.value;
+
       // Transferencias que entran a este cierre: también las de días anteriores sin cerrar.
       const transfers = pendingRoutePayments(clients, routeId, route)
         .filter(({ payment }) => payment.method === 'transfer')

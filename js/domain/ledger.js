@@ -388,6 +388,26 @@ export function pendingRoutePayments(clientsById, routeId, route) {
     .sort((a, b) => String(b.payment.at || `${b.payment.date}T00`).localeCompare(String(a.payment.at || `${a.payment.date}T00`)));
 }
 
+/**
+ * Cobro del día de la ruta: la suma de los abonos pendientes de cierre (los mismos de «Abonos
+ * del día»). Se calcula siempre de los abonos de cada cliente, así un guardado de otro
+ * dispositivo con una copia vieja de la ruta no puede dejarlo en cero.
+ */
+export function routeCollections(clientsById, routeId, route) {
+  return pendingRoutePayments(clientsById, routeId, route).reduce((sum, { payment }) => sum + (Number(payment.amount) || 0), 0);
+}
+
+/** Pone en cada ruta su cobro calculado. Devuelve true si alguno cambió. */
+export function syncRouteCollections(clientsById, routes) {
+  let changed = false;
+  Object.entries(routes || {}).forEach(([routeId, route]) => {
+    if (!route) return;
+    const amount = routeCollections(clientsById, routeId, route);
+    if (Number(route.collections || 0) !== amount) { route.collections = amount; changed = true; }
+  });
+  return changed;
+}
+
 /** Fecha y hora en que se registró un abono: «dom 26 oct · 3:05 p. m.» (sin hora si no se guardó). */
 export function paymentStamp(payment) {
   const day = new Date(`${payment.date}T12:00:00`).toLocaleDateString('es-CO', { weekday: 'short', day: 'numeric', month: 'short' }).replace(/[.,]/g, '').replace(' de ', ' ');
