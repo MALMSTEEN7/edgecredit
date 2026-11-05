@@ -6625,7 +6625,8 @@ button.evidence-link:active {
   white-space: nowrap;
 }
 
-.retanqueo-history {
+.retanqueo-history,
+.loan-history {
   margin-top: 10px;
 }
 
