@@ -22,7 +22,7 @@ import { bindImageViewer } from '../../ui/image-viewer.js';
 import { LOCATION_FAILURE_LABELS, hasCoordinates, isApproximateLocation, locateDevice } from '../../shared/geo.js';
 import { clientInsurance, generalInsuranceAmount, resolveInsurance } from '../../domain/insurance.js';
 import { canRenew, onClientRenewed } from './new-client.js';
-import { MAX_ACTIVE_CARDS_PER_PERSON, activeCardIds, canAddCard, loanCount, loanNumber, loanTimeline, personLoanHistory, personLoanTotal } from '../../domain/person-cards.js';
+import { MAX_ACTIVE_CARDS_PER_PERSON, activeCardIds, canAddCard, loanCount, cardLoanHistory, loanNumber, loanTimeline, personLoanTotal } from '../../domain/person-cards.js';
 import { PAYDAY_OPTIONS, cardColor, paintCardColorBand, shiftDays, startDateForPayday, weekdayOf } from '../../domain/card-color.js';
 import { FINANCE_INTEREST_PERCENT, GENERAL_RETANQUEO, RETANQUEO_INTEREST_PERCENT, financeCard, pendingRestructure, percentOrAmount, recordRetanqueoInRoute, retanqueoCard } from '../../domain/restructure.js';
 
@@ -211,7 +211,7 @@ function renderLoanHistory(client) {
   const rows = loanTimeline(clients, state.activeClient);
   const list = document.querySelector('#loan-history-list');
   list.replaceChildren();
-  const history = personLoanHistory(clients, client.id);
+  const history = cardLoanHistory(clients, state.activeClient);
   if (!rows.length) {
     const empty = document.createElement('li');
     empty.className = 'history-empty';
@@ -245,7 +245,7 @@ function renderLoanHistory(client) {
     row.append(number, dates, amount);
     list.append(row);
   });
-  const total = personLoanTotal(clients, client.id);
+  const total = personLoanTotal(clients, state.activeClient);
   document.querySelector('#loan-history-count').textContent = `${total} préstamo${total === 1 ? '' : 's'}${history?.source ? ` · ${history.source}` : ''}`;
 }
 
@@ -480,7 +480,7 @@ export function openClient(clientId) {
   document.querySelector('#detail-frequency').textContent = paymentFrequencyLabels[client.frequency] || 'Semanal';
   // Número de este préstamo en la historia de la persona (igual que «Préstamo #» en la ruta diaria).
   const number = loanNumber(clients, state.activeClient);
-  const total = personLoanTotal(clients, client.id);
+  const total = personLoanTotal(clients, state.activeClient);
   const retanqueos = loanCount(clients, client.id).retanqueos;
   document.querySelector('#detail-loan-count').textContent = `Préstamo #${number}${total > number ? ` de ${total}` : ''}${retanqueos ? ` · ${retanqueos} retanqueo${retanqueos === 1 ? '' : 's'}` : ''}`;
   document.querySelector('#detail-breakdown').textContent = client.breakdown;

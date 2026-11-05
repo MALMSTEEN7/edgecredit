@@ -2827,19 +2827,41 @@ function canAddCard(clients, idNumber) {
 function personLoanHistory(clients, idNumber) {
   return personCardIds(clients, idNumber)
     .map(id => clients[id]?.loanHistory)
-    .filter(history => Array.isArray(history?.loans) && history.loans.length)
+    .filter(validHistory)
     .sort((a, b) => Number(b.total || b.loans.length) - Number(a.total || a.loans.length))[0] || null;
 }
 
+const validHistory = history => Array.isArray(history?.loans) && history.loans.length > 0;
 const startOf = client => String(client?.creditStartDate || '');
+
+/** Historial que aplica a esta cartulina: el suyo propio o, si no trae, el de la persona. */
+function cardLoanHistory(clients, clientId) {
+  const client = clients[clientId];
+  if (!client) return null;
+  return validHistory(client.loanHistory) ? client.loanHistory : personLoanHistory(clients, client.id);
+}
+
+/**
+ * Cartulinas que comparten la historia de esta: las de la misma cédula cuyo historial es el mismo
+ * (o que no traen historial, como las creadas en EdgeCredit). Así dos personas distintas que el
+ * sistema anterior registró con códigos parecidos no se mezclan.
+ */
+function relatedCardIds(clients, clientId, history) {
+  const ids = personCardIds(clients, clients[clientId].id);
+  if (!history) return ids;
+  return ids.filter(id => {
+    const own = clients[id].loanHistory;
+    return id === clientId || !validHistory(own) || (own.source === history.source && own.name === history.name);
+  });
+}
 
 /** Número del préstamo de esta cartulina dentro de la historia de la persona (#1, #2…). */
 function loanNumber(clients, clientId) {
   const client = clients[clientId];
   if (!client) return 0;
   if (Number(client.loanNumber) > 0) return Number(client.loanNumber);
-  const ids = personCardIds(clients, client.id);
-  const history = personLoanHistory(clients, client.id);
+  const history = cardLoanHistory(clients, clientId);
+  const ids = relatedCardIds(clients, clientId, history);
   if (!history) return Math.max(1, ids.indexOf(clientId) + 1);
   // Las que no traen número (creadas en EdgeCredit) siguen después del último del sistema anterior.
   const base = Math.max(Number(history.total) || 0, ...history.loans.map(loan => Number(loan.n) || 0));
@@ -2849,9 +2871,11 @@ function loanNumber(clients, clientId) {
 }
 
 /** Cuántos préstamos lleva la persona en total (sistema anterior + EdgeCredit). */
-function personLoanTotal(clients, idNumber) {
-  const ids = personCardIds(clients, idNumber);
-  const history = personLoanHistory(clients, idNumber);
+function personLoanTotal(clients, clientId) {
+  const client = clients[clientId];
+  if (!client) return 0;
+  const history = cardLoanHistory(clients, clientId);
+  const ids = relatedCardIds(clients, clientId, history);
   const historyTotal = history ? Math.max(Number(history.total) || 0, history.loans.length) : 0;
   return Math.max(historyTotal, ids.length, ...ids.map(id => loanNumber(clients, id)));
 }
@@ -2863,10 +2887,10 @@ function personLoanTotal(clients, idNumber) {
 function loanTimeline(clients, clientId) {
   const client = clients[clientId];
   if (!client) return [];
-  const history = personLoanHistory(clients, client.id);
+  const history = cardLoanHistory(clients, clientId);
   const rows = new Map();
   (history?.loans || []).forEach(loan => rows.set(Number(loan.n), { ...loan, n: Number(loan.n), source: 'legacy' }));
-  personCardIds(clients, client.id).forEach(id => {
+  relatedCardIds(clients, clientId, history).forEach(id => {
     const card = clients[id];
     const n = loanNumber(clients, id);
     const settled = Number(card.balance) <= 0;
@@ -7439,7 +7463,7 @@ function renderLoanHistory(client) {
   const rows = loanTimeline(clients, state.activeClient);
   const list = document.querySelector('#loan-history-list');
   list.replaceChildren();
-  const history = personLoanHistory(clients, client.id);
+  const history = cardLoanHistory(clients, state.activeClient);
   if (!rows.length) {
     const empty = document.createElement('li');
     empty.className = 'history-empty';
@@ -7473,7 +7497,7 @@ function renderLoanHistory(client) {
     row.append(number, dates, amount);
     list.append(row);
   });
-  const total = personLoanTotal(clients, client.id);
+  const total = personLoanTotal(clients, state.activeClient);
   document.querySelector('#loan-history-count').textContent = `${total} préstamo${total === 1 ? '' : 's'}${history?.source ? ` · ${history.source}` : ''}`;
 }
 
@@ -7708,7 +7732,7 @@ function openClient(clientId) {
   document.querySelector('#detail-frequency').textContent = paymentFrequencyLabels[client.frequency] || 'Semanal';
   // Número de este préstamo en la historia de la persona (igual que «Préstamo #» en la ruta diaria).
   const number = loanNumber(clients, state.activeClient);
-  const total = personLoanTotal(clients, client.id);
+  const total = personLoanTotal(clients, state.activeClient);
   const retanqueos = loanCount(clients, client.id).retanqueos;
   document.querySelector('#detail-loan-count').textContent = `Préstamo #${number}${total > number ? ` de ${total}` : ''}${retanqueos ? ` · ${retanqueos} retanqueo${retanqueos === 1 ? '' : 's'}` : ''}`;
   document.querySelector('#detail-breakdown').textContent = client.breakdown;
@@ -8950,7 +8974,7 @@ function addNewClient(values, photoData = '', insurance, gps = null) {
     if (created.altAddress === (source.altAddress || '')) created.altLocation = source.altLocation || null;
     else if (source.altAddress) created.addressHistory.push({ type: 'alternativa', address: source.altAddress, replacedBy: created.altAddress || '(eliminada)', location: source.altLocation || null, changedAt, changedBy: by });
     // El historial de préstamos del sistema anterior sigue con la persona (el número sigue la cuenta).
-    const history = personLoanHistory(clients, source.id);
+    const history = cardLoanHistory(clients, renewSourceId);
     if (history) created.loanHistory = history;
     if (mode === 'renew') {
       created.renewedFrom = renewSourceId;
