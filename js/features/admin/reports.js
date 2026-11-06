@@ -37,6 +37,13 @@ const rq = selector => document.querySelector(selector);
 let selectedWeekIndex = null; // null = semana que contiene hoy (o la primera del mes)
 let targetDate = null;        // fecha resaltada con «Ir a fecha»
 
+/**
+ * Abonos del día recibidos por transferencia (guardados en el cierre). El «Efectivo» del reporte
+ * es el que quedó en mano: lo entregado menos las transferencias, que están en el banco.
+ */
+const dayTransfers = (route, dateISO) => Number(route.ledger?.[dateISO]?.transfers || 0);
+const cashInHandOf = (route, dateISO, record) => Number(record.cashDelivered || 0) - dayTransfers(route, dateISO);
+
 const shortDate = date => `${String(date.getDate()).padStart(2, '0')}/${String(date.getMonth() + 1).padStart(2, '0')}`;
 const reportRouteId = () => routeSelect.value;
 
@@ -282,7 +289,7 @@ function sumDays(route, days, liveTotal) {
   totals.difference = 0;
   days.forEach(({ iso }) => {
     const record = dayRecord(route, iso, liveTotal);
-    COLUMNS.forEach(({ key }) => { totals[key] += record[key]; });
+    COLUMNS.forEach(({ key }) => { totals[key] += key === 'cashDelivered' ? cashInHandOf(route, iso, record) : record[key]; });
     totals.difference += ledgerDifference(record) || 0;
   });
   // La base no se suma: se muestra la del primer día del periodo.
@@ -337,6 +344,19 @@ function renderWeeklyAudit(route, monthValue) {
     }
     row.append(dateCell);
     COLUMNS.forEach(({ key, editable }) => {
+      if (key === 'cashDelivered' && !future) {
+        const cell = moneyCell(cashInHandOf(route, iso, record));
+        const transfers = dayTransfers(route, iso);
+        if (transfers) {
+          const note = document.createElement('small');
+          note.className = 'cash-adjustment-note';
+          note.textContent = `+ ${formatMoney(transfers)} en transferencias`;
+          note.title = 'Abonos recibidos por transferencia: están en el banco, no en el efectivo ni en la base del día siguiente.';
+          cell.append(document.createElement('br'), note);
+        }
+        row.append(cell);
+        return;
+      }
       if (!editable) { row.append(future ? moneyCell(null) : moneyCell(record[key])); return; }
       const cell = editableCell(iso, key, record[key], future);
       if (key === 'otherExpenses') { cell.classList.add('has-note-button'); cell.append(otherExpensesNoteButton(route, iso, future)); }
