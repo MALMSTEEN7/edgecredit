@@ -105,9 +105,14 @@
         }
         if (action === 'upsert') {
           const list = Array.isArray(payload) ? payload : [payload];
-          if (list.some(r => !writable(db, table, r))) return { data: null, error: { message: 'new row violates row-level security policy for table "' + table + '"' } };
+          const rlsError = { data: null, error: { code: '42501', message: 'new row violates row-level security policy for table "' + table + '"' } };
+          if (list.some(r => !writable(db, table, r))) return rlsError;
+          // Igual que el servidor: solo el admin modifica una solicitud que ya existe.
+          const exists = r => rows.some(x => x[key] === r[key]);
+          if (table === 'pending_requests' && !isAdmin(db) && !opts.ignoreDuplicates && list.some(exists)) return rlsError;
           list.forEach(r => {
             const index = rows.findIndex(x => x[key] === r[key]);
+            if (index >= 0 && opts.ignoreDuplicates) return; // ON CONFLICT DO NOTHING
             if (index >= 0 && !writable(db, table, rows[index])) return;
             const row = { ...(index >= 0 ? rows[index] : {}), ...structuredClone(r), updated_at: serverNow() };
             if (index >= 0) rows[index] = row; else rows.push(row);

@@ -236,18 +236,30 @@ async function sendPending(pending) {
   try {
     const db = await backend();
     const failed = [];
+    // El trabajador solo CREA solicitudes; aprobarlas o rechazarlas (modificarlas) es del admin y
+    // el servidor se lo impide. Si su equipo guardó una copia vieja de una solicitud que ya existe,
+    // reenviarla fallaba siempre y arrastraba a las nuevas del mismo envío: se envían sin
+    // reemplazar las que ya están (ON CONFLICT DO NOTHING) y luego llega la versión del servidor.
+    const insertOnly = table => table === 'pending_requests' && syncSession?.role !== 'admin';
+    const send = (table, items) => (table === 'profiles'
+      ? Promise.all(items.map(item => db.from('profiles').update({ route_id: item.row.route_id, access_enabled: item.row.access_enabled, data: item.row.data }).eq('user_id', item.row.user_id)))
+        .then(results => ({ error: results.find(result => result.error)?.error || null }))
+      // `updated_at` lo pone el servidor (trigger): no se envía la hora del dispositivo.
+      : db.from(table).upsert(items.map(item => item.row), { onConflict: TABLE_KEYS[table], ignoreDuplicates: insertOnly(table) }));
     for (const table of Object.keys(TABLE_KEYS)) {
       const upserts = pending.filter(item => item.table === table && item.op === 'upsert');
       for (let i = 0; i < upserts.length; i += 50) {
         const chunk = upserts.slice(i, i + 50);
-        // `updated_at` lo pone el servidor (trigger): no se envía la hora del dispositivo.
-        const query = table === 'profiles'
-          ? Promise.all(chunk.map(item => db.from('profiles').update({ route_id: item.row.route_id, access_enabled: item.row.access_enabled, data: item.row.data }).eq('user_id', item.row.user_id)))
-            .then(results => ({ error: results.find(result => result.error)?.error || null }))
-          : db.from(table).upsert(chunk.map(item => item.row), { onConflict: TABLE_KEYS[table] });
-        const { error } = await query;
-        if (error) { failed.push(...chunk); reportError(error); }
-        else chunk.forEach(item => lastSynced.set(item.id, stable(item.row)));
+        const { error } = await send(table, chunk);
+        if (!error) { chunk.forEach(item => lastSynced.set(item.id, stable(item.row))); continue; }
+        reportError(error);
+        if (chunk.length === 1) { failed.push(...chunk); continue; }
+        // Un registro que el servidor rechaza no debe frenar a los demás: se reintenta uno por uno.
+        for (const item of chunk) {
+          const single = await send(table, [item]);
+          if (single.error) failed.push(item);
+          else lastSynced.set(item.id, stable(item.row));
+        }
       }
       const deletes = pending.filter(item => item.table === table && item.op === 'delete');
       if (deletes.length) {
