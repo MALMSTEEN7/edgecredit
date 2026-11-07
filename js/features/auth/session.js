@@ -25,7 +25,7 @@ import { defaultAdminPanel, renderAdminRoute, showAdminPanel, syncRouteSelect } 
 import { renderPendingRequests } from '../admin/pending.js';
 import { showVehicleExpiryAlert } from '../admin/personnel.js';
 import { renderRouteOperations } from '../admin/settlement.js';
-import { filterClientCards, renderClientRows } from '../clients/directory.js';
+import { filterClientCards, renderClientsBulk } from '../clients/directory.js';
 import { closeInterestModal } from '../clients/interest.js';
 import { closeNewClientModal } from '../clients/new-client.js';
 import { renderRouteBuilder } from '../daily-route/daily-route.js';
@@ -115,7 +115,7 @@ function logout() {
   if (!interestModal.hidden) closeInterestModal();
   document.querySelector('#directory-search').value = '';
   document.querySelector('#home-search').value = '';
-  Object.keys(clients).forEach(clientId => { if (clients[clientId]) renderClientRows(clientId); });
+  renderClientsBulk(Object.keys(clients));
   persistBusinessData();
   renderPendingRequests();
   state.activeWorker = personnel[0] || { id: 'worker-unassigned', name: 'Trabajador', route: '', openingAmount: 0 };

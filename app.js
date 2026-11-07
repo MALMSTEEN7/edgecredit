@@ -38,7 +38,7 @@ import * as legacyImportModule from './js/features/admin/legacy-import.js';
 import * as clientMapModule from './js/features/admin/client-map.js';
 import * as evidenceModule from './js/features/admin/evidence.js';
 import * as operationsListModule from './js/features/operations/operations-list.js';
-import { clientButtons, routeSelect } from './js/core/dom.js';
+import { routeSelect } from './js/core/dom.js';
 import { state } from './js/core/state.js';
 import { clients, ensureRoute, pendingRequests, hydrateBusinessData, pruneOrphanRoutes, normalizeClientNotes, normalizeGeoData, normalizeWorkerAccounts, persistBusinessData, personnel, routeSettlements, setLocalPersistence } from './js/core/store.js';
 import { backendEnabled } from './js/core/backend.js';
@@ -55,7 +55,8 @@ import { ensureLedger, pruneOldLedger, syncRouteCollections } from './js/domain/
 import { applyPendingBaseTransfers } from './js/domain/base-transfer.js';
 import { renderAdminRoute, syncRouteSelect } from './js/features/admin/admin-shell.js';
 import { renderPendingRequests } from './js/features/admin/pending.js';
-import { appendClientCards, renderClientRows } from './js/features/clients/directory.js';
+import { renderClientsBulk } from './js/features/clients/directory.js';
+import { personCardIds, withPersonIndex } from './js/domain/person-cards.js';
 import { updateCashTotal } from './js/features/worker/cash-box.js';
 import { localDateISO, shiftDateISO } from './js/shared/dates.js';
 import { routeKey } from './js/shared/format.js';
@@ -141,12 +142,8 @@ function boot() {
   state.activeSettlement = routeSettlements[routeSelect.value] || null;
   state.activeWorker = personnel[0] || { id: 'worker-unassigned', name: 'Trabajador', route: '', openingAmount: 0 };
   state.workerRoute = routeKey(state.activeWorker.route);
-  const initialClientIds = new Set(clientButtons.map(button => button.dataset.client));
   // Filas de todos los clientes; el filtro del directorio se aplica una sola vez al final.
-  Object.keys(clients).forEach(clientId => {
-    if (initialClientIds.has(clientId)) renderClientRows(clientId);
-    else appendClientCards(clientId, { refresh: false });
-  });
+  renderClientsBulk(Object.keys(clients));
   filterClientCards();
   renderPendingRequests();
   applyTheme(savedTheme);
@@ -160,8 +157,13 @@ function pruneLedgers() {
   return Object.values(routeSettlements).map(route => pruneOldLedger(route)).some(Boolean);
 }
 
-/** Repinta todo tras cargar o recibir datos del servidor. */
-function refreshFromServer() {
+/**
+ * Repinta tras cargar o recibir datos del servidor. `changes` (de core/sync): `full` para
+ * repintar todo; si no, solo los clientes que cambiaron (y las otras cartulinas de esas
+ * personas). Sin `changes` (carga inicial) se repinta todo.
+ */
+function refreshFromServer(changes) {
+  const full = !changes || changes.full;
   personnel.forEach(worker => { if (worker.route) ensureRoute(worker.route); });
   Object.values(routeSettlements).forEach(ensureLedger);
   // El admin quita las rutas sin trabajador ni clientes (la sincronización las borra del servidor).
@@ -178,12 +180,16 @@ function refreshFromServer() {
   state.activeSettlement = routeSettlements[routeSelect.value] || null;
   normalizeClientNotes();
   normalizeClientSchedules();
-  const rendered = new Set([...document.querySelectorAll('#directorio .client-row')].map(row => row.dataset.client));
-  Object.keys(clients).forEach(clientId => {
-    if (rendered.has(clientId)) renderClientRows(clientId);
-    else appendClientCards(clientId, { refresh: false });
-  });
-  filterClientCards();
+  if (full) renderClientsBulk(Object.keys(clients));
+  else if (changes.clients.size) {
+    const ids = new Set();
+    withPersonIndex(clients, () => changes.clients.forEach(id => {
+      ids.add(id);
+      if (clients[id]) personCardIds(clients, clients[id].id).forEach(other => ids.add(other));
+    }));
+    renderClientsBulk([...ids]);
+  }
+  if (full || changes.clients.size) filterClientCards();
   renderPendingRequests();
   if (state.userRole === 'admin') {
     if (routeSettlements[routeSelect.value]) renderAdminRoute(routeSelect.value);

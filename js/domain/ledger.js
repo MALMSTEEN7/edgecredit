@@ -408,9 +408,12 @@ export function syncRouteCollections(clientsById, routes) {
   return changed;
 }
 
+const STAMP_DAY = new Intl.DateTimeFormat('es-CO', { weekday: 'short', day: 'numeric', month: 'short' });
+const STAMP_TIME = new Intl.DateTimeFormat('es-CO', { hour: 'numeric', minute: '2-digit' });
+
 /** Fecha y hora en que se registró un abono: «dom 26 oct · 3:05 p. m.» (sin hora si no se guardó). */
 export function paymentStamp(payment) {
-  const day = new Date(`${payment.date}T12:00:00`).toLocaleDateString('es-CO', { weekday: 'short', day: 'numeric', month: 'short' }).replace(/[.,]/g, '').replace(' de ', ' ');
-  const time = payment.at ? new Date(payment.at).toLocaleTimeString('es-CO', { hour: 'numeric', minute: '2-digit' }) : '';
+  const day = STAMP_DAY.format(new Date(`${payment.date}T12:00:00`)).replace(/[.,]/g, '').replace(' de ', ' ');
+  const time = payment.at ? STAMP_TIME.format(new Date(payment.at)) : '';
   return [day, time].filter(Boolean).join(' · ');
 }

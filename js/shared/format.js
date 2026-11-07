@@ -2,7 +2,11 @@
  * shared/format · Formateo y normalización de texto, dinero y colores. Funciones puras.
  */
 
-export const formatMoney = value => '$ ' + new Intl.NumberFormat('es-CO', { maximumFractionDigits: 0 }).format(value);
+// Los formateadores se crean una sola vez: crear uno por llamada (miles por pantalla) era lento.
+const MONEY_FORMAT = new Intl.NumberFormat('es-CO', { maximumFractionDigits: 0 });
+const DATE_FORMAT = new Intl.DateTimeFormat('es-CO', { day: '2-digit', month: 'short', year: 'numeric', timeZone: 'UTC' });
+
+export const formatMoney = value => '$ ' + MONEY_FORMAT.format(value);
 
 export const routeKey = value => String(value || '').trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase('es').replace(/\s+/g, '-');
 
@@ -19,5 +23,5 @@ export function blendColor(from, to, amount) {
 }
 
 export function formatDate(value) {
-  return new Intl.DateTimeFormat('es-CO', { day: '2-digit', month: 'short', year: 'numeric', timeZone: 'UTC' }).format(new Date(`${value}T00:00:00Z`));
+  return DATE_FORMAT.format(new Date(`${value}T00:00:00Z`));
 }

@@ -884,13 +884,23 @@ function receiveRow(table, row, removed = false) {
   if (hasUnsentChanges(table, key)) { scheduleFlush(100); return false; }
   if (removed && !lastSynced.has(id) && !localRow(table, key)) return false;
   applyRow(table, row, removed);
+  // Qué cambió, para repintar solo eso (repintar los ~1.900 clientes por cada cambio de otro
+  // equipo congelaba la pantalla varios segundos).
+  if (table === 'clients') { if (removed) pendingChanges.full = true; else pendingChanges.clients.add(key); }
   return true;
 }
 
 let renderTimer = null;
-function queueRender() {
+let pendingChanges = { full: false, clients: new Set() };
+/** Repinta lo que cambió. `full`: repintar todo (descarga completa). */
+function queueRender({ full = false } = {}) {
+  if (full) pendingChanges.full = true;
   window.clearTimeout(renderTimer);
-  renderTimer = window.setTimeout(() => { try { renderHook(); } catch (error) { console.error(error); } }, 150);
+  renderTimer = window.setTimeout(() => {
+    const changes = pendingChanges;
+    pendingChanges = { full: false, clients: new Set() };
+    try { renderHook(changes); } catch (error) { console.error(error); }
+  }, 150);
 }
 
 async function serverNow(db) {
@@ -1010,7 +1020,7 @@ async function fullSync() {
   try {
     await flushing;
     await downloadAll();
-    queueRender();
+    queueRender({ full: true });
     if (readOutbox().length || pendingItems().length) scheduleFlush(50);
   } catch { /* se reintenta en el siguiente ciclo */ }
   finally { syncing = false; updateSyncBadge(); }
@@ -2208,10 +2218,13 @@ function syncRouteCollections(clientsById, routes) {
   return changed;
 }
 
+const STAMP_DAY = new Intl.DateTimeFormat('es-CO', { weekday: 'short', day: 'numeric', month: 'short' });
+const STAMP_TIME = new Intl.DateTimeFormat('es-CO', { hour: 'numeric', minute: '2-digit' });
+
 /** Fecha y hora en que se registró un abono: «dom 26 oct · 3:05 p. m.» (sin hora si no se guardó). */
 function paymentStamp(payment) {
-  const day = new Date(`${payment.date}T12:00:00`).toLocaleDateString('es-CO', { weekday: 'short', day: 'numeric', month: 'short' }).replace(/[.,]/g, '').replace(' de ', ' ');
-  const time = payment.at ? new Date(payment.at).toLocaleTimeString('es-CO', { hour: 'numeric', minute: '2-digit' }) : '';
+  const day = STAMP_DAY.format(new Date(`${payment.date}T12:00:00`)).replace(/[.,]/g, '').replace(' de ', ' ');
+  const time = payment.at ? STAMP_TIME.format(new Date(payment.at)) : '';
   return [day, time].filter(Boolean).join(' · ');
 }
 
@@ -2818,13 +2831,38 @@ function withinOneEdit(a, b) {
   return edits + (a.length - i) + (b.length - j) <= 1;
 }
 
+const byStart = clients => (a, b) => String(clients[a].creditStartDate || '').localeCompare(String(clients[b].creditStartDate || '')) || a.localeCompare(b);
+
+/**
+ * Índice cédula → cartulinas, armado una sola vez durante un redibujo masivo (withPersonIndex).
+ * Sin él, pintar N clientes recorría N veces a todos los clientes (con 1.866 eran ~3,5 millones
+ * de comparaciones por redibujo). Fuera de withPersonIndex no se usa: siempre se lee lo actual.
+ */
+let personIndex = null;
+
+/** Ejecuta `fn` con el índice de personas armado; mientras corre, `clients` no debe cambiar. */
+function withPersonIndex(clients, fn) {
+  if (personIndex) return fn(); // ya hay uno armado (llamada anidada)
+  const map = new Map();
+  Object.keys(clients).forEach(id => {
+    const key = clients[id] ? personKey(clients[id].id) : '';
+    if (!key) return;
+    if (!map.has(key)) map.set(key, []);
+    map.get(key).push(id);
+  });
+  map.forEach(ids => ids.sort(byStart(clients)));
+  personIndex = { clients, map };
+  try { return fn(); } finally { personIndex = null; }
+}
+
 /** Todas las cartulinas de la persona (activas, canceladas y renovadas), de la más antigua a la más reciente. */
 function personCardIds(clients, idNumber) {
   const key = personKey(idNumber);
   if (!key) return [];
+  if (personIndex?.clients === clients) return [...(personIndex.map.get(key) || [])];
   return Object.keys(clients)
     .filter(id => clients[id] && personKey(clients[id].id) === key)
-    .sort((a, b) => String(clients[a].creditStartDate || '').localeCompare(String(clients[b].creditStartDate || '')) || a.localeCompare(b));
+    .sort(byStart(clients));
 }
 
 /**
@@ -3475,6 +3513,7 @@ function __mount_accountSettingsModule() {
 
 
 
+
 /** «Hoy · 5 de octubre»: la fecha de la liquidación sale del reloj, no del marcado. */
 function renderRouteDate() {
   const label = new Intl.DateTimeFormat('es-CO', { weekday: 'long', day: 'numeric', month: 'long' }).format(new Date());
@@ -3538,6 +3577,12 @@ function defaultAdminPanel() {
 }
 
 function renderAdminRoute(routeId) {
+  // El panel consulta las cartulinas de cada persona muchas veces: con el índice armado una vez
+  // se evita recorrer a todos los clientes en cada consulta.
+  return withPersonIndex(clients, () => paintAdminRoute(routeId));
+}
+
+function paintAdminRoute(routeId) {
   renderRouteDate();
   const route = routeSettlements[routeId];
   if (!updateRouteAvailability() || !route) return;
@@ -6729,7 +6774,7 @@ function logout() {
   if (!interestModal.hidden) closeInterestModal();
   document.querySelector('#directory-search').value = '';
   document.querySelector('#home-search').value = '';
-  Object.keys(clients).forEach(clientId => { if (clients[clientId]) renderClientRows(clientId); });
+  renderClientsBulk(Object.keys(clients));
   persistBusinessData();
   renderPendingRequests();
   state.activeWorker = personnel[0] || { id: 'worker-unassigned', name: 'Trabajador', route: '', openingAmount: 0 };
@@ -8373,6 +8418,7 @@ function __mount_clientDetailModule() {
  */
 function appendClientCards(clientId, { refresh = true } = {}) {
   const client = clients[clientId];
+  const created = [];
   document.querySelectorAll('#inicio .client-list, #directorio .client-list').forEach(list => {
     const isHome = Boolean(list.closest('#inicio'));
     // En el Inicio la fila es un contenedor (lleva botones de acción); en el directorio, un botón.
@@ -8402,8 +8448,9 @@ function appendClientCards(clientId, { refresh = true } = {}) {
     }
     card.addEventListener('click', event => { if (!event.target.closest('[data-home-action]')) openClient(clientId); });
     list.append(card);
+    created.push(card);
   });
-  renderClientRows(clientId);
+  renderClientRows(clientId, created);
   if (refresh) filterClientCards();
 }
 
@@ -8426,6 +8473,12 @@ function paintAvatarProgress(ring, client) {
 }
 
 function setClientAvatar(element, client) {
+  // Si no cambió (misma foto o mismas iniciales) no se vuelve a crear: rehacer la imagen de cada
+  // cliente en cada redibujo obligaba al navegador a decodificar todas las fotos otra vez.
+  const initials = client.initials || client.name.split(/\s+/).slice(0, 2).map(part => part[0]).join('').toUpperCase();
+  const signature = client.photoData ? `p:${client.photoData.length}:${client.photoData.slice(-24)}:${client.name}` : `i:${initials}`;
+  if (element.dataset.avatarSignature === signature && element.childNodes.length) return;
+  element.dataset.avatarSignature = signature;
   element.replaceChildren();
   if (client.photoData) {
     const image = document.createElement('img');
@@ -8435,16 +8488,21 @@ function setClientAvatar(element, client) {
     element.append(image);
   } else {
     element.classList.remove('has-photo');
-    element.textContent = client.initials || client.name.split(/\s+/).slice(0, 2).map(part => part[0]).join('').toUpperCase();
+    element.textContent = initials;
   }
 }
 
-function renderClientRows(clientId) {
+/**
+ * Repinta las filas de un cliente. `rows` son sus filas si ya se tienen (redibujo masivo); si no,
+ * se buscan. Todo se busca dentro de cada fila, no en toda la página.
+ */
+function renderClientRows(clientId, rows = document.querySelectorAll(`.client-row[data-client="${CSS.escape(clientId)}"]`)) {
   const client = clients[clientId];
-  document.querySelectorAll(`.client-row[data-client="${clientId}"] .client-main strong`).forEach(node => { node.textContent = client.name; });
-  document.querySelectorAll(`.client-row[data-client="${clientId}"] .client-avatar`).forEach(node => setClientAvatar(node, client));
-  document.querySelectorAll(`.client-row[data-client="${clientId}"] .avatar-progress`).forEach(ring => paintAvatarProgress(ring, client));
-  document.querySelectorAll(`.client-row[data-client="${clientId}"]`).forEach(row => {
+  if (!client) return;
+  rows.forEach(row => {
+    row.querySelectorAll('.client-main strong').forEach(node => { if (node.textContent !== client.name) node.textContent = client.name; });
+    row.querySelectorAll('.client-avatar').forEach(node => setClientAvatar(node, client));
+    row.querySelectorAll('.avatar-progress').forEach(ring => paintAvatarProgress(ring, client));
     row.dataset.route = client.route;
     // Franja de color en el borde superior (día de pago / quincenal / mensual).
     let band = row.querySelector(':scope > .card-color-band');
@@ -8474,6 +8532,26 @@ function renderClientRows(clientId) {
     const late = risk.overduePeriods > 0 || client.late;
     if (status) { status.textContent = late ? 'Mora' : 'Al día'; status.classList.toggle('status-late', late); status.classList.toggle('status-current', !late); }
   });
+}
+
+/**
+ * Repinta muchos clientes de una vez (al cargar o al recibir cambios del servidor): busca todas
+ * las filas una sola vez y arma el índice de personas una sola vez. Los clientes que aún no
+ * tienen fila en el directorio se agregan. No filtra: quien llama filtra una vez al final.
+ */
+function renderClientsBulk(ids) {
+  const rowsByClient = new Map();
+  document.querySelectorAll('.client-row[data-client]').forEach(row => {
+    const id = row.dataset.client;
+    if (!rowsByClient.has(id)) rowsByClient.set(id, []);
+    rowsByClient.get(id).push(row);
+  });
+  withPersonIndex(clients, () => ids.forEach(id => {
+    if (!clients[id]) return;
+    const rows = rowsByClient.get(id) || [];
+    if (rows.some(row => row.closest('#directorio'))) renderClientRows(id, rows);
+    else appendClientCards(id, { refresh: false });
+  }));
 }
 
 function removeClient(clientId) {
@@ -11111,7 +11189,11 @@ function shiftDateISO(date, amount) {
  * shared/format · Formateo y normalización de texto, dinero y colores. Funciones puras.
  */
 
-const formatMoney = value => '$ ' + new Intl.NumberFormat('es-CO', { maximumFractionDigits: 0 }).format(value);
+// Los formateadores se crean una sola vez: crear uno por llamada (miles por pantalla) era lento.
+const MONEY_FORMAT = new Intl.NumberFormat('es-CO', { maximumFractionDigits: 0 });
+const DATE_FORMAT = new Intl.DateTimeFormat('es-CO', { day: '2-digit', month: 'short', year: 'numeric', timeZone: 'UTC' });
+
+const formatMoney = value => '$ ' + MONEY_FORMAT.format(value);
 
 const routeKey = value => String(value || '').trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase('es').replace(/\s+/g, '-');
 
@@ -11128,7 +11210,7 @@ function blendColor(from, to, amount) {
 }
 
 function formatDate(value) {
-  return new Intl.DateTimeFormat('es-CO', { day: '2-digit', month: 'short', year: 'numeric', timeZone: 'UTC' }).format(new Date(`${value}T00:00:00Z`));
+  return DATE_FORMAT.format(new Date(`${value}T00:00:00Z`));
 }
 
 // ── js/shared/geo.js
@@ -13562,6 +13644,7 @@ const syncModule = { mount: __mount_syncModule };
 
 
 
+
 /**
  * Composición de módulos (equivalente a un docker-compose): cada entrada es un
  * contenedor autónomo que expone mount(). El orden importa solo para listeners
@@ -13641,12 +13724,8 @@ function boot() {
   state.activeSettlement = routeSettlements[routeSelect.value] || null;
   state.activeWorker = personnel[0] || { id: 'worker-unassigned', name: 'Trabajador', route: '', openingAmount: 0 };
   state.workerRoute = routeKey(state.activeWorker.route);
-  const initialClientIds = new Set(clientButtons.map(button => button.dataset.client));
   // Filas de todos los clientes; el filtro del directorio se aplica una sola vez al final.
-  Object.keys(clients).forEach(clientId => {
-    if (initialClientIds.has(clientId)) renderClientRows(clientId);
-    else appendClientCards(clientId, { refresh: false });
-  });
+  renderClientsBulk(Object.keys(clients));
   filterClientCards();
   renderPendingRequests();
   applyTheme(savedTheme);
@@ -13660,8 +13739,13 @@ function pruneLedgers() {
   return Object.values(routeSettlements).map(route => pruneOldLedger(route)).some(Boolean);
 }
 
-/** Repinta todo tras cargar o recibir datos del servidor. */
-function refreshFromServer() {
+/**
+ * Repinta tras cargar o recibir datos del servidor. `changes` (de core/sync): `full` para
+ * repintar todo; si no, solo los clientes que cambiaron (y las otras cartulinas de esas
+ * personas). Sin `changes` (carga inicial) se repinta todo.
+ */
+function refreshFromServer(changes) {
+  const full = !changes || changes.full;
   personnel.forEach(worker => { if (worker.route) ensureRoute(worker.route); });
   Object.values(routeSettlements).forEach(ensureLedger);
   // El admin quita las rutas sin trabajador ni clientes (la sincronización las borra del servidor).
@@ -13678,12 +13762,16 @@ function refreshFromServer() {
   state.activeSettlement = routeSettlements[routeSelect.value] || null;
   normalizeClientNotes();
   normalizeClientSchedules();
-  const rendered = new Set([...document.querySelectorAll('#directorio .client-row')].map(row => row.dataset.client));
-  Object.keys(clients).forEach(clientId => {
-    if (rendered.has(clientId)) renderClientRows(clientId);
-    else appendClientCards(clientId, { refresh: false });
-  });
-  filterClientCards();
+  if (full) renderClientsBulk(Object.keys(clients));
+  else if (changes.clients.size) {
+    const ids = new Set();
+    withPersonIndex(clients, () => changes.clients.forEach(id => {
+      ids.add(id);
+      if (clients[id]) personCardIds(clients, clients[id].id).forEach(other => ids.add(other));
+    }));
+    renderClientsBulk([...ids]);
+  }
+  if (full || changes.clients.size) filterClientCards();
   renderPendingRequests();
   if (state.userRole === 'admin') {
     if (routeSettlements[routeSelect.value]) renderAdminRoute(routeSelect.value);
