@@ -40,13 +40,38 @@ export function withinOneEdit(a, b) {
   return edits + (a.length - i) + (b.length - j) <= 1;
 }
 
+const byStart = clients => (a, b) => String(clients[a].creditStartDate || '').localeCompare(String(clients[b].creditStartDate || '')) || a.localeCompare(b);
+
+/**
+ * Índice cédula → cartulinas, armado una sola vez durante un redibujo masivo (withPersonIndex).
+ * Sin él, pintar N clientes recorría N veces a todos los clientes (con 1.866 eran ~3,5 millones
+ * de comparaciones por redibujo). Fuera de withPersonIndex no se usa: siempre se lee lo actual.
+ */
+let personIndex = null;
+
+/** Ejecuta `fn` con el índice de personas armado; mientras corre, `clients` no debe cambiar. */
+export function withPersonIndex(clients, fn) {
+  if (personIndex) return fn(); // ya hay uno armado (llamada anidada)
+  const map = new Map();
+  Object.keys(clients).forEach(id => {
+    const key = clients[id] ? personKey(clients[id].id) : '';
+    if (!key) return;
+    if (!map.has(key)) map.set(key, []);
+    map.get(key).push(id);
+  });
+  map.forEach(ids => ids.sort(byStart(clients)));
+  personIndex = { clients, map };
+  try { return fn(); } finally { personIndex = null; }
+}
+
 /** Todas las cartulinas de la persona (activas, canceladas y renovadas), de la más antigua a la más reciente. */
 export function personCardIds(clients, idNumber) {
   const key = personKey(idNumber);
   if (!key) return [];
+  if (personIndex?.clients === clients) return [...(personIndex.map.get(key) || [])];
   return Object.keys(clients)
     .filter(id => clients[id] && personKey(clients[id].id) === key)
-    .sort((a, b) => String(clients[a].creditStartDate || '').localeCompare(String(clients[b].creditStartDate || '')) || a.localeCompare(b));
+    .sort(byStart(clients));
 }
 
 /**

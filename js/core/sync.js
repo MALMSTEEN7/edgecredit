@@ -409,13 +409,23 @@ function receiveRow(table, row, removed = false) {
   if (hasUnsentChanges(table, key)) { scheduleFlush(100); return false; }
   if (removed && !lastSynced.has(id) && !localRow(table, key)) return false;
   applyRow(table, row, removed);
+  // Qué cambió, para repintar solo eso (repintar los ~1.900 clientes por cada cambio de otro
+  // equipo congelaba la pantalla varios segundos).
+  if (table === 'clients') { if (removed) pendingChanges.full = true; else pendingChanges.clients.add(key); }
   return true;
 }
 
 let renderTimer = null;
-function queueRender() {
+let pendingChanges = { full: false, clients: new Set() };
+/** Repinta lo que cambió. `full`: repintar todo (descarga completa). */
+function queueRender({ full = false } = {}) {
+  if (full) pendingChanges.full = true;
   window.clearTimeout(renderTimer);
-  renderTimer = window.setTimeout(() => { try { renderHook(); } catch (error) { console.error(error); } }, 150);
+  renderTimer = window.setTimeout(() => {
+    const changes = pendingChanges;
+    pendingChanges = { full: false, clients: new Set() };
+    try { renderHook(changes); } catch (error) { console.error(error); }
+  }, 150);
 }
 
 async function serverNow(db) {
@@ -535,7 +545,7 @@ async function fullSync() {
   try {
     await flushing;
     await downloadAll();
-    queueRender();
+    queueRender({ full: true });
     if (readOutbox().length || pendingItems().length) scheduleFlush(50);
   } catch { /* se reintenta en el siguiente ciclo */ }
   finally { syncing = false; updateSyncBadge(); }

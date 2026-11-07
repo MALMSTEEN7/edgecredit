@@ -7,6 +7,7 @@ import { adminView, operationsModal, routeSelect, gpsIndicator, workerView } fro
 import { state } from '../../core/state.js';
 import { clients, routeSettlements } from '../../core/store.js';
 import { syncRouteCollections } from '../../domain/ledger.js';
+import { withPersonIndex } from '../../domain/person-cards.js';
 import { renderClientMap } from './client-map.js';
 import { renderRouteEvidence } from './evidence.js';
 import { renderPendingRequests } from './pending.js';
@@ -82,6 +83,12 @@ export function defaultAdminPanel() {
 }
 
 export function renderAdminRoute(routeId) {
+  // El panel consulta las cartulinas de cada persona muchas veces: con el índice armado una vez
+  // se evita recorrer a todos los clientes en cada consulta.
+  return withPersonIndex(clients, () => paintAdminRoute(routeId));
+}
+
+function paintAdminRoute(routeId) {
   renderRouteDate();
   const route = routeSettlements[routeId];
   if (!updateRouteAvailability() || !route) return;

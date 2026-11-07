@@ -15,7 +15,7 @@ import { moveId } from '../../shared/math.js';
 import { openCustomModal } from '../../ui/custom-modal.js';
 import { showView } from '../../ui/navigation.js';
 import { renderHomeHeader, renderHomeRowActions } from '../worker/home.js';
-import { cardLabel, isActiveCard } from '../../domain/person-cards.js';
+import { cardLabel, isActiveCard, withPersonIndex } from '../../domain/person-cards.js';
 import { isClavo } from '../../domain/portfolio.js';
 import { paintCardColorBand } from '../../domain/card-color.js';
 
@@ -25,6 +25,7 @@ import { paintCardColorBand } from '../../domain/card-color.js';
  */
 export function appendClientCards(clientId, { refresh = true } = {}) {
   const client = clients[clientId];
+  const created = [];
   document.querySelectorAll('#inicio .client-list, #directorio .client-list').forEach(list => {
     const isHome = Boolean(list.closest('#inicio'));
     // En el Inicio la fila es un contenedor (lleva botones de acción); en el directorio, un botón.
@@ -54,8 +55,9 @@ export function appendClientCards(clientId, { refresh = true } = {}) {
     }
     card.addEventListener('click', event => { if (!event.target.closest('[data-home-action]')) openClient(clientId); });
     list.append(card);
+    created.push(card);
   });
-  renderClientRows(clientId);
+  renderClientRows(clientId, created);
   if (refresh) filterClientCards();
 }
 
@@ -78,6 +80,12 @@ export function paintAvatarProgress(ring, client) {
 }
 
 export function setClientAvatar(element, client) {
+  // Si no cambió (misma foto o mismas iniciales) no se vuelve a crear: rehacer la imagen de cada
+  // cliente en cada redibujo obligaba al navegador a decodificar todas las fotos otra vez.
+  const initials = client.initials || client.name.split(/\s+/).slice(0, 2).map(part => part[0]).join('').toUpperCase();
+  const signature = client.photoData ? `p:${client.photoData.length}:${client.photoData.slice(-24)}:${client.name}` : `i:${initials}`;
+  if (element.dataset.avatarSignature === signature && element.childNodes.length) return;
+  element.dataset.avatarSignature = signature;
   element.replaceChildren();
   if (client.photoData) {
     const image = document.createElement('img');
@@ -87,16 +95,21 @@ export function setClientAvatar(element, client) {
     element.append(image);
   } else {
     element.classList.remove('has-photo');
-    element.textContent = client.initials || client.name.split(/\s+/).slice(0, 2).map(part => part[0]).join('').toUpperCase();
+    element.textContent = initials;
   }
 }
 
-export function renderClientRows(clientId) {
+/**
+ * Repinta las filas de un cliente. `rows` son sus filas si ya se tienen (redibujo masivo); si no,
+ * se buscan. Todo se busca dentro de cada fila, no en toda la página.
+ */
+export function renderClientRows(clientId, rows = document.querySelectorAll(`.client-row[data-client="${CSS.escape(clientId)}"]`)) {
   const client = clients[clientId];
-  document.querySelectorAll(`.client-row[data-client="${clientId}"] .client-main strong`).forEach(node => { node.textContent = client.name; });
-  document.querySelectorAll(`.client-row[data-client="${clientId}"] .client-avatar`).forEach(node => setClientAvatar(node, client));
-  document.querySelectorAll(`.client-row[data-client="${clientId}"] .avatar-progress`).forEach(ring => paintAvatarProgress(ring, client));
-  document.querySelectorAll(`.client-row[data-client="${clientId}"]`).forEach(row => {
+  if (!client) return;
+  rows.forEach(row => {
+    row.querySelectorAll('.client-main strong').forEach(node => { if (node.textContent !== client.name) node.textContent = client.name; });
+    row.querySelectorAll('.client-avatar').forEach(node => setClientAvatar(node, client));
+    row.querySelectorAll('.avatar-progress').forEach(ring => paintAvatarProgress(ring, client));
     row.dataset.route = client.route;
     // Franja de color en el borde superior (día de pago / quincenal / mensual).
     let band = row.querySelector(':scope > .card-color-band');
@@ -126,6 +139,26 @@ export function renderClientRows(clientId) {
     const late = risk.overduePeriods > 0 || client.late;
     if (status) { status.textContent = late ? 'Mora' : 'Al día'; status.classList.toggle('status-late', late); status.classList.toggle('status-current', !late); }
   });
+}
+
+/**
+ * Repinta muchos clientes de una vez (al cargar o al recibir cambios del servidor): busca todas
+ * las filas una sola vez y arma el índice de personas una sola vez. Los clientes que aún no
+ * tienen fila en el directorio se agregan. No filtra: quien llama filtra una vez al final.
+ */
+export function renderClientsBulk(ids) {
+  const rowsByClient = new Map();
+  document.querySelectorAll('.client-row[data-client]').forEach(row => {
+    const id = row.dataset.client;
+    if (!rowsByClient.has(id)) rowsByClient.set(id, []);
+    rowsByClient.get(id).push(row);
+  });
+  withPersonIndex(clients, () => ids.forEach(id => {
+    if (!clients[id]) return;
+    const rows = rowsByClient.get(id) || [];
+    if (rows.some(row => row.closest('#directorio'))) renderClientRows(id, rows);
+    else appendClientCards(id, { refresh: false });
+  }));
 }
 
 export function removeClient(clientId) {
