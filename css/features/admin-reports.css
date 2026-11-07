@@ -971,3 +971,108 @@
 :root[data-theme="light"] .clavo-tag {
   color: #7B1FA2;
 }
+
+/* Cierre semanal: todos los valores se corrigen en la tabla y en computador la tabla cabe
+   completa, sin desplazarse hacia los lados (en celular sigue con desplazamiento). */
+.ledger-table .ledger-input {
+  width: 100%;
+  min-width: 0;
+  height: 30px;
+  padding: 0 5px;
+  font-size: 11px;
+}
+
+/* El botón 💬 va dentro del campo, a la izquierda (los valores se alinean a la derecha). */
+.ledger-table td.has-note-button {
+  position: relative;
+}
+
+.ledger-table td.has-note-button .ledger-input {
+  padding-left: 28px;
+}
+
+.ledger-table td.has-note-button .expense-note-button {
+  position: absolute;
+  top: 50%;
+  left: 7px;
+  width: 22px;
+  height: 22px;
+  margin: 0;
+  transform: translateY(-50%);
+  border-color: transparent;
+  background: transparent;
+  font-size: 11px;
+}
+
+.ledger-table td.has-note-button .expense-note-button.has-note {
+  border-color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 12%, var(--surface));
+}
+
+.ledger-table .editable-cell .cash-adjustment-note {
+  display: block;
+  margin-top: 2px;
+  white-space: normal;
+  font-size: 9px;
+  line-height: 1.2;
+}
+
+@media (min-width: 900px) {
+  .ledger-table {
+    min-width: 0;
+    table-layout: fixed;
+  }
+
+  .ledger-table th,
+  .ledger-table td {
+    padding: 6px 3px;
+  }
+
+  .ledger-table .editable-cell {
+    padding-top: 4px;
+    padding-bottom: 4px;
+  }
+
+  .ledger-table .ledger-input {
+    padding: 0 4px;
+    font-size: 10.5px;
+  }
+
+  .ledger-table td.has-note-button .ledger-input {
+    padding-left: 23px;
+  }
+
+  .ledger-table td.has-note-button .expense-note-button {
+    left: 5px;
+    width: 18px;
+    height: 18px;
+    font-size: 10px;
+  }
+
+  .ledger-table thead th {
+    white-space: normal;
+    line-height: 1.2;
+  }
+
+  .ledger-table thead th:first-child,
+  .ledger-table tbody th,
+  .ledger-table tfoot th {
+    padding-left: 10px;
+    white-space: normal;
+  }
+
+  /* Fecha, ocho columnas editables, descuadre y caja (la caja negativa necesita un poco más). */
+  .ledger-table thead th:first-child { width: 8%; }
+  .ledger-table thead th:not(:first-child) { width: 8.5%; }
+  .ledger-table thead th:nth-child(6),
+  .ledger-table thead th:nth-child(7) { width: 10%; }
+  .ledger-table thead th:nth-child(10) { width: 9%; }
+  .ledger-table thead th:nth-child(11) { width: 12%; }
+
+  .ledger-table tbody td.numeric:not(.editable-cell),
+  .ledger-table tfoot td {
+    white-space: normal;
+    overflow-wrap: anywhere;
+    font-size: 10.5px;
+  }
+}
