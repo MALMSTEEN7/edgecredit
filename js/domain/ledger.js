@@ -24,7 +24,7 @@ import { formatMoney } from '../shared/format.js';
 
 export const DAY_FIELDS = ['base', 'collections', 'loans', 'expenses', 'otherExpenses', 'cashDelivered', 'cashOut', 'cashIn', 'insurance'];
 const LIVE_FIELDS = ['base', 'collections', 'loans', 'expenses', 'otherExpenses', 'cashDelivered'];
-export const EDITABLE_FIELDS = ['expenses', 'otherExpenses', 'cashOut'];
+export const EDITABLE_FIELDS = ['base', 'collections', 'loans', 'expenses', 'otherExpenses', 'cashOut', 'cashIn', 'cashDelivered'];
 
 export function ensureLedger(route) {
   if (!route) return route;
@@ -250,13 +250,41 @@ export function setDayField(route, dateISO, field, value) {
   // En la tabla «otros gastos» se ve con el sueldo incluido: se guarda sin él.
   const salary = field === 'otherExpenses' ? Number(route.ledger[dateISO]?.salary || 0) : 0;
   const amount = Math.max(0, Math.round(Number(value) || 0) - salary);
-  if (dateISO === localDateISO() && !closedToday(route) && field !== 'cashOut') {
+  const liveDay = dateISO === localDateISO() && !closedToday(route);
+  // Hoy sin cerrar: el cobro sale de los abonos registrados (no se escribe a mano).
+  if (liveDay && field === 'collections') return;
+  if (liveDay && !LEDGER_ONLY_FIELDS.includes(field)) {
     route[field] = amount;
     return;
   }
   route.ledger[dateISO] ||= { closed: false };
   route.ledger[dateISO][field] = amount;
   if (route.ledger[dateISO].demo) route.ledger[dateISO].edited = true;
+  if (field === 'cashIn') syncCashEntriesOf(route, dateISO, amount);
+}
+
+/** Campos que hoy (sin cerrar) también se guardan en el libro y no en los valores vivos de la ruta. */
+const LEDGER_ONLY_FIELDS = ['cashOut', 'cashIn'];
+
+/**
+ * Al corregir la «Entrada a caja» de un día desde el reporte, el detalle de entradas
+ * (route.cashEntries) queda igual al total: si había una sola entrada ese día se corrige su
+ * monto (o se quita si queda en 0); si no había, se registra una; si había varias, se agrega
+ * una corrección por la diferencia.
+ */
+function syncCashEntriesOf(route, dateISO, total) {
+  const sameDay = route.cashEntries.filter(entry => entry.date === dateISO);
+  const current = sameDay.reduce((sum, entry) => sum + Number(entry.amount || 0), 0);
+  if (current === total) return;
+  if (sameDay.length === 1) {
+    if (total > 0) sameDay[0].amount = total;
+    else route.cashEntries = route.cashEntries.filter(entry => entry !== sameDay[0]);
+    return;
+  }
+  route.cashEntries.push({
+    id: `entry-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, date: dateISO, amount: total - current,
+    by: 'Administrador', note: sameDay.length ? 'Corrección desde el reporte' : 'Registrada desde el reporte', ts: Date.now(),
+  });
 }
 
 // ── Seguros: entradas por día y cortes («Cuadrar seguros») ──

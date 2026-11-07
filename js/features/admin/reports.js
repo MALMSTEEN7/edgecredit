@@ -3,8 +3,8 @@
  *
  * Cierre semanal: semanas de lunes a sábado dentro del mes (4 o 5). Cada fila es un día
  * del libro diario (domain/ledger): base, cobro, préstamos, gastos, otros gastos, salida
- * de caja, efectivo, descuadre y caja. Gastos, otros gastos y salida de caja se corrigen
- * en la misma tabla. La última semana del mes incluye el total del mes.
+ * de caja, efectivo, descuadre y caja. Todos los valores del día se corrigen en la misma
+ * tabla (el descuadre y la caja se calculan). La última semana del mes incluye el total del mes.
  * Cierre mensual: seguros del periodo con «Cuadrar seguros».
  */
 
@@ -22,13 +22,14 @@ import { showToast } from '../../ui/toast.js';
 
 const MONTH_NAMES = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
 const DATE_PICKERS = ['#report-goto-date', '#report-goto-date-monthly'];
+// Todas se corrigen en la tabla (el admin); el descuadre y la caja se calculan.
 const COLUMNS = [
   { key: 'base', label: 'Base' },
   { key: 'collections', label: 'Cobro' },
   { key: 'loans', label: 'Préstamos' },
-  { key: 'expenses', label: 'Gastos', editable: true },
-  { key: 'otherExpenses', label: 'Otros gastos', editable: true },
-  { key: 'cashOut', label: 'Salida de caja', editable: true },
+  { key: 'expenses', label: 'Gastos' },
+  { key: 'otherExpenses', label: 'Otros gastos' },
+  { key: 'cashOut', label: 'Salida de caja' },
   { key: 'cashIn', label: 'Entrada a caja' },
   { key: 'cashDelivered', label: 'Efectivo' },
 ];
@@ -169,16 +170,18 @@ function openCashEntry(route) {
 
 // ── Cierre semanal ──
 
-function moneyCell(value, { negativeClass = false } = {}) {
+function moneyCell(value, { negativeClass = false, negativeRed = false } = {}) {
   const cell = document.createElement('td');
   cell.className = 'numeric';
   if (value === null || value === undefined) { cell.textContent = '—'; cell.classList.add('is-muted'); return cell; }
   cell.textContent = formatMoney(value);
   if (negativeClass && value !== 0) cell.classList.add(value < 0 ? 'is-short' : 'is-surplus');
+  // Caja en negativo: en rojo.
+  if (negativeRed && value < 0) cell.classList.add('is-short');
   return cell;
 }
 
-function editableCell(dateISO, key, value, disabled) {
+function editableCell(dateISO, key, value, disabled, title = '') {
   const cell = document.createElement('td');
   cell.className = 'numeric editable-cell';
   const input = document.createElement('input');
@@ -192,6 +195,7 @@ function editableCell(dateISO, key, value, disabled) {
   input.dataset.date = dateISO;
   input.dataset.field = key;
   input.disabled = disabled;
+  if (title) input.title = title;
   input.setAttribute('aria-label', `${COLUMNS.find(column => column.key === key).label} del ${dateISO}`);
   cell.append(input);
   return cell;
@@ -280,7 +284,7 @@ function totalsRow(label, totals, className) {
   head.textContent = label;
   row.append(head);
   COLUMNS.forEach(({ key }) => row.append(moneyCell(totals[key])));
-  row.append(moneyCell(totals.difference, { negativeClass: true }), moneyCell(totals.cashBox));
+  row.append(moneyCell(totals.difference, { negativeClass: true }), moneyCell(totals.cashBox, { negativeRed: true }));
   return row;
 }
 
@@ -343,28 +347,30 @@ function renderWeeklyAudit(route, monthValue) {
       dateCell.append(note);
     }
     row.append(dateCell);
-    COLUMNS.forEach(({ key, editable }) => {
-      if (key === 'cashDelivered' && !future) {
-        const cell = moneyCell(cashInHandOf(route, iso, record));
+    COLUMNS.forEach(({ key }) => {
+      if (key === 'cashDelivered') {
+        // Se ve y se corrige el efectivo en mano; las transferencias del día se indican debajo.
+        const cell = editableCell(iso, key, future ? 0 : cashInHandOf(route, iso, record), future);
         const transfers = dayTransfers(route, iso);
-        if (transfers) {
+        if (transfers && !future) {
           const note = document.createElement('small');
           note.className = 'cash-adjustment-note';
           note.textContent = `+ ${formatMoney(transfers)} en transferencias`;
           note.title = 'Abonos recibidos por transferencia: están en el banco, no en el efectivo ni en la base del día siguiente.';
-          cell.append(document.createElement('br'), note);
+          cell.append(note);
         }
         row.append(cell);
         return;
       }
-      if (!editable) { row.append(future ? moneyCell(null) : moneyCell(record[key])); return; }
-      const cell = editableCell(iso, key, record[key], future);
+      // Hoy sin cerrar el cobro sale de los abonos registrados: se corrige después del cierre.
+      const liveCollections = key === 'collections' && record.live;
+      const cell = editableCell(iso, key, record[key], future || liveCollections, liveCollections ? 'El cobro de hoy se calcula con los abonos registrados; se puede corregir después de cerrar el día.' : '');
       if (key === 'otherExpenses') { cell.classList.add('has-note-button'); cell.append(otherExpensesNoteButton(route, iso, future)); }
       if (key === 'cashOut') { cell.classList.add('has-note-button'); cell.append(cashOutNoteButton(route, iso, future)); }
       row.append(cell);
     });
     row.append(moneyCell(future ? null : ledgerDifference(record), { negativeClass: true }));
-    row.append(moneyCell(future ? null : cashBoxAt(route, iso, live)));
+    row.append(moneyCell(future ? null : cashBoxAt(route, iso, live), { negativeRed: true }));
     body.append(row);
   });
 
@@ -392,7 +398,7 @@ function renderWeeklyAudit(route, monthValue) {
   salaryInput.dataset.date = payDay || '';
   salaryInput.disabled = !payDay || state.userRole !== 'admin';
   rq('#weekly-salary-hint').textContent = `${salary ? `Sumado a otros gastos del ${new Date(`${salary.date}T12:00:00`).toLocaleDateString('es-CO')} · ` : payDay ? '' : 'La semana aún no empieza · '}6 % del cobro: ${formatMoney(Math.round(weekTotals.collections * 0.06))}`;
-  rq('#weekly-note').textContent = `Gastos, otros gastos y salida de caja se corrigen directamente en la tabla; con 💬 ves y corriges en qué fueron los otros gastos. El descuadre de la semana se reinicia cada sábado. Cada fecha queda guardada en el libro diario del cobro.${hasDemo ? ' Los días anteriores al primer cierre real son datos de demostración.' : ''}`;
+  rq('#weekly-note').textContent = `Todos los valores del día se corrigen directamente en la tabla (el descuadre y la caja se recalculan solos; la caja en negativo sale en rojo); con 💬 ves y corriges en qué fueron los otros gastos y la salida de caja. El cobro de hoy se corrige después de cerrar el día. El descuadre de la semana se reinicia cada sábado. Cada fecha queda guardada en el libro diario del cobro.${hasDemo ? ' Los días anteriores al primer cierre real son datos de demostración.' : ''}`;
   targetDate = null;
 }
 
@@ -570,12 +576,14 @@ export function mount() {
     selectedWeekIndex = Number(tab.dataset.week);
     renderRouteReports(state.activeSettlement);
   });
-  // Corrección de gastos, otros gastos y salida de caja directamente en la tabla.
+  // Corrección de cualquier valor del día directamente en la tabla.
   rq('#weekly-audit-body').addEventListener('change', event => {
     const input = event.target.closest('.ledger-input');
     if (!input || state.userRole !== 'admin') return;
     const route = state.activeSettlement;
-    setDayField(route, input.dataset.date, input.dataset.field, input.value);
+    // El efectivo se edita en mano: se guarda sumándole las transferencias de ese día.
+    const value = input.dataset.field === 'cashDelivered' ? (Number(input.value) || 0) + dayTransfers(route, input.dataset.date) : input.value;
+    setDayField(route, input.dataset.date, input.dataset.field, value);
     persistBusinessData();
     // Se repinta en el siguiente ciclo: así no se quita la celda mientras aún tiene el foco.
     window.setTimeout(() => renderRouteReports(route), 0);
