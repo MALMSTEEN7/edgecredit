@@ -393,10 +393,56 @@ function rememberSessionSettings() {
   try { localStorage.setItem('edgecredit-session-settings', JSON.stringify(security.session)); } catch { /* opcional */ }
 }
 
+const isPlainObject = value => Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+
+/**
+ * Combinación de tres vías: `base` es la última versión que conocían los dos equipos. Lo que
+ * solo cambió en el otro equipo se toma; lo que solo cambió aquí se conserva; si los dos
+ * cambiaron el mismo valor gana el de aquí. Baja `depth` niveles (en las rutas: el libro
+ * diario se combina día por día y cada día campo por campo).
+ */
+function mergeThreeWay(base, local, remote, depth) {
+  const out = {};
+  new Set([...Object.keys(base || {}), ...Object.keys(local || {}), ...Object.keys(remote || {})]).forEach(key => {
+    const b = base?.[key], l = local?.[key], r = remote?.[key];
+    const bs = canonical(b), ls = canonical(l), rs = canonical(r);
+    let value;
+    if (ls === bs) value = r;                      // aquí no cambió: lo del otro equipo
+    else if (rs === bs || rs === ls) value = l;    // allá no cambió (o es lo mismo): lo de aquí
+    else if (depth > 0 && isPlainObject(l) && isPlainObject(r)) value = mergeThreeWay(isPlainObject(b) ? b : {}, l, r, depth - 1);
+    else value = l;                                // los dos cambiaron lo mismo: gana lo de aquí
+    if (value !== undefined) out[key] = value;
+  });
+  return out;
+}
+
+const MERGEABLE = ['routes', 'clients', 'route_state'];
+
+/**
+ * Llega un cambio de un registro que aquí también tiene cambios sin enviar. Antes se descartaba
+ * lo recibido y se subía la copia de aquí completa, borrando lo del otro equipo (p. ej. la base
+ * que puso el admin o un cierre de caja). Ahora se combinan y se sube la combinación.
+ * Devuelve true si combinó.
+ */
+function mergeIntoLocal(table, key, row) {
+  if (!MERGEABLE.includes(table)) return false;
+  const id = rowId(table, key);
+  const local = localRow(table, key);
+  let base;
+  try { base = JSON.parse(lastSynced.get(id) || 'null')?.data; } catch { base = null; }
+  if (!local || !isPlainObject(base) || !isPlainObject(row.data)) return false;
+  const merged = mergeThreeWay(base, local.data, row.data, 2);
+  applyRow(table, { ...row, data: merged });
+  // Lo conocido pasa a ser la versión del servidor: lo que la combinación conserva de aquí
+  // queda pendiente y se envía.
+  lastSynced.set(id, stable(normalizeRow(table, row)));
+  return true;
+}
+
 /**
  * Regla común del tiempo real y del refresco incremental: aplica la fila salvo que sea el eco
- * de lo propio o que aquí haya cambios del mismo registro sin enviar (gana el último en
- * guardar: se conserva el local y se envía). Devuelve true si cambió algo.
+ * de lo propio. Si aquí hay cambios del mismo registro sin enviar se combinan campo por campo
+ * (mergeIntoLocal) y se envía la combinación. Devuelve true si cambió algo.
  */
 function receiveRow(table, row, removed = false) {
   if (!syncSession || !row) return false;
@@ -406,7 +452,13 @@ function receiveRow(table, row, removed = false) {
   const id = rowId(table, key);
   // Eco de lo propio (o sin cambios): no se aplica ni se repinta la pantalla.
   if (!removed && sameAsKnown(id, normalizeRow(table, row))) return false;
-  if (hasUnsentChanges(table, key)) { scheduleFlush(100); return false; }
+  if (hasUnsentChanges(table, key)) {
+    const merged = !removed && mergeIntoLocal(table, key, row);
+    scheduleFlush(100);
+    if (!merged) return false;
+    if (table === 'clients') pendingChanges.clients.add(key);
+    return true;
+  }
   if (removed && !lastSynced.has(id) && !localRow(table, key)) return false;
   applyRow(table, row, removed);
   // Qué cambió, para repintar solo eso (repintar los ~1.900 clientes por cada cambio de otro
