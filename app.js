@@ -51,7 +51,7 @@ import { renderRouteBuilder } from './js/features/daily-route/daily-route.js';
 import { filterClientCards } from './js/features/clients/directory.js';
 import { normalizeClientSchedules, pruneExpiredPaymentHistories } from './js/domain/loan-schedule.js';
 import { normalizeCancelledCards } from './js/domain/accounting.js';
-import { ensureLedger, pruneOldLedger, syncRouteCollections } from './js/domain/ledger.js';
+import { closureCutoff, ensureLedger, pruneOldLedger, syncRouteCollections } from './js/domain/ledger.js';
 import { applyPendingBaseTransfers } from './js/domain/base-transfer.js';
 import { renderAdminRoute, syncRouteSelect } from './js/features/admin/admin-shell.js';
 import { renderPendingRequests } from './js/features/admin/pending.js';
@@ -157,6 +157,19 @@ function pruneLedgers() {
   return Object.values(routeSettlements).map(route => pruneOldLedger(route)).some(Boolean);
 }
 
+/** Último cierre conocido de cada ruta: si cambia, hay que repintar sus clientes. */
+const knownClosures = new Map();
+function routesWithNewClosure() {
+  const changed = new Set();
+  Object.entries(routeSettlements).forEach(([routeId, route]) => {
+    const cutoff = closureCutoff(route);
+    const key = cutoff ? `${cutoff.date}|${cutoff.ts || 0}` : '';
+    if (knownClosures.has(routeId) && knownClosures.get(routeId) !== key) changed.add(routeId);
+    knownClosures.set(routeId, key);
+  });
+  return changed;
+}
+
 /**
  * Repinta tras cargar o recibir datos del servidor. `changes` (de core/sync): `full` para
  * repintar todo; si no, solo los clientes que cambiaron (y las otras cartulinas de esas
@@ -180,9 +193,12 @@ function refreshFromServer(changes) {
   state.activeSettlement = routeSettlements[routeSelect.value] || null;
   normalizeClientNotes();
   normalizeClientSchedules();
+  // Si una ruta se cerró (aquí o en otro equipo), sus clientes pierden el indicador «Abono por cerrar».
+  const closedRoutes = routesWithNewClosure();
   if (full) renderClientsBulk(Object.keys(clients));
-  else if (changes.clients.size) {
+  else if (changes.clients.size || closedRoutes.size) {
     const ids = new Set();
+    if (closedRoutes.size) Object.entries(clients).forEach(([id, client]) => { if (closedRoutes.has(client?.route)) ids.add(id); });
     withPersonIndex(clients, () => changes.clients.forEach(id => {
       ids.add(id);
       if (clients[id]) personCardIds(clients, clients[id].id).forEach(other => ids.add(other));

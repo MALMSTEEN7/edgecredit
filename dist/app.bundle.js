@@ -2263,11 +2263,21 @@ function closureCutoff(route) {
  * ¿El abono sigue pendiente de cierre? Son los registrados después del último cierre, aunque
  * sean de días anteriores en que no se cerró la ruta: esos suman en el cobro hasta que se cierre.
  * Los del mismo día del cierre sin hora (`at`) se toman como anteriores al cierre.
+ * Los que el admin registró con otra fecha (`backdated`) cuentan en el día de esa fecha: si ese
+ * día ya se cerró, no se suman al cobro de hoy.
  */
 function isPendingPayment(payment, cutoff, today = localDateISO()) {
   if (!payment || !(Number(payment.amount) > 0) || payment.date > today) return false;
   if (!cutoff || payment.date > cutoff.date) return true;
+  if (payment.backdated) return false;
   return payment.date === cutoff.date && Boolean(cutoff.ts) && Boolean(payment.at) && Date.parse(payment.at) > cutoff.ts;
+}
+
+/** Abonos de una cartulina que siguen pendientes de cierre (para el indicador «Abono por cerrar»). */
+function clientPendingPayments(client, route, today = localDateISO()) {
+  if (!client?.payments?.length || !route) return [];
+  const cutoff = closureCutoff(route);
+  return client.payments.filter(payment => isPendingPayment(payment, cutoff, today));
 }
 
 /** Abonos de la ruta pendientes de cierre ({ clientId, client, payment }), del más reciente al más antiguo. */
@@ -6355,6 +6365,7 @@ function __mount_routePickerModule() {
 
 
 
+
 const CLOSURE_FIELDS = ['collections', 'base', 'loans', 'expenses', 'otherExpenses', 'cashDelivered'];
 
 /** Estado del cierre de hoy: 'closed' (enviado y sin cambios), 'changed' (editado después) o null. */
@@ -6672,6 +6683,8 @@ function __mount_settlementModule() {
       persistBusinessData();
       renderAdminRoute(routeId);
       refreshRouteOptions();
+      // Los abonos ya entraron al cierre: se quita el indicador «Abono por cerrar» de sus clientes.
+      renderClientsBulk(Object.keys(clients).filter(id => clients[id]?.route === routeId));
       const nextBase = reset.saturday
         ? `Sábado: el efectivo (${formatMoney(reset.cash)}) se entrega y la base del lunes arranca en ${formatMoney(reset.carried)}.`
         : transfers
@@ -7562,6 +7575,7 @@ function renderHistory(client) {
   const isExpanded = expandedPaymentHistory.has(state.activeClient);
   const paymentsToRender = isExpanded ? client.payments : client.payments.slice(0, 3);
   const balances = balancesAfterPayments(client);
+  const pendingClose = new Set(clientPendingPayments(client, routeSettlements[client.route]));
   paymentsToRender.forEach((payment, paymentIndex) => {
     const row = document.createElement('li');
     const dateAndMethod = document.createElement('span');
@@ -7571,6 +7585,13 @@ function renderHistory(client) {
     date.textContent = shortHistoryDate(payment.date);
     date.title = formatDate(payment.date);
     dateAndMethod.append(date, createMethodIcon(payment.method));
+    if (pendingClose.has(payment)) {
+      const pendingTag = document.createElement('small');
+      pendingTag.className = 'payment-pending-tag';
+      pendingTag.textContent = 'Por cerrar';
+      pendingTag.title = 'Abono que aún no entra a un cierre de ruta. La marca se quita al verificar y cerrar la ruta.';
+      dateAndMethod.append(pendingTag);
+    }
     if (payment.method === 'transfer' && !payment.receiptData) {
       const missing = document.createElement('small');
       missing.className = 'evidence-missing';
@@ -7649,6 +7670,11 @@ function renderHistory(client) {
   document.querySelector('#interest-history-count').textContent = `${client.interestHistory.length} ${client.interestHistory.length === 1 ? 'recargo' : 'recargos'}`;
   renderRetanqueoHistory(client);
   renderLoanHistory(client);
+}
+
+/** Abonos del más reciente al más antiguo (por fecha y, el mismo día, por hora de registro). */
+function sortPaymentsByDate(client) {
+  (client.payments || []).sort((a, b) => String(b.date).localeCompare(String(a.date)) || String(b.at || '').localeCompare(String(a.at || '')));
 }
 
 /** Reubica los abonos en sus cuotas cuando cambia la fecha de inicio de la cartulina. */
@@ -7903,6 +7929,17 @@ function openClient(clientId) {
   status.textContent = current.overduePeriods > 0 ? current.label : Number(client.balance) <= 0 ? 'Pagada' : client.status;
   status.classList.toggle('status-late', late);
   status.classList.toggle('status-current', !late);
+  // «Abono por cerrar»: lo abonado que aún no entra a un cierre de ruta (se quita al cerrar).
+  const pending = clientPendingPayments(client, routeSettlements[client.route]);
+  let pendingBadge = document.querySelector('#detail-pending-payment');
+  if (!pendingBadge) {
+    pendingBadge = document.createElement('span');
+    pendingBadge.id = 'detail-pending-payment';
+    pendingBadge.className = 'pending-payment-badge';
+    status.after(pendingBadge);
+  }
+  pendingBadge.hidden = !pending.length;
+  pendingBadge.textContent = pending.length ? `Abono ${formatMoney(pending.reduce((sum, payment) => sum + (Number(payment.amount) || 0), 0))} · por cerrar` : '';
   updateMoratoryButton(client);
   document.querySelector('#detail-balance').textContent = formatMoney(client.balance);
   document.querySelector('#detail-balance-copy').textContent = formatMoney(client.balance);
@@ -8458,21 +8495,39 @@ function __mount_clientDetailModule() {
     if (button.dataset.paymentAction === 'delete') {
       openCustomModal({
         title: 'Eliminar abono', description: `Se eliminará el abono de ${formatDate(client.payments[index].date)}.`, submitLabel: 'Eliminar',
-        onSubmit: () => { const amount = Number(client.payments[index].amount) || 0; client.balance += amount; client.payments.splice(index, 1); if (routeSettlements[client.route]) syncRouteCollections(clients, { [client.route]: routeSettlements[client.route] }); updatePaidAmountTotal(client); client.settledAt = Number(client.balance) <= 0 ? client.settledAt || localDateISO() : null; syncCancelledCard(client, state.activeClient); persistBusinessData(); openClient(state.activeClient); }
+        onSubmit: () => { const amount = Number(client.payments[index].amount) || 0; client.balance += amount; client.payments.splice(index, 1); if (routeSettlements[client.route]) syncRouteCollections(clients, { [client.route]: routeSettlements[client.route] }); updatePaidAmountTotal(client); client.settledAt = Number(client.balance) <= 0 ? client.settledAt || localDateISO() : null; syncCancelledCard(client, state.activeClient); persistBusinessData(); renderClientRows(state.activeClient); openClient(state.activeClient); }
       });
     } else {
-      const oldAmount = Number(client.payments[index].amount) || 0;
+      const payment = client.payments[index];
+      const oldAmount = Number(payment.amount) || 0;
+      const today = localDateISO();
       openCustomModal({
-        title: 'Editar abono', description: `Actualiza el monto registrado el ${formatDate(client.payments[index].date)}.`,
-        fields: [{ name: 'amount', label: 'Monto del abono', money: true, thousands: true, type: 'number', min: 1, step: 1, value: client.payments[index].amount, required: true }],
+        title: 'Editar abono', description: `Abono registrado el ${formatDate(payment.date)}. Corrige el monto, la forma de pago o la fecha.`,
+        fields: [
+          { name: 'amount', label: 'Monto del abono', money: true, thousands: true, type: 'number', min: 1, step: 1, value: payment.amount, required: true },
+          { name: 'method', label: 'Forma de pago', type: 'select', value: payment.method === 'transfer' ? 'transfer' : 'cash', options: [{ value: 'cash', label: 'Efectivo (pasa a la base del día siguiente)' }, { value: 'transfer', label: 'Transferencia (queda en el banco)' }] },
+          { name: 'date', label: 'Fecha del abono', type: 'date', max: today, value: payment.date, required: true },
+        ],
         onSubmit: values => {
           const amount = Number(values.amount);
           if (amount > oldAmount + Number(client.balance)) { customModalError.textContent = 'El monto corregido supera el saldo disponible.'; return false; }
+          const date = String(values.date || '');
+          if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || date > today) { customModalError.textContent = 'Elige una fecha válida (no puede ser posterior a hoy).'; return false; }
           client.balance = Math.max(0, Number(client.balance) + oldAmount - amount);
-          client.payments[index].amount = amount;
+          payment.amount = amount;
+          payment.method = values.method === 'transfer' ? 'transfer' : 'cash';
+          if (date !== payment.date) {
+            payment.date = date;
+            // Un abono pasado a otro día cuenta en ese día, no en el cobro del día en que se registró.
+            const registeredOn = payment.at ? localDateISO(new Date(payment.at)) : '';
+            if (registeredOn && date !== registeredOn) payment.backdated = true;
+            else delete payment.backdated;
+            sortPaymentsByDate(client);
+            reassignPaymentCycles(client);
+          }
           if (routeSettlements[client.route]) syncRouteCollections(clients, { [client.route]: routeSettlements[client.route] });
           client.settledAt = client.balance <= 0 ? client.settledAt || localDateISO() : null;
-          updatePaidAmountTotal(client); syncCancelledCard(client, state.activeClient); persistBusinessData(); openClient(state.activeClient);
+          updatePaidAmountTotal(client); syncCancelledCard(client, state.activeClient); persistBusinessData(); renderClientRows(state.activeClient); openClient(state.activeClient);
         }
       });
     }
@@ -8489,6 +8544,7 @@ function __mount_clientDetailModule() {
  * features/clients/directory · Tarjetas de clientes, filtro por ruta/búsqueda
  * y reordenamiento del directorio (drag & drop y táctil).
  */
+
 
 
 
@@ -8621,6 +8677,15 @@ function renderClientRows(clientId, rows = document.querySelectorAll(`.client-ro
       riskLine.dataset.tier = risk.tier;
       riskLine.title = risk.overduePeriods > 0 ? `Cuotas vencidas sin pagar según la frecuencia ${paymentFrequencyLabels[client.frequency]?.toLocaleLowerCase('es') || 'semanal'}.` : 'Sin cuotas vencidas pendientes.';
     }
+    // «Abono por cerrar»: abonos que aún no entran a un cierre; se quita al verificar y cerrar la ruta.
+    const pendingPayments = clientPendingPayments(client, routeSettlements[client.route]);
+    let pendingBadge = main?.querySelector(':scope > .pending-payment-badge');
+    if (pendingPayments.length && main) {
+      if (!pendingBadge) { pendingBadge = document.createElement('span'); pendingBadge.className = 'pending-payment-badge'; main.append(pendingBadge); }
+      const total = pendingPayments.reduce((sum, payment) => sum + (Number(payment.amount) || 0), 0);
+      pendingBadge.textContent = `Abono ${formatMoney(total)} · por cerrar`;
+      pendingBadge.title = pendingPayments.length === 1 ? 'Abono registrado que aún no entra a un cierre de ruta.' : `${pendingPayments.length} abonos registrados que aún no entran a un cierre de ruta.`;
+    } else pendingBadge?.remove();
     const status = row.querySelector('.status');
     const late = risk.overduePeriods > 0 || client.late;
     if (status) { status.textContent = late ? 'Mora' : 'Al día'; status.classList.toggle('status-late', late); status.classList.toggle('status-current', !late); }
@@ -10351,6 +10416,13 @@ function openPayment() {
   document.querySelector('#voucher-camera').value = '';
   document.querySelector('#voucher-file-name').textContent = 'Ningún archivo seleccionado';
   document.querySelector('input[name="method"][value="cash"]').checked = true;
+  // Solo el admin puede registrar un abono con otra fecha (p. ej. uno que se le olvidó al trabajador).
+  const dateField = document.querySelector('#payment-date-field');
+  const dateInput = document.querySelector('#payment-date');
+  dateField.hidden = state.userRole !== 'admin';
+  dateInput.max = localDateISO();
+  dateInput.value = localDateISO();
+  updatePaymentDateHint();
   updatePaymentMethod();
   updateBalancePreview();
   window.setTimeout(() => amountInput.focus(), 40);
@@ -10380,6 +10452,23 @@ function updateBalancePreview() {
     : amount > 0 && after === 0 ? 'Con este abono cancela toda la deuda.'
     : amount > 0 ? `El saldo baja ${formatMoney(amount)}.${installment ? ` Cuota: ${formatMoney(installment)}.` : ''}`
     : installment ? `Cuota: ${formatMoney(installment)}.` : '';
+}
+
+/** Fecha elegida para el abono: hoy, salvo que el admin escoja otro día. */
+function chosenPaymentDate() {
+  const today = localDateISO();
+  if (state.userRole !== 'admin') return today;
+  const value = document.querySelector('#payment-date').value;
+  return /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : today;
+}
+
+function updatePaymentDateHint() {
+  const date = chosenPaymentDate();
+  const otherDay = date !== localDateISO();
+  document.querySelector('#payment-date-field').classList.toggle('is-other-day', otherDay);
+  document.querySelector('#payment-date-hint').textContent = otherDay
+    ? `Quedará con fecha ${formatDate(date)}: no se suma al cobro de hoy (si ese día ya se cerró).`
+    : 'Si el abono es de otro día, cámbiala: así no se suma al cobro de hoy.';
 }
 
 function closePayment() {
@@ -10419,6 +10508,7 @@ function __mount_paymentModule() {
   document.querySelectorAll('input[name="method"]').forEach(input => input.addEventListener('change', updatePaymentMethod));
   modal.addEventListener('click', event => { if (event.target === modal) closePayment(); });
   amountInput.addEventListener('input', updateBalancePreview);
+  document.querySelector('#payment-date').addEventListener('input', updatePaymentDateHint);
   paymentForm.addEventListener('submit', async event => {
     event.preventDefault();
     const returnHome = state.paymentFromHome; // openClient() lo reinicia más abajo
@@ -10438,7 +10528,16 @@ function __mount_paymentModule() {
       amountInput.addEventListener('input', () => amountInput.setCustomValidity(''), { once: true });
       return;
     }
-    const paidDate = localDateISO();
+    const today = localDateISO();
+    const paidDate = chosenPaymentDate();
+    if (paidDate > today) {
+      const dateInput = document.querySelector('#payment-date');
+      dateInput.setCustomValidity('La fecha del abono no puede ser posterior a hoy.');
+      dateInput.reportValidity();
+      dateInput.addEventListener('input', () => dateInput.setCustomValidity(''), { once: true });
+      return;
+    }
+    const isToday = paidDate === today;
     const cycleIndex = paymentCycleIndex(client, paidDate);
     let receiptData = '';
     try { receiptData = paymentMethod === 'transfer' ? await compressClientPhoto(chosenVoucher()) : ''; }
@@ -10449,6 +10548,7 @@ function __mount_paymentModule() {
       amount,
       method: paymentMethod,
       cycleIndex,
+      ...(isToday ? {} : { backdated: true, registeredBy: 'Administrador' }),
       receiptName: paymentMethod === 'transfer' ? chosenVoucher()?.name || '' : '',
       receiptData
     });
@@ -10465,7 +10565,14 @@ function __mount_paymentModule() {
       client.paid = Math.min(Number(client.installments), Number(client.paid || 0) + 1);
       client.progress = client.installments ? Math.round(client.paid / client.installments * 100) : 0;
     }
-    if (periodPaid) {
+    if (!isToday) {
+      // Abono de otro día: queda en su fecha y en orden; no toca la visita de hoy.
+      client.payments.sort((a, b) => String(b.date).localeCompare(String(a.date)) || String(b.at || '').localeCompare(String(a.at || '')));
+      if (periodPaid) {
+        client.visitHistory = (client.visitHistory || []).filter(item => item.date !== paidDate);
+        client.visitHistory.push({ date: paidDate, outcome: 'paid' });
+      }
+    } else if (periodPaid) {
       const todayKey = routeDayKey(client.route);
       state.routeVisitOutcomes[todayKey] ||= {};
       state.routeVisitOutcomes[todayKey][state.activeClient] = 'paid';
@@ -10484,7 +10591,7 @@ function __mount_paymentModule() {
     if (route) syncRouteCollections(clients, { [client.route]: route }); // el cobro se calcula de los abonos
     // Cualquier abono de hoy cierra la visita: el cliente sale del Inicio y queda con
     // el indicador "Abono registrado" en la ruta diaria.
-    closeVisit(state.activeClient, 'paid', client.route);
+    if (isToday) closeVisit(state.activeClient, 'paid', client.route);
     if (Number(client.balance) <= 0) {
       client.paid = Number(client.installments) || client.paid;
       addCancelledCard(client, state.activeClient, paidDate);
@@ -10510,7 +10617,8 @@ function __mount_paymentModule() {
     // (si el abono se hizo desde el Inicio) se vuelve al Inicio.
     if (Number(client.balance) <= 0) offerRenewal(state.activeClient, returnHome);
     else if (returnHome) showView('inicio');
-    showToast(missingTransferEvidence ? `Abono de ${formatMoney(amount)} registrado para ${client.name}. Falta adjuntar la evidencia.` : `Abono de ${formatMoney(amount)} registrado para ${client.name}.`);
+    const dateNote = isToday ? '' : ` con fecha ${formatDate(paidDate)}`;
+    showToast(missingTransferEvidence ? `Abono de ${formatMoney(amount)} registrado${dateNote} para ${client.name}. Falta adjuntar la evidencia.` : `Abono de ${formatMoney(amount)} registrado${dateNote} para ${client.name}.`);
   });
   const voucherCamera = document.querySelector('#voucher-camera');
   // Las dos formas son excluyentes: la última que se usó es el comprobante.
@@ -12267,9 +12375,30 @@ function __mount_moneyInputModule() {
 
 
 
+// Posición de cada lista al salir de ella: al volver de la ficha de un cliente se queda donde
+// iba (y en la fila del cliente que estaba viendo), en vez de saltar al principio.
+const LIST_VIEWS = ['inicio', 'directorio', 'ruta-diaria'];
+const listScroll = {};
+
+/** Al volver a una lista: la misma altura que tenía y, si hace falta, la fila del cliente visto. */
+function restoreListPosition(viewId) {
+  window.scrollTo({ top: listScroll[viewId] || 0, behavior: 'instant' });
+  const id = state.activeClient;
+  if (!id) return;
+  const row = [...document.querySelectorAll(`#${viewId} [data-client="${CSS.escape(id)}"], #${viewId} [data-route-client="${CSS.escape(id)}"]`)].find(node => !node.hidden && node.offsetParent);
+  if (!row) return;
+  const box = row.getBoundingClientRect();
+  if (box.top < 0 || box.bottom > window.innerHeight) row.scrollIntoView({ block: 'center', behavior: 'instant' });
+  row.classList.add('is-last-viewed');
+  window.setTimeout(() => row.classList.remove('is-last-viewed'), 1600);
+}
+
 function showView(viewId) {
   if ((viewId === 'ruta-diaria' || viewId === 'mapa') && state.userRole !== 'worker') return;
   if (!document.getElementById(viewId)) return;
+  const leaving = state.currentView;
+  if (LIST_VIEWS.includes(leaving) && leaving !== viewId) listScroll[leaving] = window.scrollY;
+  const backFromClient = leaving === 'detalle-cliente' && LIST_VIEWS.includes(viewId);
   state.currentView = viewId;
   views.forEach(view => {
     const active = view.id === viewId;
@@ -12285,7 +12414,8 @@ function showView(viewId) {
   if (viewId === 'directorio') filterClientCards();
   if (viewId === 'ruta-diaria') renderRouteBuilder();
   if (viewId === 'mapa') renderClientMap();
-  window.scrollTo({ top: 0, behavior: 'smooth' });
+  if (backFromClient) window.requestAnimationFrame(() => restoreListPosition(viewId));
+  else window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
 /** Registra los listeners del módulo. Se invoca una sola vez desde app.js. */
@@ -13832,6 +13962,19 @@ function pruneLedgers() {
   return Object.values(routeSettlements).map(route => pruneOldLedger(route)).some(Boolean);
 }
 
+/** Último cierre conocido de cada ruta: si cambia, hay que repintar sus clientes. */
+const knownClosures = new Map();
+function routesWithNewClosure() {
+  const changed = new Set();
+  Object.entries(routeSettlements).forEach(([routeId, route]) => {
+    const cutoff = closureCutoff(route);
+    const key = cutoff ? `${cutoff.date}|${cutoff.ts || 0}` : '';
+    if (knownClosures.has(routeId) && knownClosures.get(routeId) !== key) changed.add(routeId);
+    knownClosures.set(routeId, key);
+  });
+  return changed;
+}
+
 /**
  * Repinta tras cargar o recibir datos del servidor. `changes` (de core/sync): `full` para
  * repintar todo; si no, solo los clientes que cambiaron (y las otras cartulinas de esas
@@ -13855,9 +13998,12 @@ function refreshFromServer(changes) {
   state.activeSettlement = routeSettlements[routeSelect.value] || null;
   normalizeClientNotes();
   normalizeClientSchedules();
+  // Si una ruta se cerró (aquí o en otro equipo), sus clientes pierden el indicador «Abono por cerrar».
+  const closedRoutes = routesWithNewClosure();
   if (full) renderClientsBulk(Object.keys(clients));
-  else if (changes.clients.size) {
+  else if (changes.clients.size || closedRoutes.size) {
     const ids = new Set();
+    if (closedRoutes.size) Object.entries(clients).forEach(([id, client]) => { if (closedRoutes.has(client?.route)) ids.add(id); });
     withPersonIndex(clients, () => changes.clients.forEach(id => {
       ids.add(id);
       if (clients[id]) personCardIds(clients, clients[id].id).forEach(other => ids.add(other));

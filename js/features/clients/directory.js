@@ -8,6 +8,7 @@ import { clientButtons, directoryClientList, routeSelect } from '../../core/dom.
 import { state } from '../../core/state.js';
 import { clients, persistBusinessData, routeSettlements } from '../../core/store.js';
 import { paidPercent, paymentBehavior, paymentHistory } from '../../domain/loan-schedule.js';
+import { clientPendingPayments } from '../../domain/ledger.js';
 import { openClient } from './client-detail.js';
 import { todayRouteOrder, visitStatus } from '../daily-route/daily-route.js';
 import { formatMoney, normalizeSearch } from '../../shared/format.js';
@@ -135,6 +136,15 @@ export function renderClientRows(clientId, rows = document.querySelectorAll(`.cl
       riskLine.dataset.tier = risk.tier;
       riskLine.title = risk.overduePeriods > 0 ? `Cuotas vencidas sin pagar según la frecuencia ${paymentFrequencyLabels[client.frequency]?.toLocaleLowerCase('es') || 'semanal'}.` : 'Sin cuotas vencidas pendientes.';
     }
+    // «Abono por cerrar»: abonos que aún no entran a un cierre; se quita al verificar y cerrar la ruta.
+    const pendingPayments = clientPendingPayments(client, routeSettlements[client.route]);
+    let pendingBadge = main?.querySelector(':scope > .pending-payment-badge');
+    if (pendingPayments.length && main) {
+      if (!pendingBadge) { pendingBadge = document.createElement('span'); pendingBadge.className = 'pending-payment-badge'; main.append(pendingBadge); }
+      const total = pendingPayments.reduce((sum, payment) => sum + (Number(payment.amount) || 0), 0);
+      pendingBadge.textContent = `Abono ${formatMoney(total)} · por cerrar`;
+      pendingBadge.title = pendingPayments.length === 1 ? 'Abono registrado que aún no entra a un cierre de ruta.' : `${pendingPayments.length} abonos registrados que aún no entran a un cierre de ruta.`;
+    } else pendingBadge?.remove();
     const status = row.querySelector('.status');
     const late = risk.overduePeriods > 0 || client.late;
     if (status) { status.textContent = late ? 'Mora' : 'Al día'; status.classList.toggle('status-late', late); status.classList.toggle('status-current', !late); }

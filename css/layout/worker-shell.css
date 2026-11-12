@@ -392,10 +392,6 @@
   outline-offset: 2px;
 }
 
-.admin-client-mode .detail-pay-button {
-  display: none!important;
-}
-
 .app-shell {
   width: 100%;
   max-width: 100vw;

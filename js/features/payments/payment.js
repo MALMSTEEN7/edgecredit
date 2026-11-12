@@ -12,7 +12,7 @@ import { filterClientCards, renderClientRows } from '../clients/directory.js';
 import { renderRouteBuilder, routeDayKey } from '../daily-route/daily-route.js';
 import { updateCashTotal } from '../worker/cash-box.js';
 import { localDateISO } from '../../shared/dates.js';
-import { formatMoney } from '../../shared/format.js';
+import { formatDate, formatMoney } from '../../shared/format.js';
 import { syncRouteCollections } from '../../domain/ledger.js';
 import { compressClientPhoto } from '../../shared/media.js';
 import { showToast } from '../../ui/toast.js';
@@ -34,6 +34,13 @@ export function openPayment() {
   document.querySelector('#voucher-camera').value = '';
   document.querySelector('#voucher-file-name').textContent = 'Ningún archivo seleccionado';
   document.querySelector('input[name="method"][value="cash"]').checked = true;
+  // Solo el admin puede registrar un abono con otra fecha (p. ej. uno que se le olvidó al trabajador).
+  const dateField = document.querySelector('#payment-date-field');
+  const dateInput = document.querySelector('#payment-date');
+  dateField.hidden = state.userRole !== 'admin';
+  dateInput.max = localDateISO();
+  dateInput.value = localDateISO();
+  updatePaymentDateHint();
   updatePaymentMethod();
   updateBalancePreview();
   window.setTimeout(() => amountInput.focus(), 40);
@@ -63,6 +70,23 @@ function updateBalancePreview() {
     : amount > 0 && after === 0 ? 'Con este abono cancela toda la deuda.'
     : amount > 0 ? `El saldo baja ${formatMoney(amount)}.${installment ? ` Cuota: ${formatMoney(installment)}.` : ''}`
     : installment ? `Cuota: ${formatMoney(installment)}.` : '';
+}
+
+/** Fecha elegida para el abono: hoy, salvo que el admin escoja otro día. */
+function chosenPaymentDate() {
+  const today = localDateISO();
+  if (state.userRole !== 'admin') return today;
+  const value = document.querySelector('#payment-date').value;
+  return /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : today;
+}
+
+function updatePaymentDateHint() {
+  const date = chosenPaymentDate();
+  const otherDay = date !== localDateISO();
+  document.querySelector('#payment-date-field').classList.toggle('is-other-day', otherDay);
+  document.querySelector('#payment-date-hint').textContent = otherDay
+    ? `Quedará con fecha ${formatDate(date)}: no se suma al cobro de hoy (si ese día ya se cerró).`
+    : 'Si el abono es de otro día, cámbiala: así no se suma al cobro de hoy.';
 }
 
 export function closePayment() {
@@ -102,6 +126,7 @@ export function mount() {
   document.querySelectorAll('input[name="method"]').forEach(input => input.addEventListener('change', updatePaymentMethod));
   modal.addEventListener('click', event => { if (event.target === modal) closePayment(); });
   amountInput.addEventListener('input', updateBalancePreview);
+  document.querySelector('#payment-date').addEventListener('input', updatePaymentDateHint);
   paymentForm.addEventListener('submit', async event => {
     event.preventDefault();
     const returnHome = state.paymentFromHome; // openClient() lo reinicia más abajo
@@ -121,7 +146,16 @@ export function mount() {
       amountInput.addEventListener('input', () => amountInput.setCustomValidity(''), { once: true });
       return;
     }
-    const paidDate = localDateISO();
+    const today = localDateISO();
+    const paidDate = chosenPaymentDate();
+    if (paidDate > today) {
+      const dateInput = document.querySelector('#payment-date');
+      dateInput.setCustomValidity('La fecha del abono no puede ser posterior a hoy.');
+      dateInput.reportValidity();
+      dateInput.addEventListener('input', () => dateInput.setCustomValidity(''), { once: true });
+      return;
+    }
+    const isToday = paidDate === today;
     const cycleIndex = paymentCycleIndex(client, paidDate);
     let receiptData = '';
     try { receiptData = paymentMethod === 'transfer' ? await compressClientPhoto(chosenVoucher()) : ''; }
@@ -132,6 +166,7 @@ export function mount() {
       amount,
       method: paymentMethod,
       cycleIndex,
+      ...(isToday ? {} : { backdated: true, registeredBy: 'Administrador' }),
       receiptName: paymentMethod === 'transfer' ? chosenVoucher()?.name || '' : '',
       receiptData
     });
@@ -148,7 +183,14 @@ export function mount() {
       client.paid = Math.min(Number(client.installments), Number(client.paid || 0) + 1);
       client.progress = client.installments ? Math.round(client.paid / client.installments * 100) : 0;
     }
-    if (periodPaid) {
+    if (!isToday) {
+      // Abono de otro día: queda en su fecha y en orden; no toca la visita de hoy.
+      client.payments.sort((a, b) => String(b.date).localeCompare(String(a.date)) || String(b.at || '').localeCompare(String(a.at || '')));
+      if (periodPaid) {
+        client.visitHistory = (client.visitHistory || []).filter(item => item.date !== paidDate);
+        client.visitHistory.push({ date: paidDate, outcome: 'paid' });
+      }
+    } else if (periodPaid) {
       const todayKey = routeDayKey(client.route);
       state.routeVisitOutcomes[todayKey] ||= {};
       state.routeVisitOutcomes[todayKey][state.activeClient] = 'paid';
@@ -167,7 +209,7 @@ export function mount() {
     if (route) syncRouteCollections(clients, { [client.route]: route }); // el cobro se calcula de los abonos
     // Cualquier abono de hoy cierra la visita: el cliente sale del Inicio y queda con
     // el indicador "Abono registrado" en la ruta diaria.
-    closeVisit(state.activeClient, 'paid', client.route);
+    if (isToday) closeVisit(state.activeClient, 'paid', client.route);
     if (Number(client.balance) <= 0) {
       client.paid = Number(client.installments) || client.paid;
       addCancelledCard(client, state.activeClient, paidDate);
@@ -193,7 +235,8 @@ export function mount() {
     // (si el abono se hizo desde el Inicio) se vuelve al Inicio.
     if (Number(client.balance) <= 0) offerRenewal(state.activeClient, returnHome);
     else if (returnHome) showView('inicio');
-    showToast(missingTransferEvidence ? `Abono de ${formatMoney(amount)} registrado para ${client.name}. Falta adjuntar la evidencia.` : `Abono de ${formatMoney(amount)} registrado para ${client.name}.`);
+    const dateNote = isToday ? '' : ` con fecha ${formatDate(paidDate)}`;
+    showToast(missingTransferEvidence ? `Abono de ${formatMoney(amount)} registrado${dateNote} para ${client.name}. Falta adjuntar la evidencia.` : `Abono de ${formatMoney(amount)} registrado${dateNote} para ${client.name}.`);
   });
   const voucherCamera = document.querySelector('#voucher-camera');
   // Las dos formas son excluyentes: la última que se usó es el comprobante.

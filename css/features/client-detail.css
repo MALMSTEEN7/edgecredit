@@ -1359,3 +1359,17 @@ button.evidence-link:active {
   border-radius: 10px;
   background: color-mix(in srgb, var(--primary) 10%, transparent);
 }
+
+/* Abono que aún no entra a un cierre de ruta («Por cerrar»): se quita al cerrar la ruta. */
+.payment-pending-tag {
+  display: inline-flex;
+  align-items: center;
+  min-height: 25px;
+  padding: 3px 8px;
+  border: 1px solid color-mix(in srgb, var(--primary) 55%, var(--line));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--primary) 14%, var(--card));
+  color: var(--text);
+  font-size: 10px;
+  font-weight: 700;
+}

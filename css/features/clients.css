@@ -334,3 +334,41 @@
 
 /* Filtro «Clavos» del directorio: clientes con saldo que no abonan hace meses. */
 .directory-filter.filter-clavo { --filter-color: #AB47BC; }
+
+/* Indicador «Abono por cerrar»: la cartulina tiene abonos que aún no entran a un cierre de ruta.
+   Se va solo al verificar y cerrar la ruta (domain/ledger.js · clientPendingPayments). */
+.pending-payment-badge {
+  width: max-content;
+  max-width: 100%;
+  display: inline-flex !important;
+  align-items: center;
+  gap: .35rem;
+  margin-top: 4px;
+  padding: .22rem .55rem;
+  border: 1px solid color-mix(in srgb, var(--primary) 55%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--primary) 16%, transparent);
+  color: var(--text) !important;
+  font-size: 10px !important;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.pending-payment-badge::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--primary);
+}
+
+.pending-payment-badge[hidden] {
+  display: none !important;
+}
+
+/* Al volver de la ficha: se resalta un momento la fila del cliente que se estaba viendo. */
+.is-last-viewed {
+  outline: 2px solid color-mix(in srgb, var(--primary) 70%, transparent);
+  outline-offset: 2px;
+  transition: outline-color .6s ease;
+}

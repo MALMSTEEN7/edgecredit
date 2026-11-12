@@ -14,7 +14,7 @@ import { filterClientCards, removeClient, renderClientRows, setClientAvatar } fr
 import { localDateISO } from '../../shared/dates.js';
 import { formatDate, formatMoney, routeKey } from '../../shared/format.js';
 import { formatPhone, phoneLink } from '../../shared/phone.js';
-import { syncRouteCollections } from '../../domain/ledger.js';
+import { clientPendingPayments, syncRouteCollections } from '../../domain/ledger.js';
 import { openCustomModal } from '../../ui/custom-modal.js';
 import { showView } from '../../ui/navigation.js';
 import { showToast } from '../../ui/toast.js';
@@ -91,6 +91,7 @@ export function renderHistory(client) {
   const isExpanded = expandedPaymentHistory.has(state.activeClient);
   const paymentsToRender = isExpanded ? client.payments : client.payments.slice(0, 3);
   const balances = balancesAfterPayments(client);
+  const pendingClose = new Set(clientPendingPayments(client, routeSettlements[client.route]));
   paymentsToRender.forEach((payment, paymentIndex) => {
     const row = document.createElement('li');
     const dateAndMethod = document.createElement('span');
@@ -100,6 +101,13 @@ export function renderHistory(client) {
     date.textContent = shortHistoryDate(payment.date);
     date.title = formatDate(payment.date);
     dateAndMethod.append(date, createMethodIcon(payment.method));
+    if (pendingClose.has(payment)) {
+      const pendingTag = document.createElement('small');
+      pendingTag.className = 'payment-pending-tag';
+      pendingTag.textContent = 'Por cerrar';
+      pendingTag.title = 'Abono que aún no entra a un cierre de ruta. La marca se quita al verificar y cerrar la ruta.';
+      dateAndMethod.append(pendingTag);
+    }
     if (payment.method === 'transfer' && !payment.receiptData) {
       const missing = document.createElement('small');
       missing.className = 'evidence-missing';
@@ -178,6 +186,11 @@ export function renderHistory(client) {
   document.querySelector('#interest-history-count').textContent = `${client.interestHistory.length} ${client.interestHistory.length === 1 ? 'recargo' : 'recargos'}`;
   renderRetanqueoHistory(client);
   renderLoanHistory(client);
+}
+
+/** Abonos del más reciente al más antiguo (por fecha y, el mismo día, por hora de registro). */
+function sortPaymentsByDate(client) {
+  (client.payments || []).sort((a, b) => String(b.date).localeCompare(String(a.date)) || String(b.at || '').localeCompare(String(a.at || '')));
 }
 
 /** Reubica los abonos en sus cuotas cuando cambia la fecha de inicio de la cartulina. */
@@ -432,6 +445,17 @@ export function openClient(clientId) {
   status.textContent = current.overduePeriods > 0 ? current.label : Number(client.balance) <= 0 ? 'Pagada' : client.status;
   status.classList.toggle('status-late', late);
   status.classList.toggle('status-current', !late);
+  // «Abono por cerrar»: lo abonado que aún no entra a un cierre de ruta (se quita al cerrar).
+  const pending = clientPendingPayments(client, routeSettlements[client.route]);
+  let pendingBadge = document.querySelector('#detail-pending-payment');
+  if (!pendingBadge) {
+    pendingBadge = document.createElement('span');
+    pendingBadge.id = 'detail-pending-payment';
+    pendingBadge.className = 'pending-payment-badge';
+    status.after(pendingBadge);
+  }
+  pendingBadge.hidden = !pending.length;
+  pendingBadge.textContent = pending.length ? `Abono ${formatMoney(pending.reduce((sum, payment) => sum + (Number(payment.amount) || 0), 0))} · por cerrar` : '';
   updateMoratoryButton(client);
   document.querySelector('#detail-balance').textContent = formatMoney(client.balance);
   document.querySelector('#detail-balance-copy').textContent = formatMoney(client.balance);
@@ -987,21 +1011,39 @@ export function mount() {
     if (button.dataset.paymentAction === 'delete') {
       openCustomModal({
         title: 'Eliminar abono', description: `Se eliminará el abono de ${formatDate(client.payments[index].date)}.`, submitLabel: 'Eliminar',
-        onSubmit: () => { const amount = Number(client.payments[index].amount) || 0; client.balance += amount; client.payments.splice(index, 1); if (routeSettlements[client.route]) syncRouteCollections(clients, { [client.route]: routeSettlements[client.route] }); updatePaidAmountTotal(client); client.settledAt = Number(client.balance) <= 0 ? client.settledAt || localDateISO() : null; syncCancelledCard(client, state.activeClient); persistBusinessData(); openClient(state.activeClient); }
+        onSubmit: () => { const amount = Number(client.payments[index].amount) || 0; client.balance += amount; client.payments.splice(index, 1); if (routeSettlements[client.route]) syncRouteCollections(clients, { [client.route]: routeSettlements[client.route] }); updatePaidAmountTotal(client); client.settledAt = Number(client.balance) <= 0 ? client.settledAt || localDateISO() : null; syncCancelledCard(client, state.activeClient); persistBusinessData(); renderClientRows(state.activeClient); openClient(state.activeClient); }
       });
     } else {
-      const oldAmount = Number(client.payments[index].amount) || 0;
+      const payment = client.payments[index];
+      const oldAmount = Number(payment.amount) || 0;
+      const today = localDateISO();
       openCustomModal({
-        title: 'Editar abono', description: `Actualiza el monto registrado el ${formatDate(client.payments[index].date)}.`,
-        fields: [{ name: 'amount', label: 'Monto del abono', money: true, thousands: true, type: 'number', min: 1, step: 1, value: client.payments[index].amount, required: true }],
+        title: 'Editar abono', description: `Abono registrado el ${formatDate(payment.date)}. Corrige el monto, la forma de pago o la fecha.`,
+        fields: [
+          { name: 'amount', label: 'Monto del abono', money: true, thousands: true, type: 'number', min: 1, step: 1, value: payment.amount, required: true },
+          { name: 'method', label: 'Forma de pago', type: 'select', value: payment.method === 'transfer' ? 'transfer' : 'cash', options: [{ value: 'cash', label: 'Efectivo (pasa a la base del día siguiente)' }, { value: 'transfer', label: 'Transferencia (queda en el banco)' }] },
+          { name: 'date', label: 'Fecha del abono', type: 'date', max: today, value: payment.date, required: true },
+        ],
         onSubmit: values => {
           const amount = Number(values.amount);
           if (amount > oldAmount + Number(client.balance)) { customModalError.textContent = 'El monto corregido supera el saldo disponible.'; return false; }
+          const date = String(values.date || '');
+          if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || date > today) { customModalError.textContent = 'Elige una fecha válida (no puede ser posterior a hoy).'; return false; }
           client.balance = Math.max(0, Number(client.balance) + oldAmount - amount);
-          client.payments[index].amount = amount;
+          payment.amount = amount;
+          payment.method = values.method === 'transfer' ? 'transfer' : 'cash';
+          if (date !== payment.date) {
+            payment.date = date;
+            // Un abono pasado a otro día cuenta en ese día, no en el cobro del día en que se registró.
+            const registeredOn = payment.at ? localDateISO(new Date(payment.at)) : '';
+            if (registeredOn && date !== registeredOn) payment.backdated = true;
+            else delete payment.backdated;
+            sortPaymentsByDate(client);
+            reassignPaymentCycles(client);
+          }
           if (routeSettlements[client.route]) syncRouteCollections(clients, { [client.route]: routeSettlements[client.route] });
           client.settledAt = client.balance <= 0 ? client.settledAt || localDateISO() : null;
-          updatePaidAmountTotal(client); syncCancelledCard(client, state.activeClient); persistBusinessData(); openClient(state.activeClient);
+          updatePaidAmountTotal(client); syncCancelledCard(client, state.activeClient); persistBusinessData(); renderClientRows(state.activeClient); openClient(state.activeClient);
         }
       });
     }

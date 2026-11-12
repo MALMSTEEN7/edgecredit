@@ -15,6 +15,7 @@ import { openCustomModal } from '../../ui/custom-modal.js';
 import { showToast } from '../../ui/toast.js';
 import { renderAdminRoute } from './admin-shell.js';
 import { renderRoutePicker } from './route-picker.js';
+import { renderClientsBulk } from '../clients/directory.js';
 
 const CLOSURE_FIELDS = ['collections', 'base', 'loans', 'expenses', 'otherExpenses', 'cashDelivered'];
 
@@ -333,6 +334,8 @@ export function mount() {
       persistBusinessData();
       renderAdminRoute(routeId);
       refreshRouteOptions();
+      // Los abonos ya entraron al cierre: se quita el indicador «Abono por cerrar» de sus clientes.
+      renderClientsBulk(Object.keys(clients).filter(id => clients[id]?.route === routeId));
       const nextBase = reset.saturday
         ? `Sábado: el efectivo (${formatMoney(reset.cash)}) se entrega y la base del lunes arranca en ${formatMoney(reset.carried)}.`
         : transfers

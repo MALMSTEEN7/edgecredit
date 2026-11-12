@@ -2418,10 +2418,6 @@ button {
   outline-offset: 2px;
 }
 
-.admin-client-mode .detail-pay-button {
-  display: none!important;
-}
-
 .app-shell {
   width: 100%;
   max-width: 100vw;
@@ -5462,6 +5458,44 @@ html.session-restoring .login-gateway .session-splash,
 /* Filtro «Clavos» del directorio: clientes con saldo que no abonan hace meses. */
 .directory-filter.filter-clavo { --filter-color: #AB47BC; }
 
+/* Indicador «Abono por cerrar»: la cartulina tiene abonos que aún no entran a un cierre de ruta.
+   Se va solo al verificar y cerrar la ruta (domain/ledger.js · clientPendingPayments). */
+.pending-payment-badge {
+  width: max-content;
+  max-width: 100%;
+  display: inline-flex !important;
+  align-items: center;
+  gap: .35rem;
+  margin-top: 4px;
+  padding: .22rem .55rem;
+  border: 1px solid color-mix(in srgb, var(--primary) 55%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--primary) 16%, transparent);
+  color: var(--text) !important;
+  font-size: 10px !important;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.pending-payment-badge::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--primary);
+}
+
+.pending-payment-badge[hidden] {
+  display: none !important;
+}
+
+/* Al volver de la ficha: se resalta un momento la fila del cliente que se estaba viendo. */
+.is-last-viewed {
+  outline: 2px solid color-mix(in srgb, var(--primary) 70%, transparent);
+  outline-offset: 2px;
+  transition: outline-color .6s ease;
+}
+
 /* ── css/features/client-detail.css */
 /* features/client-detail · Ficha del cliente, progreso e historiales. */
 
@@ -6825,6 +6859,20 @@ button.evidence-link:active {
   background: color-mix(in srgb, var(--primary) 10%, transparent);
 }
 
+/* Abono que aún no entra a un cierre de ruta («Por cerrar»): se quita al cerrar la ruta. */
+.payment-pending-tag {
+  display: inline-flex;
+  align-items: center;
+  min-height: 25px;
+  padding: 3px 8px;
+  border: 1px solid color-mix(in srgb, var(--primary) 55%, var(--line));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--primary) 14%, var(--card));
+  color: var(--text);
+  font-size: 10px;
+  font-weight: 700;
+}
+
 /* ── css/features/payment.css */
 /* features/payment · Modal de registro de pago. */
 
@@ -6936,6 +6984,44 @@ button.evidence-link:active {
   display: grid;
   gap: 7px;
   margin-top: 16px;
+}
+
+/* Fecha del abono (solo admin): para registrar un abono de otro día sin sumarlo a hoy. */
+.payment-date-field {
+  display: grid;
+  gap: 6px;
+  margin-top: 16px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.payment-date-field[hidden] {
+  display: none;
+}
+
+.payment-date-field input {
+  height: 46px;
+  padding: 0 12px;
+  border: 1px solid #454545;
+  border-radius: 11px;
+  outline: 0;
+  background: var(--card);
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+}
+
+.payment-date-field input:focus {
+  border-color: var(--primary);
+}
+
+.payment-date-field small {
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.payment-date-field.is-other-day small {
+  color: var(--primary);
 }
 
 .voucher-field label {

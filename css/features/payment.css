@@ -110,6 +110,44 @@
   margin-top: 16px;
 }
 
+/* Fecha del abono (solo admin): para registrar un abono de otro día sin sumarlo a hoy. */
+.payment-date-field {
+  display: grid;
+  gap: 6px;
+  margin-top: 16px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.payment-date-field[hidden] {
+  display: none;
+}
+
+.payment-date-field input {
+  height: 46px;
+  padding: 0 12px;
+  border: 1px solid #454545;
+  border-radius: 11px;
+  outline: 0;
+  background: var(--card);
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+}
+
+.payment-date-field input:focus {
+  border-color: var(--primary);
+}
+
+.payment-date-field small {
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.payment-date-field.is-other-day small {
+  color: var(--primary);
+}
+
 .voucher-field label {
   font-size: 12px;
   font-weight: 600;

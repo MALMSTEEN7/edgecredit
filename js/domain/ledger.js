@@ -401,11 +401,21 @@ export function closureCutoff(route) {
  * ¿El abono sigue pendiente de cierre? Son los registrados después del último cierre, aunque
  * sean de días anteriores en que no se cerró la ruta: esos suman en el cobro hasta que se cierre.
  * Los del mismo día del cierre sin hora (`at`) se toman como anteriores al cierre.
+ * Los que el admin registró con otra fecha (`backdated`) cuentan en el día de esa fecha: si ese
+ * día ya se cerró, no se suman al cobro de hoy.
  */
 export function isPendingPayment(payment, cutoff, today = localDateISO()) {
   if (!payment || !(Number(payment.amount) > 0) || payment.date > today) return false;
   if (!cutoff || payment.date > cutoff.date) return true;
+  if (payment.backdated) return false;
   return payment.date === cutoff.date && Boolean(cutoff.ts) && Boolean(payment.at) && Date.parse(payment.at) > cutoff.ts;
+}
+
+/** Abonos de una cartulina que siguen pendientes de cierre (para el indicador «Abono por cerrar»). */
+export function clientPendingPayments(client, route, today = localDateISO()) {
+  if (!client?.payments?.length || !route) return [];
+  const cutoff = closureCutoff(route);
+  return client.payments.filter(payment => isPendingPayment(payment, cutoff, today));
 }
 
 /** Abonos de la ruta pendientes de cierre ({ clientId, client, payment }), del más reciente al más antiguo. */
