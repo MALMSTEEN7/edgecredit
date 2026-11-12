@@ -1924,10 +1924,14 @@ function dayRecord(route, dateISO, liveInsurance = 0) {
   };
 }
 
-/** Descuadre del día (fórmula de la liquidación). Solo aplica a días cerrados; el sueldo no cuenta. */
+/**
+ * Descuadre del día (fórmula de la liquidación): efectivo entregado menos el que debía haber.
+ * Positivo = sobra plata, negativo = falta (igual que la columna DESCUADRE del Excel).
+ * Solo aplica a días cerrados; el sueldo no cuenta.
+ */
 function ledgerDifference(record) {
   if (!record.closed) return null;
-  return record.collections + record.base - record.loans - record.expenses - (record.otherExpenses - Number(record.salary || 0)) - record.cashDelivered;
+  return record.cashDelivered - (record.collections + record.base - record.loans - record.expenses - (record.otherExpenses - Number(record.salary || 0)));
 }
 
 /** Movimiento de la caja del cobro en un día. */
@@ -6599,7 +6603,8 @@ function renderRouteOperations(route) {
 function recalculateSettlement() {
   const route = state.activeSettlement;
   if (!route) return;
-  state.settlementDifference = route.collections + route.base - route.loans - route.expenses - route.cashDelivered - route.otherExpenses;
+  // Efectivo entregado menos el que debía haber: positivo = sobra plata, negativo = falta.
+  state.settlementDifference = route.cashDelivered - (route.collections + route.base - route.loans - route.expenses - route.otherExpenses);
   const difference = document.querySelector('#metric-difference');
   const differenceCard = document.querySelector('#difference-card');
   difference.textContent = formatMoney(state.settlementDifference);

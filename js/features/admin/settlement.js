@@ -264,7 +264,8 @@ export function renderRouteOperations(route) {
 export function recalculateSettlement() {
   const route = state.activeSettlement;
   if (!route) return;
-  state.settlementDifference = route.collections + route.base - route.loans - route.expenses - route.cashDelivered - route.otherExpenses;
+  // Efectivo entregado menos el que debía haber: positivo = sobra plata, negativo = falta.
+  state.settlementDifference = route.cashDelivered - (route.collections + route.base - route.loans - route.expenses - route.otherExpenses);
   const difference = document.querySelector('#metric-difference');
   const differenceCard = document.querySelector('#difference-card');
   difference.textContent = formatMoney(state.settlementDifference);
