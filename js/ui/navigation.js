@@ -28,6 +28,8 @@ function restoreListPosition(viewId) {
 
 export function showView(viewId) {
   if ((viewId === 'ruta-diaria' || viewId === 'mapa') && state.userRole !== 'worker') return;
+  // El admin no tiene «Inicio» de trabajador: su lista es el directorio (con «Volver al panel»).
+  if (viewId === 'inicio' && document.body.classList.contains('admin-client-mode')) viewId = 'directorio';
   if (!document.getElementById(viewId)) return;
   const leaving = state.currentView;
   if (LIST_VIEWS.includes(leaving) && leaving !== viewId) listScroll[leaving] = window.scrollY;

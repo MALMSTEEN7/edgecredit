@@ -523,7 +523,11 @@ export function openClient(clientId) {
   renderHistory(client);
   // Al abrir desde una lista se guarda su orden para moverse con Anterior / Siguiente.
   if (state.currentView !== 'detalle-cliente') state.cardSequence = visibleCardSequence(state.currentView);
-  state.previousView = ['directorio', 'ruta-diaria', 'mapa'].includes(state.currentView) ? state.currentView : 'inicio';
+  // Al volver a pintar la ficha (tras editar un abono, pasar a otra cartulina…) se conserva la
+  // lista de la que se vino; si no, «Volver» terminaba en el Inicio del trabajador.
+  if (state.currentView !== 'detalle-cliente' || !state.previousView) {
+    state.previousView = ['directorio', 'ruta-diaria', 'mapa'].includes(state.currentView) ? state.currentView : 'inicio';
+  }
   renderCardNav(clientId);
   closeDisclosure();
   showView('detalle-cliente');

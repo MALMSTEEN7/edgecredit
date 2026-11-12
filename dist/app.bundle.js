@@ -8007,7 +8007,11 @@ function openClient(clientId) {
   renderHistory(client);
   // Al abrir desde una lista se guarda su orden para moverse con Anterior / Siguiente.
   if (state.currentView !== 'detalle-cliente') state.cardSequence = visibleCardSequence(state.currentView);
-  state.previousView = ['directorio', 'ruta-diaria', 'mapa'].includes(state.currentView) ? state.currentView : 'inicio';
+  // Al volver a pintar la ficha (tras editar un abono, pasar a otra cartulina…) se conserva la
+  // lista de la que se vino; si no, «Volver» terminaba en el Inicio del trabajador.
+  if (state.currentView !== 'detalle-cliente' || !state.previousView) {
+    state.previousView = ['directorio', 'ruta-diaria', 'mapa'].includes(state.currentView) ? state.currentView : 'inicio';
+  }
   renderCardNav(clientId);
   closeDisclosure();
   showView('detalle-cliente');
@@ -12395,6 +12399,8 @@ function restoreListPosition(viewId) {
 
 function showView(viewId) {
   if ((viewId === 'ruta-diaria' || viewId === 'mapa') && state.userRole !== 'worker') return;
+  // El admin no tiene «Inicio» de trabajador: su lista es el directorio (con «Volver al panel»).
+  if (viewId === 'inicio' && document.body.classList.contains('admin-client-mode')) viewId = 'directorio';
   if (!document.getElementById(viewId)) return;
   const leaving = state.currentView;
   if (LIST_VIEWS.includes(leaving) && leaving !== viewId) listScroll[leaving] = window.scrollY;
