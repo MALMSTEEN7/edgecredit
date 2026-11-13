@@ -30,6 +30,19 @@
   font: 700 14px Manrope,sans-serif;
 }
 
+/* Fecha y hora en que se hizo la solicitud. */
+.pending-card .pending-time {
+  display: inline-flex;
+  margin: 0 0 8px;
+  padding: 3px 8px;
+  border: 1px solid color-mix(in srgb, var(--primary) 45%, var(--line));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--primary) 12%, transparent);
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 700;
+}
+
 .pending-card p {
   margin: 0 0 8px;
   color: var(--muted);

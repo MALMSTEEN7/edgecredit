@@ -50,6 +50,17 @@ function correctedPayment(client, request) {
   return (request.paymentAt && payments.find(item => item.at === request.paymentAt)) || payments.find(item => item.date === request.visitDate);
 }
 
+const REQUEST_DAY = new Intl.DateTimeFormat('es-CO', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
+const REQUEST_TIME = new Intl.DateTimeFormat('es-CO', { hour: 'numeric', minute: '2-digit' });
+
+/** Momento en que se hizo la solicitud (createdAt; las antiguas lo llevan en el id: request-<ms>-…). */
+function requestCreatedMs(request) {
+  const fromField = Date.parse(request.createdAt || '');
+  if (Number.isFinite(fromField)) return fromField;
+  const fromId = Number(String(request.id || '').match(/^request-(\d{12,})/)?.[1]);
+  return Number.isFinite(fromId) ? fromId : null;
+}
+
 export function renderPendingRequests() {
   // El punto azul del selector de cobros se actualiza con cada cambio de solicitudes.
   refreshRouteOptions();
@@ -70,6 +81,15 @@ export function renderPendingRequests() {
     const copy = document.createElement('div');
     const title = document.createElement('h3');
     title.textContent = REQUEST_TITLES[request.type] || 'Solicitud';
+    // Fecha y hora en que se hizo la solicitud.
+    const createdMs = requestCreatedMs(request);
+    const stamp = document.createElement('time');
+    stamp.className = 'pending-time';
+    if (createdMs) {
+      stamp.dateTime = new Date(createdMs).toISOString();
+      const created = new Date(createdMs);
+      stamp.textContent = `Solicitada el ${REQUEST_DAY.format(created).replace(/[.,]/g, '').replace(/ de /g, ' ')} · ${REQUEST_TIME.format(created)}`;
+    } else stamp.textContent = 'Fecha de la solicitud no registrada';
     const details = document.createElement('p');
     details.textContent = `${request.clientName} · ${routeSettlements[request.routeId || routeKey(request.route)]?.name || request.route} · Solicitó ${request.workerName}`;
     const value = document.createElement('p');
@@ -82,11 +102,11 @@ export function renderPendingRequests() {
       // Traspaso de base: de qué cobro salió, a cuál llegó y cuándo.
       const origin = routeSettlements[request.routeId]?.name || request.route;
       const external = request.toRouteId === EXTERNAL_ROUTE;
-      details.textContent = `${origin} → ${request.toRouteName || request.toRouteId}${external ? ' (fuera de EdgeCredit)' : ''} · Envió ${request.workerName} · ${new Date(request.createdAt).toLocaleString('es-CO', { weekday: 'short', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' })}`;
+      details.textContent = `${origin} → ${request.toRouteName || request.toRouteId}${external ? ' (fuera de EdgeCredit)' : ''} · Envió ${request.workerName}`;
       value.textContent = `${formatMoney(request.amount)} salieron del efectivo de ${origin}${external ? '' : request.appliedTo === request.toRouteId ? ` y ya están en la base de ${request.toRouteName}` : ` · se suman a ${request.toRouteName} en cuanto este equipo lo procese`}.${request.comment ? ` Comentario: ${request.comment}` : ''}`;
       card.classList.add('is-base-transfer');
     }
-    copy.append(title, details, value);
+    copy.append(title, stamp, details, value);
     const actions = document.createElement('div');
     actions.className = 'pending-actions';
     const buttons = request.type === 'base-transfer'
