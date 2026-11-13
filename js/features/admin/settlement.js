@@ -5,8 +5,8 @@
 import { adminFeedback, routeSelect, settlementInputs } from '../../core/dom.js';
 import { state } from '../../core/state.js';
 import { clients, pendingRequests, persistBusinessData, routeSettlements } from '../../core/store.js';
-import { carriedBase, mondayBaseFor, otherExpensesNote, paymentStamp, pendingRoutePayments, recordClosure, setOtherExpensesNote, syncRouteCollections } from '../../domain/ledger.js';
-import { insuranceCollectedOn } from '../../domain/insurance.js';
+import { carriedBase, closureCutoff, mondayBaseFor, otherExpensesNote, paymentStamp, pendingRoutePayments, recordClosure, setOtherExpensesNote, syncRouteCollections } from '../../domain/ledger.js';
+import { insurancePendingClose } from '../../domain/insurance.js';
 import { baseTransfersSince } from '../../domain/base-transfer.js';
 import { cardLabel } from '../../domain/person-cards.js';
 import { localDateISO } from '../../shared/dates.js';
@@ -209,21 +209,20 @@ function saveMondayBase() {
 }
 
 /**
- * Junto al título «Base»: los seguros del día que ya están sumados en la base y la base sin
- * ellos. Tras cerrar hoy solo cuentan los seguros cobrados después del cierre.
+ * Junto al título «Base»: los seguros que ya están sumados en la base y la base sin ellos.
+ * Cuentan todos los cobrados desde el último cierre, aunque sean de días anteriores en que la
+ * ruta no se cerró (rutas que se pasan un día de por medio): al guardar el cobro vuelven a cero.
  */
 export function renderBaseBreakdown(routeId) {
   const route = routeSettlements[routeId];
   if (!route) return;
-  const today = localDateISO();
-  const since = route.lastClosure?.date === today ? Date.parse(route.lastClosure.submittedAt) || 0 : 0;
-  const insurance = insuranceCollectedOn(clients, routeId, today, since);
-  document.querySelector('#base-insurance-label').textContent = insurance.count ? `Seguros del día (${insurance.count})` : 'Seguros del día';
+  const insurance = insurancePendingClose(clients, routeId, closureCutoff(route), localDateISO());
+  document.querySelector('#base-insurance-label').textContent = insurance.count ? `Seguros (${insurance.count})` : 'Seguros';
   document.querySelector('#base-insurance').textContent = `+ ${formatMoney(insurance.total)}`;
   document.querySelector('#base-own').textContent = formatMoney(Number(route.base || 0) - insurance.total);
   document.querySelector('#base-breakdown').title = insurance.total
-    ? `La base de ${formatMoney(route.base)} incluye ${formatMoney(insurance.total)} de seguros cobrados hoy`
-    : 'Hoy no se han cobrado seguros en esta ruta';
+    ? `La base de ${formatMoney(route.base)} incluye ${formatMoney(insurance.total)} de seguros cobrados desde el último cierre`
+    : 'No hay seguros cobrados desde el último cierre';
 }
 
 /** Comentario de «Otros gastos» del día: es el mismo que sale en Reportes financieros. */
@@ -315,6 +314,9 @@ export function mount() {
       window.dispatchEvent(new CustomEvent('edgecredit:route-close', { detail: payload }));
       const route = routeSettlements[routeSelect.value] || state.activeSettlement;
       const routeId = routeSelect.value;
+      // Seguros que entran a este cierre: todos los cobrados desde el cierre anterior (también los
+      // de días en que no se cerró la ruta). Se toma antes de anotar este cierre.
+      const insurance = insurancePendingClose(clients, routeId, closureCutoff(route), localDateISO()).total;
 
       // Transferencias que entran a este cierre: también las de días anteriores sin cerrar.
       const transfers = pendingRoutePayments(clients, routeId, route)
@@ -325,8 +327,6 @@ export function mount() {
         snapshot: Object.fromEntries(CLOSURE_FIELDS.map(field => [field, Number(route[field] || 0)]))
       };
       // Libro diario: el día queda guardado con su fecha antes de reiniciar el resumen.
-      const previousClosureTs = route.lastClosure?.date === localDateISO() && route.ledger?.[localDateISO()]?.closed ? Number(route.ledger[localDateISO()].closedTs) : 0;
-      const insurance = insuranceCollectedOn(clients, routeId, localDateISO(), previousClosureTs).total;
       recordClosure(route, localDateISO(), { ...route, insurance, transfers }, Date.parse(payload.submittedAt));
       const reset = resetRouteDay(route, routeId, transfers);
       route.lastClosure.carriedBase = reset.carried;

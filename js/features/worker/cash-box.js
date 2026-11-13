@@ -8,8 +8,8 @@ import { clients, pendingRequests, persistBusinessData, routeDirectory, routeSet
 import { createBaseTransfer, creditDestination } from '../../domain/base-transfer.js';
 import { openCustomModal } from '../../ui/custom-modal.js';
 import { renderPendingRequests } from '../admin/pending.js';
-import { insuranceCollectedOn } from '../../domain/insurance.js';
-import { paymentStamp, pendingRoutePayments, syncRouteCollections } from '../../domain/ledger.js';
+import { insurancePendingClose } from '../../domain/insurance.js';
+import { closureCutoff, paymentStamp, pendingRoutePayments, syncRouteCollections } from '../../domain/ledger.js';
 import { localDateISO } from '../../shared/dates.js';
 import { formatMoney } from '../../shared/format.js';
 import { showToast } from '../../ui/toast.js';
@@ -76,12 +76,12 @@ export function renderWorkerDailyMetrics() {
   document.querySelector('#worker-day-expenses').textContent = formatMoney(route.expenses || 0);
   document.querySelector('#worker-day-other-expenses').textContent = formatMoney(route.otherExpenses || 0);
   document.querySelector('#worker-day-loans').textContent = formatMoney(route.loans || 0);
-  // Seguros cobrados hoy en la ruta: ya están sumados a la base del día (new-client.js).
-  // Tras «Verificar y cerrar ruta» el resumen arranca de cero: solo cuenta lo posterior al cierre.
+  // Seguros cobrados desde el último cierre (también los de días en que no se cerró la ruta):
+  // ya están sumados a la base (new-client.js). Al «Verificar y cerrar ruta» vuelven a cero.
   const closure = todayClosureTs(route);
-  const insurance = insuranceCollectedOn(clients, state.workerRoute, localDateISO(), closure);
+  const insurance = insurancePendingClose(clients, state.workerRoute, closureCutoff(route), localDateISO());
   document.querySelector('#worker-day-insurance').textContent = formatMoney(insurance.total);
-  document.querySelector('#worker-day-insurance-count').textContent = insurance.count ? `${insurance.count} préstamo${insurance.count === 1 ? '' : 's'} entregado${insurance.count === 1 ? '' : 's'} hoy` : 'Sin seguros cobrados hoy';
+  document.querySelector('#worker-day-insurance-count').textContent = insurance.count ? `${insurance.count} préstamo${insurance.count === 1 ? '' : 's'} desde el último cierre` : 'Sin seguros desde el último cierre';
   const baseNote = document.querySelector('#worker-day-base-insurance');
   baseNote.hidden = !insurance.total;
   baseNote.textContent = insurance.total ? `Incluye ${formatMoney(insurance.total)} de seguros` : '';

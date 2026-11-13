@@ -12,8 +12,8 @@ import { renderPortfolioReport } from './portfolio-report.js';
 import { routeSelect } from '../../core/dom.js';
 import { state } from '../../core/state.js';
 import { clients, persistBusinessData } from '../../core/store.js';
-import { liveInsuranceEntries, insuranceCollectedOn } from '../../domain/insurance.js';
-import { LEDGER_MONTHS_KEPT, addCashEntry, cashBoxAt, ledgerCutoff, cutInsurance, dayRecord, daySalary, ensureLedger, insuranceDueAt, insuranceEntries, insurancePeriod, ledgerDifference, cashOutNote, otherExpensesNote, setCashOutNote, setDayField, setOtherExpensesNote, setWeekSalary, undoLastInsuranceCut } from '../../domain/ledger.js';
+import { pendingInsuranceEntries } from '../../domain/insurance.js';
+import { LEDGER_MONTHS_KEPT, addCashEntry, cashBoxAt, closureCutoff, ledgerCutoff, cutInsurance, dayRecord, daySalary, ensureLedger, insuranceDueAt, insuranceEntries, insurancePeriod, ledgerDifference, cashOutNote, otherExpensesNote, setCashOutNote, setDayField, setOtherExpensesNote, setWeekSalary, undoLastInsuranceCut } from '../../domain/ledger.js';
 import { INSURANCE_CUT_TEST_MODE } from '../../core/config.js';
 import { localDateISO } from '../../shared/dates.js';
 import { formatMoney } from '../../shared/format.js';
@@ -48,13 +48,12 @@ const cashInHandOf = (route, dateISO, record) => Number(record.cashDelivered || 
 const shortDate = date => `${String(date.getDate()).padStart(2, '0')}/${String(date.getMonth() + 1).padStart(2, '0')}`;
 const reportRouteId = () => routeSelect.value;
 
-/** Seguros cobrados hoy que aún no entran a un cierre. */
+/** Seguros que aún no entran a un cierre (también los de días anteriores en que no se cerró la ruta). */
 function liveInsurance(routeId, route) {
-  const today = localDateISO();
-  const since = route.lastClosure?.date === today ? Date.parse(route.lastClosure.submittedAt) : 0;
+  const entries = pendingInsuranceEntries(clients, routeId, closureCutoff(route), localDateISO());
   return {
-    total: insuranceCollectedOn(clients, routeId, today, since).total,
-    entries: liveInsuranceEntries(clients, routeId, today, since),
+    total: entries.reduce((sum, entry) => sum + entry.amount, 0),
+    entries: entries.filter(entry => entry.amount > 0),
   };
 }
 
