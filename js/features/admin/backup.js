@@ -18,6 +18,7 @@
 import { backend, backendEnabled, backendErrorMessage } from '../../core/backend.js';
 import { clients, pendingRequests, personnel, routeSettlements, shared } from '../../core/store.js';
 import { state } from '../../core/state.js';
+import { customModalError } from '../../core/dom.js';
 import { openCustomModal } from '../../ui/custom-modal.js';
 import { showToast } from '../../ui/toast.js';
 
@@ -143,7 +144,11 @@ function offerBackup(payload) {
   const name = fileName(now);
   const text = JSON.stringify({ app: 'EdgeCredit', tipo: 'respaldo-completo', version: 1, generado: now.toISOString(), ...payload });
   const file = new File([text], name, { type: 'application/json' });
-  const shareable = canShareFile(file);
+  // Chrome en Android solo deja compartir ciertos tipos (imágenes, PDF, texto, audio, video):
+  // un .json lo rechaza sin abrir el menú. Para compartir se envía el mismo contenido como .txt.
+  const shareName = name.replace(/\.json$/, '.txt');
+  const shareFile = new File([text], shareName, { type: 'text/plain' });
+  const shareable = canShareFile(shareFile);
   const r = payload.resumen;
   openCustomModal({
     title: 'Respaldo listo',
@@ -157,9 +162,13 @@ function offerBackup(payload) {
       showToast(`Respaldo descargado: ${name}`);
     },
     onCancel: shareable ? () => {
-      navigator.share({ files: [file], title: name }).then(
+      customModalError.textContent = '';
+      navigator.share({ files: [shareFile] }).then(
         () => showToast('Respaldo enviado.'),
-        error => { if (error?.name !== 'AbortError') showToast('No se pudo compartir; usa «Descargar».'); },
+        error => {
+          if (error?.name === 'AbortError') return; // el usuario cerró el menú
+          customModalError.textContent = `El celular no permitió compartir el archivo (${error?.name || 'error'}). Usa «Descargar» y súbelo a Drive desde Descargas.`;
+        },
       );
       return false;
     } : null,
