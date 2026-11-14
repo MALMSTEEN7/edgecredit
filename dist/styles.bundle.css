@@ -8909,6 +8909,38 @@ button.evidence-link:active {
   cursor: default;
 }
 
+/* Seguros de la base: se tocan para verlos y modificarlos (admin). */
+button.base-breakdown-insurance {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  padding: 2px 8px;
+  margin: -2px -8px;
+  border: 1px dashed transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  position: relative;
+}
+
+button.base-breakdown-insurance:hover,
+button.base-breakdown-insurance:focus-visible {
+  border-color: var(--line);
+  background: rgba(255,255,255,.03);
+}
+
+.base-insurance-pencil {
+  position: absolute;
+  top: 2px;
+  right: -6px;
+  font-size: 10px;
+  color: var(--muted);
+}
+
 /* ── css/features/admin-reports.css */
 /* features/admin-reports · Reportes financieros y tablas de auditoría. */
 

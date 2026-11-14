@@ -269,6 +269,26 @@ export function openExtraCardModal(sourceId) {
   openLinkedModal(sourceId, 'extra');
 }
 
+/**
+ * Teléfono, dirección, indicaciones y dirección alternativa para renovar u otra cartulina:
+ * los de la cartulina de origen y, si alguno falta, el más reciente que tenga la persona en
+ * cualquiera de sus cartulinas.
+ */
+export function personContact(sourceId) {
+  const source = clients[sourceId] || {};
+  const cards = personCardIds(clients, source.id).reverse(); // de la más reciente a la más antigua
+  const pick = field => {
+    const own = String(source[field] ?? '').trim();
+    if (own) return own;
+    for (const id of cards) {
+      const value = String(clients[id]?.[field] ?? '').trim();
+      if (value) return value;
+    }
+    return '';
+  };
+  return { phone: pick('phone'), address: pick('address'), addressNotes: pick('addressNotes'), altAddress: pick('altAddress') };
+}
+
 function openLinkedModal(sourceId, mode) {
   const source = clients[sourceId];
   if (!source) return;
@@ -277,15 +297,18 @@ function openLinkedModal(sourceId, mode) {
   const routeName = routeSettlements[source.route]?.name || source.route;
   document.querySelector('#new-client-route').textContent = `RUTA ${String(routeName).toLocaleUpperCase('es')}`;
   const fields = newClientForm.elements;
+  // Las cartulinas canceladas que vinieron de los sistemas anteriores no traen teléfono ni
+  // dirección: se toma el dato más reciente de cualquier cartulina de la persona.
+  const contact = personContact(sourceId);
   fields.name.value = source.name;
   fields.idNumber.value = source.id;
-  fields.phone.value = source.phone;
-  fields.address.value = source.address || '';
-  fields.addressNotes.value = source.addressNotes || '';
+  fields.phone.value = contact.phone;
+  fields.address.value = contact.address;
+  fields.addressNotes.value = contact.addressNotes;
   fields.totalDays.value = source.totalDays || '';
   fields.frequency.value = paymentFrequencyDays[source.frequency] ? source.frequency : 'weekly';
   updateSundayPayday();
-  if (source.altAddress) { setAltAddressOpen(true); document.querySelector('#alt-address-input').value = source.altAddress; }
+  if (contact.altAddress) { setAltAddressOpen(true); document.querySelector('#alt-address-input').value = contact.altAddress; }
   if (state.userRole === 'admin') document.querySelector('#admin-interest-percent').value = source.interestPercent ?? 20;
   updateInsurancePreview();
   updateInstallmentsHint();
@@ -359,7 +382,11 @@ function addNewClient(values, photoData = '', insurance, gps = null) {
     created.notesUpdatedAt = source.notesUpdatedAt || null;
     created.notesUpdatedBy = source.notesUpdatedBy || null;
     created.addressHistory = [...(source.addressHistory || [])];
-    if (created.address === source.address) created.location = source.location || null;
+    // Cartulina de la persona que tiene esta misma dirección (la de origen puede no tenerla si
+    // vino sin dirección del sistema anterior): de ella se toma la ubicación.
+    const sameAddressCard = [source, ...personCardIds(clients, source.id).reverse().map(id => clients[id])]
+      .find(card => card && String(card.address || '').trim() === created.address && hasCoordinates(card.location));
+    if (created.address === String(source.address || '').trim() || sameAddressCard) created.location = (sameAddressCard || source).location || null;
     else created.addressHistory.push({ type: 'principal', address: source.address, replacedBy: created.address, location: source.location || null, changedAt, changedBy: by });
     if (created.altAddress === (source.altAddress || '')) created.altLocation = source.altLocation || null;
     else if (source.altAddress) created.addressHistory.push({ type: 'alternativa', address: source.altAddress, replacedBy: created.altAddress || '(eliminada)', location: source.altLocation || null, changedAt, changedBy: by });
@@ -705,7 +732,7 @@ export function mount() {
       // GPS solo del trabajador (está en el domicilio). Una renovación con la misma dirección
       // conserva la ubicación que ya tenía.
       const source = linked ? clients[renewSourceId] : null;
-      const keepsLocation = source && values.address.trim() === (source.address || '') && hasCoordinates(source.location);
+      const keepsLocation = source && personCardIds(clients, source.id).map(id => clients[id]).concat(source).some(card => card && String(card.address || '').trim() === values.address.trim() && hasCoordinates(card.location));
       let gps = null;
       if (state.userRole === 'worker' && !keepsLocation) {
         submit.disabled = true;

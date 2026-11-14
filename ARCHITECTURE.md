@@ -314,8 +314,17 @@ Solo se cuadra el mes en curso, con la hora actual. Para pruebas existe `INSURAN
   - Respaldo incremental cada 60–90 s, solo con la pestaña visible: filas con `updated_at > cursor − 2 min`
     y borrados de `deleted_rows`. Descarga completa solo al reconectar el tiempo real, al volver a la
     pestaña tras más de 10 min oculta, con el evento `online` y como seguro cada 30 min.
-  - Nunca pisa un registro con cambios locales sin enviar: se conserva el local y se envía (gana la última
-    escritura). Una descarga completa vuelve a aplicar lo pendiente sobre lo descargado.
+  - **Envío condicionado** (rutas, clientes y estado de ruta): cada equipo recuerda el `updated_at` de la versión
+    que conoce y guarda con `update … where updated_at = <conocida>`. Si otro equipo lo cambió antes (0 filas),
+    trae la versión del servidor, combina y reintenta. Antes el último en guardar reemplazaba el registro completo
+    y borraba lo del otro (préstamos que no salían en «Préstamos del día», abonos perdidos, valores que «cambiaban solos»).
+  - **Combinación de tres vías** (`mergeThreeWay`, base = última versión común):
+    - Lo que cambió un solo equipo se toma.
+    - Montos acumulados (`base`, `loans`, `expenses`, `balance`…) que cambiaron los dos: se suman las dos diferencias.
+    - Listas de registros (`loansNew`, `payments`, `cardsCancelled`…): se juntan por identidad (`id`, `clientId`, `at`, `ts`).
+    - Lo demás: gana el equipo que guarda.
+  - Una descarga completa trabaja sobre una **copia** de lo pendiente y lo combina con lo descargado. Antes la
+    descarga sobrescribía la ruta del trabajador antes de reaplicarla y se perdían los préstamos hechos sin internet.
 - Sesión (`features/auth/session.js`): al abrir o recargar la app restaura la sesión guardada de Supabase si
   ya pasó la verificación en dos pasos (aal2, o un dispositivo recordado) y el perfil sigue activo y en
   horario. Se cierra sola tras `app_settings.session.idleHours` horas sin usar la app (Configuración, 12 por

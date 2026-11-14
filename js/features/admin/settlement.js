@@ -6,11 +6,11 @@ import { adminFeedback, routeSelect, settlementInputs } from '../../core/dom.js'
 import { state } from '../../core/state.js';
 import { clients, pendingRequests, persistBusinessData, routeSettlements } from '../../core/store.js';
 import { carriedBase, closureCutoff, mondayBaseFor, otherExpensesNote, paymentStamp, pendingRoutePayments, recordClosure, setOtherExpensesNote, syncRouteCollections } from '../../domain/ledger.js';
-import { insurancePendingClose } from '../../domain/insurance.js';
+import { insurancePendingClose, pendingInsuranceEntries, setInsuranceEntryAmount } from '../../domain/insurance.js';
 import { baseTransfersSince } from '../../domain/base-transfer.js';
 import { cardLabel } from '../../domain/person-cards.js';
 import { localDateISO } from '../../shared/dates.js';
-import { formatMoney, routeKey } from '../../shared/format.js';
+import { formatDate, formatMoney, routeKey } from '../../shared/format.js';
 import { openCustomModal } from '../../ui/custom-modal.js';
 import { showToast } from '../../ui/toast.js';
 import { renderAdminRoute } from './admin-shell.js';
@@ -225,6 +225,44 @@ export function renderBaseBreakdown(routeId) {
     : 'No hay seguros cobrados desde el último cierre';
 }
 
+/**
+ * Seguros cobrados desde el último cierre (los que suma la base): el admin puede cambiar el
+ * valor de cada uno. La diferencia se ajusta en la base del día y en el acumulado de seguros.
+ */
+function openInsuranceEditor() {
+  const routeId = routeSelect.value;
+  const route = routeSettlements[routeId];
+  if (!route) return;
+  const entries = pendingInsuranceEntries(clients, routeId, closureCutoff(route), localDateISO());
+  if (!entries.length) { showToast('No hay seguros cobrados desde el último cierre.'); return; }
+  openCustomModal({
+    title: `Seguros · ${route.name}`,
+    description: `Cobrados desde el último cierre (${formatMoney(entries.reduce((sum, entry) => sum + entry.amount, 0))}). Cambia el valor que necesites: la base del día se ajusta con la diferencia.`,
+    fields: entries.map((entry, index) => ({
+      name: `insurance${index}`, type: 'number', money: true, thousands: true, min: 0, step: 1, value: entry.amount, required: true,
+      label: `${clients[entry.clientId]?.name || entry.clientId} · ${entry.kind === 'retanqueo' ? 'retanqueo' : 'préstamo'} de ${formatDate(entry.date)}`,
+    })),
+    submitLabel: 'Guardar seguros',
+    onSubmit: values => {
+      let delta = 0;
+      const changed = new Set();
+      entries.forEach((entry, index) => {
+        const client = clients[entry.clientId];
+        if (!client) return;
+        const diff = setInsuranceEntryAmount(client, entry, values[`insurance${index}`]);
+        if (diff) { delta += diff; changed.add(entry.clientId); }
+      });
+      if (!changed.size) return;
+      route.base = Number(route.base || 0) + delta;
+      route.monthlyInsurance = Math.max(0, Number(route.monthlyInsurance || 0) + delta);
+      persistBusinessData();
+      renderClientsBulk([...changed]);
+      renderAdminRoute(routeId);
+      showToast(`Seguros actualizados: la base ${delta >= 0 ? 'sube' : 'baja'} ${formatMoney(Math.abs(delta))}.`);
+    },
+  });
+}
+
 /** Comentario de «Otros gastos» del día: es el mismo que sale en Reportes financieros. */
 export function renderSettlementOtherNote(routeId) {
   const route = routeSettlements[routeId];
@@ -282,6 +320,7 @@ export function recalculateSettlement() {
 export function mount() {
   document.querySelector('#monday-base-save').addEventListener('click', saveMondayBase);
   document.querySelector('#settlement-other-note').addEventListener('click', openSettlementOtherNote);
+  document.querySelector('#base-insurance-edit').addEventListener('click', openInsuranceEditor);
   // El cuadre se recalcula con cada número; se guarda (y se sube) cuando se deja de escribir.
   let saveTimer = null;
   settlementInputs.forEach(input => input.addEventListener('input', () => {

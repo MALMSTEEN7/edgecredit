@@ -24,7 +24,15 @@
   };
   const save = db => localStorage.setItem(DB_KEY, JSON.stringify(db));
   const uuid = () => crypto.randomUUID();
-  const serverNow = () => new Date(Date.now() + control.skewMs).toISOString();
+  // Como Postgres (microsegundos): dos escrituras seguidas nunca tienen la misma hora.
+  let lastStamp = '';
+  let stampSeq = 0;
+  const serverNow = () => {
+    const base = new Date(Date.now() + control.skewMs).toISOString().replace('Z', '');
+    stampSeq = base === lastStamp ? stampSeq + 1 : 0;
+    lastStamp = base;
+    return `${base}${String(stampSeq).padStart(3, '0')}Z`;
+  };
   const offlineError = () => ({ data: null, error: { message: 'TypeError: Failed to fetch' } });
   const emit = change => { bus.postMessage(change); setTimeout(() => listeners.forEach(fn => fn(change)), 10); };
   bus.onmessage = event => listeners.forEach(fn => fn(event.data));
@@ -69,10 +77,10 @@
 
     function query(table) {
       const filters = [];
-      let action = 'select'; let payload = null; let opts = {}; let single = null;
+      let action = 'select'; let payload = null; let opts = {}; let single = null; let returning = false;
       let orderCol = null; let orderAsc = true; let rangeFrom = 0; let rangeTo = Infinity;
       const builder = {
-        select() { return builder; },
+        select() { if (action !== 'select') returning = true; return builder; },
         eq(col, val) { filters.push(r => r[col] === val); return builder; },
         gt(col, val) { filters.push(r => String(r[col] || '') > String(val)); return builder; },
         order(col, o) { orderCol = col; orderAsc = o?.ascending !== false; return builder; },
@@ -110,23 +118,27 @@
           // Igual que el servidor: solo el admin modifica una solicitud que ya existe.
           const exists = r => rows.some(x => x[key] === r[key]);
           if (table === 'pending_requests' && !isAdmin(db) && !opts.ignoreDuplicates && list.some(exists)) return rlsError;
+          const written = [];
           list.forEach(r => {
             const index = rows.findIndex(x => x[key] === r[key]);
             if (index >= 0 && opts.ignoreDuplicates) return; // ON CONFLICT DO NOTHING
             if (index >= 0 && !writable(db, table, rows[index])) return;
             const row = { ...(index >= 0 ? rows[index] : {}), ...structuredClone(r), updated_at: serverNow() };
             if (index >= 0) rows[index] = row; else rows.push(row);
+            written.push(structuredClone(row));
             emit({ table, eventType: index >= 0 ? 'UPDATE' : 'INSERT', new: row });
           });
-          save(db); return { data: null, error: null };
+          save(db); return { data: returning ? written : null, error: null };
         }
         if (action === 'update') {
+          const written = [];
           rows.filter(r => match(r) && visible(db, table, r)).forEach(r => {
             if (!writable(db, table, r)) return;
             Object.assign(r, structuredClone(payload), { updated_at: serverNow() });
+            written.push(structuredClone(r));
             emit({ table, eventType: 'UPDATE', new: r });
           });
-          save(db); return { data: null, error: null };
+          save(db); return { data: returning ? written : null, error: null };
         }
         if (action === 'delete') {
           const removed = rows.filter(r => match(r) && writable(db, table, r) && (isAdmin(db)));
