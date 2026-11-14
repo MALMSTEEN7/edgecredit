@@ -6,7 +6,7 @@ import { adminFeedback, routeSelect, settlementInputs } from '../../core/dom.js'
 import { state } from '../../core/state.js';
 import { clients, pendingRequests, persistBusinessData, routeSettlements } from '../../core/store.js';
 import { carriedBase, closureCutoff, mondayBaseFor, otherExpensesNote, paymentStamp, pendingRoutePayments, recordClosure, setOtherExpensesNote, syncRouteCollections } from '../../domain/ledger.js';
-import { insurancePendingClose, pendingInsuranceEntries, setInsuranceEntryAmount } from '../../domain/insurance.js';
+import { insurancePendingClose, pendingInsuranceEntries } from '../../domain/insurance.js';
 import { baseTransfersSince } from '../../domain/base-transfer.js';
 import { cardLabel } from '../../domain/person-cards.js';
 import { localDateISO } from '../../shared/dates.js';
@@ -216,7 +216,7 @@ function saveMondayBase() {
 export function renderBaseBreakdown(routeId) {
   const route = routeSettlements[routeId];
   if (!route) return;
-  const insurance = insurancePendingClose(clients, routeId, closureCutoff(route), localDateISO());
+  const insurance = insurancePendingClose(clients, routeId, closureCutoff(route), localDateISO(), route);
   document.querySelector('#base-insurance-label').textContent = insurance.count ? `Seguros (${insurance.count})` : 'Seguros';
   document.querySelector('#base-insurance').textContent = `+ ${formatMoney(insurance.total)}`;
   document.querySelector('#base-own').textContent = formatMoney(Number(route.base || 0) - insurance.total);
@@ -226,39 +226,56 @@ export function renderBaseBreakdown(routeId) {
 }
 
 /**
- * Seguros cobrados desde el último cierre (los que suma la base): el admin puede cambiar el
- * valor de cada uno. La diferencia se ajusta en la base del día y en el acumulado de seguros.
+ * Seguros adicionales del cobro (cuadre de caja): el admin suma seguros aparte de los de cada
+ * préstamo, con un comentario. No tocan ninguna cartulina. Entran a la base del día, al cierre y
+ * a los reportes de seguros. Aquí se ven los de los préstamos (solo lectura) y se agregan,
+ * corrigen o quitan (valor 0) los adicionales desde el último cierre.
  */
 function openInsuranceEditor() {
   const routeId = routeSelect.value;
   const route = routeSettlements[routeId];
   if (!route) return;
-  const entries = pendingInsuranceEntries(clients, routeId, closureCutoff(route), localDateISO());
-  if (!entries.length) { showToast('No hay seguros cobrados desde el último cierre.'); return; }
+  const cutoff = closureCutoff(route);
+  const today = localDateISO();
+  const all = pendingInsuranceEntries(clients, routeId, cutoff, today, route);
+  const loanTotal = all.filter(entry => entry.kind !== 'adicional').reduce((sum, entry) => sum + entry.amount, 0);
+  const loanCount = all.filter(entry => entry.kind !== 'adicional').length;
+  const extras = all.filter(entry => entry.kind === 'adicional');
   openCustomModal({
     title: `Seguros · ${route.name}`,
-    description: `Cobrados desde el último cierre (${formatMoney(entries.reduce((sum, entry) => sum + entry.amount, 0))}). Cambia el valor que necesites: la base del día se ajusta con la diferencia.`,
-    fields: entries.map((entry, index) => ({
-      name: `insurance${index}`, type: 'number', money: true, thousands: true, min: 0, step: 1, value: entry.amount, required: true,
-      label: `${clients[entry.clientId]?.name || entry.clientId} · ${entry.kind === 'retanqueo' ? 'retanqueo' : 'préstamo'} de ${formatDate(entry.date)}`,
-    })),
+    description: `Seguros de los préstamos desde el último cierre: ${formatMoney(loanTotal)} (${loanCount}). Aquí puedes sumar seguros adicionales, aparte de los de cada préstamo; entran a la base del día y a los reportes.`,
+    fields: [
+      ...extras.map((entry, index) => ({
+        name: `extra${index}`, type: 'number', money: true, thousands: true, min: 0, step: 1, value: entry.amount, required: true,
+        label: `Adicional de ${formatDate(entry.date)}${entry.note ? ` · ${entry.note}` : ''} (0 = quitar)`,
+      })),
+      { name: 'newAmount', label: 'Nuevo seguro adicional ($)', type: 'number', money: true, thousands: true, min: 0, step: 1, value: '', placeholder: 'Ej. 200' },
+      { name: 'newNote', label: 'Comentario (opcional)', type: 'text', value: '', placeholder: 'Ej. Seguros cobrados aparte' },
+    ],
     submitLabel: 'Guardar seguros',
     onSubmit: values => {
+      route.extraInsurance ||= [];
       let delta = 0;
-      const changed = new Set();
-      entries.forEach((entry, index) => {
-        const client = clients[entry.clientId];
-        if (!client) return;
-        const diff = setInsuranceEntryAmount(client, entry, values[`insurance${index}`]);
-        if (diff) { delta += diff; changed.add(entry.clientId); }
+      extras.forEach((entry, index) => {
+        const stored = route.extraInsurance.find(item => item.id === entry.id);
+        if (!stored) return;
+        const amount = Math.max(0, Math.round(Number(values[`extra${index}`]) || 0));
+        delta += amount - (Number(stored.amount) || 0);
+        stored.amount = amount;
       });
-      if (!changed.size) return;
+      route.extraInsurance = route.extraInsurance.filter(item => Number(item.amount) > 0 || item.date <= (cutoff?.date || ''));
+      const added = Math.max(0, Math.round(Number(values.newAmount) || 0));
+      if (added > 0) {
+        const now = Date.now();
+        route.extraInsurance.push({ id: `extra-${now}-${Math.random().toString(36).slice(2, 6)}`, date: today, ts: now, amount: added, note: String(values.newNote || '').trim(), at: new Date(now).toISOString(), by: 'Administrador' });
+        delta += added;
+      }
+      if (!delta && !added) return;
       route.base = Number(route.base || 0) + delta;
       route.monthlyInsurance = Math.max(0, Number(route.monthlyInsurance || 0) + delta);
       persistBusinessData();
-      renderClientsBulk([...changed]);
       renderAdminRoute(routeId);
-      showToast(`Seguros actualizados: la base ${delta >= 0 ? 'sube' : 'baja'} ${formatMoney(Math.abs(delta))}.`);
+      showToast(delta >= 0 ? `Seguros adicionales: la base sube ${formatMoney(delta)}.` : `Seguros adicionales: la base baja ${formatMoney(-delta)}.`);
     },
   });
 }
@@ -355,7 +372,7 @@ export function mount() {
       const routeId = routeSelect.value;
       // Seguros que entran a este cierre: todos los cobrados desde el cierre anterior (también los
       // de días en que no se cerró la ruta). Se toma antes de anotar este cierre.
-      const insurance = insurancePendingClose(clients, routeId, closureCutoff(route), localDateISO()).total;
+      const insurance = insurancePendingClose(clients, routeId, closureCutoff(route), localDateISO(), route).total;
 
       // Transferencias que entran a este cierre: también las de días anteriores sin cerrar.
       const transfers = pendingRoutePayments(clients, routeId, route)
