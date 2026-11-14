@@ -40,6 +40,7 @@ const RECONNECT_MAX_MS = 60 * 1000;
 
 let syncSession = null;      // { userId, role, routeId, routeName }
 let lastSynced = new Map();  // `${tabla}:${clave}` → JSON enviado/recibido
+let versions = new Map();    // `${tabla}:${clave}` → updated_at del servidor de esa versión (envío condicionado)
 let loaded = false;          // ¿ya hubo una descarga completa en esta sesión?
 let cursor = null;           // hora del servidor (ISO) de la última descarga
 let lastFullSync = 0;
@@ -191,7 +192,7 @@ function pendingItems() {
     list.forEach(row => {
       const id = rowId(table, row[keyName]);
       present.add(id);
-      if (lastSynced.get(id) !== stable(row)) pending.push({ table, op: 'upsert', row, id });
+      if (lastSynced.get(id) !== stable(row)) pending.push({ table, op: 'upsert', row, id, base: lastSynced.get(id) || null });
     });
     // Borrados: solo el admin elimina clientes, rutas (y su estado) y solicitudes.
     if (syncSession.role === 'admin' && DELETABLE.includes(table)) {
@@ -248,7 +249,13 @@ async function sendPending(pending) {
       : db.from(table).upsert(items.map(item => item.row), { onConflict: TABLE_KEYS[table], ignoreDuplicates: insertOnly(table) }));
     for (const table of Object.keys(TABLE_KEYS)) {
       const upserts = pending.filter(item => item.table === table && item.op === 'upsert');
-      for (let i = 0; i < upserts.length; i += 50) {
+      if (MERGEABLE.includes(table)) {
+        // Rutas, clientes y estado de ruta: se guardan solo si nadie los cambió desde la versión
+        // que conoce este equipo (si no, se combinan y se reintenta). Antes el último en guardar
+        // reemplazaba el registro completo y borraba lo del otro equipo.
+        failed.push(...(await saveMergeable(db, table, upserts)));
+      }
+      for (let i = 0; i < upserts.length && !MERGEABLE.includes(table); i += 50) {
         const chunk = upserts.slice(i, i + 50);
         const { error } = await send(table, chunk);
         if (!error) { chunk.forEach(item => lastSynced.set(item.id, stable(item.row))); continue; }
@@ -276,6 +283,67 @@ async function sendPending(pending) {
     reportError(error);
     scheduleFlush(15000);
   }
+}
+
+const CAS_RETRIES = 4;
+const CAS_PARALLEL = 6;
+
+/** Guarda un registro existente si sigue en la versión conocida; si no, combina y reintenta. */
+async function saveOne(db, table, item) {
+  const keyName = TABLE_KEYS[table];
+  const key = item.row[keyName];
+  let row = item.row;
+  for (let attempt = 0; attempt < CAS_RETRIES; attempt += 1) {
+    const known = versions.get(item.id);
+    const { [keyName]: _key, ...fields } = row;
+    const result = known
+      ? await db.from(table).update(fields).eq(keyName, key).eq('updated_at', known).select(`${keyName},updated_at`)
+      : await db.from(table).upsert([row], { onConflict: keyName, ignoreDuplicates: true }).select(`${keyName},updated_at`);
+    if (result.error) { reportError(result.error); return false; }
+    const saved = (result.data || [])[0];
+    if (saved) {
+      lastSynced.set(item.id, stable(row));
+      versions.set(item.id, String(saved.updated_at));
+      return true;
+    }
+    // Otro equipo lo cambió (o lo creó) primero: se trae su versión, se combina con lo de aquí y se reintenta.
+    const current = await db.from(table).select('*').eq(keyName, key).maybeSingle();
+    if (current.error) { reportError(current.error); return false; }
+    if (!current.data) { versions.delete(item.id); continue; } // lo borraron: se vuelve a crear
+    mergeIntoLocal(table, key, current.data);
+    if (table === 'clients') pendingChanges.clients.add(key); else pendingChanges.full = true;
+    queueRender();
+    const fresh = localRow(table, key);
+    if (!fresh) return true;
+    row = fresh;
+    if (lastSynced.get(item.id) === stable(row)) return true; // la combinación quedó igual al servidor
+  }
+  return false;
+}
+
+/** Envío condicionado de un grupo: los nuevos en lotes; los existentes uno por uno (en paralelo). */
+async function saveMergeable(db, table, items) {
+  const failed = [];
+  const keyName = TABLE_KEYS[table];
+  const fresh = items.filter(item => !versions.has(item.id));
+  const known = items.filter(item => versions.has(item.id));
+  for (let i = 0; i < fresh.length; i += 50) {
+    const chunk = fresh.slice(i, i + 50);
+    const { data, error } = await db.from(table).upsert(chunk.map(item => item.row), { onConflict: keyName, ignoreDuplicates: true }).select(`${keyName},updated_at`);
+    if (error) { known.push(...chunk); continue; } // se intentan uno por uno
+    const inserted = new Map((data || []).map(row => [String(row[keyName]), row]));
+    chunk.forEach(item => {
+      const row = inserted.get(String(item.row[keyName]));
+      if (row) { lastSynced.set(item.id, stable(item.row)); versions.set(item.id, String(row.updated_at)); }
+      else known.push(item); // ya existía en el servidor: se combina
+    });
+  }
+  for (let i = 0; i < known.length; i += CAS_PARALLEL) {
+    const group = known.slice(i, i + CAS_PARALLEL);
+    const results = await Promise.all(group.map(item => saveOne(db, table, item).catch(() => false)));
+    results.forEach((ok, index) => { if (!ok) failed.push(group[index]); });
+  }
+  return failed;
 }
 
 function reportError(error) {
@@ -341,8 +409,10 @@ function normalizeRow(table, row) {
 function applyRow(table, row, removed = false) {
   const keyName = TABLE_KEYS[table];
   const id = rowId(table, row[keyName]);
+  if (!removed && row.updated_at) versions.set(id, String(row.updated_at));
   if (removed) {
     lastSynced.delete(id);
+    versions.delete(id);
     if (table === 'clients') delete clients[row.id];
     if (table === 'pending_requests') { const index = pendingRequests.findIndex(item => item.id === row.id); if (index >= 0) pendingRequests.splice(index, 1); }
     if (table === 'routes' && syncSession?.role === 'admin') delete routeSettlements[row.id];
@@ -395,11 +465,54 @@ function rememberSessionSettings() {
 
 const isPlainObject = value => Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 
+/** Montos que se acumulan (préstamos, cobro, gastos, saldo…): si cambian en los dos equipos se suman las diferencias. */
+const DELTA_KEYS = new Set(['base', 'baseBank', 'loans', 'collections', 'expenses', 'otherExpenses', 'cashDelivered', 'monthlyInsurance',
+  'weeklyCollections', 'weeklyCardCount', 'balance', 'paid', 'totalPaidAmount', 'insurance', 'cashIn', 'cashOut', 'transfers']);
+
+/** Identidad de un elemento de lista (préstamos del día, abonos, cancelaciones…). */
+const IDENTITY_KEYS = ['id', 'clientId', 'at', 'ts'];
+function itemIdentity(item) {
+  for (const key of IDENTITY_KEYS) if (item[key] !== undefined && item[key] !== null && item[key] !== '') return `${key}:${item[key]}`;
+  return `json:${canonical(item)}`;
+}
+
+/**
+ * Listas de registros (objetos): se juntan los agregados de los dos equipos, se respetan los
+ * borrados y, si un elemento lo editó un solo equipo, queda esa edición. Listas simples
+ * (orden de la ruta, textos) o con elementos repetidos: gana lo de aquí, como antes.
+ */
+function mergeArrays(base, local, remote) {
+  const baseList = Array.isArray(base) ? base : [];
+  if (![...local, ...remote, ...baseList].every(isPlainObject)) return local;
+  const index = list => {
+    const map = new Map();
+    for (const item of list) { const key = itemIdentity(item); if (map.has(key)) return null; map.set(key, item); }
+    return map;
+  };
+  const b = index(baseList), l = index(local), r = index(remote);
+  if (!b || !l || !r) return local;
+  const same = (x, y) => canonical(x) === canonical(y);
+  const out = [];
+  remote.forEach(item => {
+    const key = itemIdentity(item);
+    if (l.has(key)) out.push(b.has(key) && same(l.get(key), b.get(key)) ? item : l.get(key));
+    else if (!b.has(key) || !same(item, b.get(key))) out.push(item); // nuevo allá (o borrado aquí pero editado allá)
+  });
+  local.forEach((item, position) => {
+    const key = itemIdentity(item);
+    if (r.has(key)) return;
+    // Agregado aquí (o borrado allá pero editado aquí): va en su misma posición.
+    if (!b.has(key) || !same(item, b.get(key))) out.splice(Math.min(position, out.length), 0, item);
+  });
+  return out;
+}
+
 /**
  * Combinación de tres vías: `base` es la última versión que conocían los dos equipos. Lo que
- * solo cambió en el otro equipo se toma; lo que solo cambió aquí se conserva; si los dos
- * cambiaron el mismo valor gana el de aquí. Baja `depth` niveles (en las rutas: el libro
- * diario se combina día por día y cada día campo por campo).
+ * solo cambió en el otro equipo se toma; lo que solo cambió aquí se conserva. Si los dos
+ * cambiaron lo mismo: montos → se suman las dos diferencias (préstamo aquí + préstamo allá);
+ * listas de registros → se juntan (mergeArrays); objetos → campo por campo hasta `depth`
+ * niveles (en las rutas: el libro diario día por día); lo demás → gana lo de aquí.
  */
 function mergeThreeWay(base, local, remote, depth) {
   const out = {};
@@ -409,6 +522,8 @@ function mergeThreeWay(base, local, remote, depth) {
     let value;
     if (ls === bs) value = r;                      // aquí no cambió: lo del otro equipo
     else if (rs === bs || rs === ls) value = l;    // allá no cambió (o es lo mismo): lo de aquí
+    else if (DELTA_KEYS.has(key) && typeof b === 'number' && typeof l === 'number' && typeof r === 'number') value = l + (r - b);
+    else if (Array.isArray(l) && Array.isArray(r)) value = mergeArrays(b, l, r);
     else if (depth > 0 && isPlainObject(l) && isPlainObject(r)) value = mergeThreeWay(isPlainObject(b) ? b : {}, l, r, depth - 1);
     else value = l;                                // los dos cambiaron lo mismo: gana lo de aquí
     if (value !== undefined) out[key] = value;
@@ -430,7 +545,8 @@ function mergeIntoLocal(table, key, row) {
   const local = localRow(table, key);
   let base;
   try { base = JSON.parse(lastSynced.get(id) || 'null')?.data; } catch { base = null; }
-  if (!local || !isPlainObject(base) || !isPlainObject(row.data)) return false;
+  if (!local || !isPlainObject(row.data)) return false;
+  if (!isPlainObject(base)) base = {}; // sin versión común: se junta todo y en lo distinto gana lo de aquí
   const merged = mergeThreeWay(base, local.data, row.data, 2);
   applyRow(table, { ...row, data: merged });
   // Lo conocido pasa a ser la versión del servidor: lo que la combinación conserva de aquí
@@ -451,7 +567,10 @@ function receiveRow(table, row, removed = false) {
   if (table === 'profiles' && syncSession.role === 'worker' && row.user_id !== syncSession.userId) return false;
   const id = rowId(table, key);
   // Eco de lo propio (o sin cambios): no se aplica ni se repinta la pantalla.
-  if (!removed && sameAsKnown(id, normalizeRow(table, row))) return false;
+  if (!removed && sameAsKnown(id, normalizeRow(table, row))) {
+    if (row.updated_at) versions.set(id, String(row.updated_at));
+    return false;
+  }
   if (hasUnsentChanges(table, key)) {
     const merged = !removed && mergeIntoLocal(table, key, row);
     scheduleFlush(100);
@@ -550,24 +669,33 @@ async function downloadAll() {
   if (failure) throw failure.error;
   if (!syncSession) return;
   // Desde aquí todo es síncrono: no se cuela ningún cambio entre la foto local y la carga.
-  const pending = loaded ? pendingItems() : readOutbox();
+  // Copia independiente: las filas pendientes apuntan a los mismos objetos de la app, y la
+  // descarga reemplaza el contenido de la ruta del trabajador (replaceObject). Sin copia, los
+  // cambios hechos sin internet (p. ej. el préstamo en «Préstamos del día») se perdían aquí.
+  const pending = JSON.parse(JSON.stringify(loaded ? pendingItems() : readOutbox()));
   Object.keys(clients).forEach(key => delete clients[key]);
   pendingRequests.splice(0, pendingRequests.length);
   const previousWorkers = syncSession.role === 'admin' ? personnel.splice(0, personnel.length) : [];
   // El admin ve exactamente las rutas del servidor (nada de rutas locales sobrantes).
   if (syncSession.role === 'admin') Object.keys(routeSettlements).forEach(key => delete routeSettlements[key]);
   if (syncSession.role === 'worker') Object.keys(routeSettlements).filter(key => key !== syncSession.routeId).forEach(key => delete routeSettlements[key]);
+  const previousSynced = lastSynced;
   lastSynced = new Map();
+  versions = new Map();
   results.forEach(result => (result.data || []).forEach(row => applyRow(result.table, row)));
   if (syncSession.role === 'worker' && !routeSettlements[syncSession.routeId]) routeSettlements[syncSession.routeId] = emptyRoute(syncSession.routeName || syncSession.routeId);
-  restorePending(pending, previousWorkers);
+  restorePending(pending, previousWorkers, previousSynced);
   cursor = stamp;
   lastFullSync = Date.now();
   loaded = true;
 }
 
-/** Vuelve a aplicar lo que estaba sin enviar (gana lo local) para que el próximo envío lo suba. */
-function restorePending(pending, previousWorkers = []) {
+/**
+ * Vuelve a aplicar lo que estaba sin enviar para que el próximo envío lo suba. Rutas, clientes
+ * y estado de ruta se combinan con lo descargado (base: la versión que se conocía antes); el
+ * resto gana lo local.
+ */
+function restorePending(pending, previousWorkers = [], previousSynced = new Map()) {
   pending.forEach(item => {
     if (!TABLE_KEYS[item.table]) return;
     if (item.op === 'delete') {
@@ -581,6 +709,15 @@ function restorePending(pending, previousWorkers = []) {
       if (!base) return;
       const worker = { ...base, ...item.row.data, id: item.row.user_id, accessEnabled: item.row.access_enabled !== false };
       if (index >= 0) replaceObject(personnel[index], worker); else personnel.push(worker);
+    } else if (MERGEABLE.includes(item.table) && lastSynced.has(item.id)) {
+      // Lo descargado es la versión del servidor; se combina con lo pendiente (base conocida antes).
+      const downloaded = JSON.parse(lastSynced.get(item.id));
+      let base = item.base ?? previousSynced.get(item.id) ?? null;
+      try { base = base ? JSON.parse(base)?.data : null; } catch { base = null; }
+      const merged = mergeThreeWay(isPlainObject(base) ? base : {}, item.row.data, downloaded.data, 2);
+      applyRow(item.table, { ...item.row, data: merged });
+      lastSynced.set(item.id, stable(downloaded));
+      return;
     } else applyRow(item.table, item.row);
     lastSynced.delete(item.id);
   });

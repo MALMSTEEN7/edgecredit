@@ -58,10 +58,10 @@ function collectedTs(client, clientId) {
 function allInsuranceEntriesOf(client, clientId) {
   const entries = [];
   if (client.insuranceCollectedAt && !client.importedFrom) {
-    entries.push({ date: client.insuranceCollectedAt, ts: collectedTs(client, clientId) || Date.parse(`${client.insuranceCollectedAt}T12:00:00`), amount: Number(client.insuranceAmount) || 0 });
+    entries.push({ clientId, kind: 'alta', date: client.insuranceCollectedAt, ts: collectedTs(client, clientId) || Date.parse(`${client.insuranceCollectedAt}T12:00:00`), amount: Number(client.insuranceAmount) || 0 });
   }
-  (client.extraInsurance || []).forEach(extra => {
-    if (extra.date && Number(extra.amount) > 0) entries.push({ date: extra.date, ts: Number(extra.ts) || Date.parse(`${extra.date}T12:00:00`), amount: Number(extra.amount) });
+  (client.extraInsurance || []).forEach((extra, index) => {
+    if (extra.date && Number(extra.amount) > 0) entries.push({ clientId, kind: 'retanqueo', index, date: extra.date, ts: Number(extra.ts) || Date.parse(`${extra.date}T12:00:00`), amount: Number(extra.amount) });
   });
   return entries;
 }
@@ -85,4 +85,26 @@ export function pendingInsuranceEntries(clients, routeId, cutoff, today) {
 export function insurancePendingClose(clients, routeId, cutoff, today) {
   return pendingInsuranceEntries(clients, routeId, cutoff, today)
     .reduce((sum, entry) => ({ total: sum.total + entry.amount, count: sum.count + 1 }), { total: 0, count: 0 });
+}
+
+/**
+ * El admin corrige el valor de un seguro ya cobrado (alta o retanqueo). Devuelve la diferencia
+ * (nuevo − anterior) para ajustar la base y el acumulado del cobro, o 0 si no cambió.
+ */
+export function setInsuranceEntryAmount(client, entry, amount) {
+  const value = Math.max(0, Math.round(Number(amount) || 0));
+  if (entry.kind === 'retanqueo') {
+    const extra = client.extraInsurance?.[entry.index];
+    if (!extra) return 0;
+    const delta = value - (Number(extra.amount) || 0);
+    if (delta) { extra.amount = value; extra.adjustedByAdmin = new Date().toISOString(); }
+    return delta;
+  }
+  const delta = value - (Number(client.insuranceAmount) || 0);
+  if (delta) {
+    client.insuranceAmount = value;
+    client.insuranceCustom = true;
+    client.insuranceReason = 'Ajustado por el administrador';
+  }
+  return delta;
 }
