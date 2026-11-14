@@ -72,39 +72,30 @@ function allInsuranceEntriesOf(client, clientId) {
  * que la ruta no se cerró (rutas que se pasan un día de por medio). Se van sumando hasta que se
  * guarda el cobro; ahí vuelven a cero. Sin ningún cierre, solo cuentan los de hoy.
  */
-export function pendingInsuranceEntries(clients, routeId, cutoff, today) {
+export function pendingInsuranceEntries(clients, routeId, cutoff, today, route = null) {
+  const pending = entry => entry.date <= today && (cutoff
+    ? entry.date > cutoff.date || (entry.date === cutoff.date && Boolean(cutoff.ts) && entry.ts > cutoff.ts)
+    : entry.date === today);
   return Object.entries(clients)
     .filter(([, client]) => client && client.route === routeId)
     .flatMap(([clientId, client]) => allInsuranceEntriesOf(client, clientId))
-    .filter(entry => entry.date <= today && (cutoff
-      ? entry.date > cutoff.date || (entry.date === cutoff.date && Boolean(cutoff.ts) && entry.ts > cutoff.ts)
-      : entry.date === today));
-}
-
-/** Total y cantidad de los seguros pendientes de cierre (ver pendingInsuranceEntries). */
-export function insurancePendingClose(clients, routeId, cutoff, today) {
-  return pendingInsuranceEntries(clients, routeId, cutoff, today)
-    .reduce((sum, entry) => ({ total: sum.total + entry.amount, count: sum.count + 1 }), { total: 0, count: 0 });
+    .concat(routeExtraInsuranceEntries(route))
+    .filter(pending);
 }
 
 /**
- * El admin corrige el valor de un seguro ya cobrado (alta o retanqueo). Devuelve la diferencia
- * (nuevo − anterior) para ajustar la base y el acumulado del cobro, o 0 si no cambió.
+ * Seguros adicionales del cobro: los registra el admin en el cuadre de caja, aparte de los
+ * seguros de cada préstamo (no pertenecen a ningún cliente). Suman a la base y a los reportes.
  */
-export function setInsuranceEntryAmount(client, entry, amount) {
-  const value = Math.max(0, Math.round(Number(amount) || 0));
-  if (entry.kind === 'retanqueo') {
-    const extra = client.extraInsurance?.[entry.index];
-    if (!extra) return 0;
-    const delta = value - (Number(extra.amount) || 0);
-    if (delta) { extra.amount = value; extra.adjustedByAdmin = new Date().toISOString(); }
-    return delta;
-  }
-  const delta = value - (Number(client.insuranceAmount) || 0);
-  if (delta) {
-    client.insuranceAmount = value;
-    client.insuranceCustom = true;
-    client.insuranceReason = 'Ajustado por el administrador';
-  }
-  return delta;
+export function routeExtraInsuranceEntries(route) {
+  return (route?.extraInsurance || [])
+    .filter(extra => extra && extra.date && Number(extra.amount) > 0)
+    .map(extra => ({ kind: 'adicional', id: extra.id, date: extra.date, ts: Number(extra.ts) || Date.parse(`${extra.date}T12:00:00`), amount: Number(extra.amount), note: extra.note || '' }));
 }
+
+/** Total y cantidad de los seguros pendientes de cierre (ver pendingInsuranceEntries). */
+export function insurancePendingClose(clients, routeId, cutoff, today, route = null) {
+  return pendingInsuranceEntries(clients, routeId, cutoff, today, route)
+    .reduce((sum, entry) => ({ total: sum.total + entry.amount, count: sum.count + 1 }), { total: 0, count: 0 });
+}
+

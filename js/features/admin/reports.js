@@ -50,7 +50,7 @@ const reportRouteId = () => routeSelect.value;
 
 /** Seguros que aún no entran a un cierre (también los de días anteriores en que no se cerró la ruta). */
 function liveInsurance(routeId, route) {
-  const entries = pendingInsuranceEntries(clients, routeId, closureCutoff(route), localDateISO());
+  const entries = pendingInsuranceEntries(clients, routeId, closureCutoff(route), localDateISO(), route);
   return {
     total: entries.reduce((sum, entry) => sum + entry.amount, 0),
     entries: entries.filter(entry => entry.amount > 0),

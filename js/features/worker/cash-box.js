@@ -79,9 +79,9 @@ export function renderWorkerDailyMetrics() {
   // Seguros cobrados desde el último cierre (también los de días en que no se cerró la ruta):
   // ya están sumados a la base (new-client.js). Al «Verificar y cerrar ruta» vuelven a cero.
   const closure = todayClosureTs(route);
-  const insurance = insurancePendingClose(clients, state.workerRoute, closureCutoff(route), localDateISO());
+  const insurance = insurancePendingClose(clients, state.workerRoute, closureCutoff(route), localDateISO(), route);
   document.querySelector('#worker-day-insurance').textContent = formatMoney(insurance.total);
-  document.querySelector('#worker-day-insurance-count').textContent = insurance.count ? `${insurance.count} préstamo${insurance.count === 1 ? '' : 's'} desde el último cierre` : 'Sin seguros desde el último cierre';
+  document.querySelector('#worker-day-insurance-count').textContent = insurance.count ? `${insurance.count} seguro${insurance.count === 1 ? '' : 's'} desde el último cierre` : 'Sin seguros desde el último cierre';
   const baseNote = document.querySelector('#worker-day-base-insurance');
   baseNote.hidden = !insurance.total;
   baseNote.textContent = insurance.total ? `Incluye ${formatMoney(insurance.total)} de seguros` : '';
