@@ -11640,9 +11640,9 @@ function renderWorkerDayPayments() {
     list.append(row);
   });
   const total = entries.reduce((sum, { payment }) => sum + (Number(payment.amount) || 0), 0);
-  const earlier = entries.filter(({ payment }) => payment.date < today).length;
+  // En el botón del trabajador solo la cantidad y la suma (la fecha de cada abono se ve al abrirlo).
   document.querySelector('#worker-day-payments-count').textContent = entries.length
-    ? `${entries.length} ${entries.length === 1 ? 'abono' : 'abonos'} · ${formatMoney(total)}${earlier ? ` · ${earlier} de días sin cerrar` : ''}`
+    ? `${entries.length} ${entries.length === 1 ? 'abono' : 'abonos'} · ${formatMoney(total)}`
     : 'Sin abonos';
 }
 
