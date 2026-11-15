@@ -7,7 +7,7 @@ import { state } from '../../core/state.js';
 import { clients, pendingRequests, persistBusinessData, routeSettlements } from '../../core/store.js';
 import { syncCancelledCard } from '../../domain/accounting.js';
 import { paymentCycleIndex, updatePaidAmountTotal } from '../../domain/loan-schedule.js';
-import { financeCard, recordRetanqueoInRoute, retanqueoCard } from '../../domain/restructure.js';
+import { applyInterestReduction, financeCard, recordRetanqueoInRoute, removePayment, retanqueoCard } from '../../domain/restructure.js';
 import { renderAdminRoute } from './admin-shell.js';
 import { refreshRouteOptions } from './settlement.js';
 import { openClient, renderHistory } from '../clients/client-detail.js';
@@ -20,7 +20,7 @@ import { roundToThousand } from '../../shared/math.js';
 import { EXTERNAL_ROUTE, cancelBaseTransfer, retargetBaseTransfer } from '../../domain/base-transfer.js';
 import { syncRouteCollections } from '../../domain/ledger.js';
 
-const REQUEST_TITLES = { 'base-transfer': 'Traspaso de base', interest: 'Excepción de interés', insurance: 'Excepción de seguros', 'route-correction': 'Corrección de visita o pago', finance: 'Solicitud de financiación', retanqueo: 'Solicitud de retanqueo' };
+const REQUEST_TITLES = { 'base-transfer': 'Traspaso de base', interest: 'Excepción de interés', insurance: 'Excepción de seguros', 'route-correction': 'Corrección de visita o pago', finance: 'Solicitud de financiación', retanqueo: 'Solicitud de retanqueo', 'interest-reduction': 'Reducción de intereses' };
 
 /** Lo que pidió el trabajador al financiar o retanquear, en una línea. */
 function restructureSummary(request) {
@@ -42,6 +42,14 @@ function applyRestructureRequest(request) {
     recordRetanqueoInRoute(routeSettlements[client.route], client, request.clientId, values);
   }
   return '';
+}
+
+/** Abono final al que se le pidió la reducción (por su hora de registro, o fecha y monto). */
+function reductionPayment(client, request) {
+  const payments = client?.payments || [];
+  return payments.find(item => item.reductionRequest?.id === request.id)
+    || (request.paymentAt && payments.find(item => item.at === request.paymentAt))
+    || payments.find(item => item.date === request.paymentDate && Number(item.amount) === Number(request.paymentAmount));
 }
 
 /** Abono a corregir: el que eligió el trabajador (por su hora de registro) o el de esa fecha. */
@@ -94,7 +102,9 @@ export function renderPendingRequests() {
     details.textContent = `${request.clientName} · ${routeSettlements[request.routeId || routeKey(request.route)]?.name || request.route} · Solicitó ${request.workerName}`;
     const value = document.createElement('p');
     value.className = 'pending-comment';
-    value.textContent = request.type === 'finance' || request.type === 'retanqueo' ? restructureSummary(request)
+    value.textContent = request.type === 'interest-reduction'
+      ? `Abono final del ${formatDate(request.paymentDate)}: ${formatMoney(request.paymentAmount)} · reducción de intereses ${formatMoney(request.amount)} → el abono queda en ${formatMoney(Math.max(0, Number(request.paymentAmount) - Number(request.amount)))}. Si la rechazas, ese abono se elimina y la cartulina vuelve a tener saldo.`
+      : request.type === 'finance' || request.type === 'retanqueo' ? restructureSummary(request)
       : request.type === 'route-correction' && request.paymentAmount ? `Abono del ${formatDate(request.visitDate)}: registrado ${formatMoney(request.paymentAmount)} → correcto ${formatMoney(request.requestedAmount)}. Motivo: ${request.comment || 'Sin comentario'}`
       : request.type === 'route-correction' && request.requestedAmount ? `Visita del ${formatDate(request.visitDate)} sin abono registrado → pagó ${formatMoney(request.requestedAmount)}. Motivo: ${request.comment || 'Sin comentario'}`
       : `${request.type === 'route-correction' ? 'Motivo enviado' : 'Acuerdo informado'}: ${request.comment || 'Sin comentario'}`;
@@ -129,7 +139,24 @@ export function renderPendingRequests() {
 function resolvePendingRequest(requestId, approved, approvedValue) {
   const request = pendingRequests.find(item => item.id === requestId && item.status === 'pending');
   if (!request) return;
-  if (approved && (request.type === 'finance' || request.type === 'retanqueo')) {
+  if (request.type === 'interest-reduction') {
+    // Aprobada: se aplica la reducción. Rechazada: ese abono final no se recibió así y se elimina.
+    const client = clients[request.clientId];
+    const payment = client && reductionPayment(client, request);
+    if (client && payment) {
+      if (approved) {
+        const error = applyInterestReduction(client, payment, request.amount, { by: `Administrador (solicitó ${request.workerName})` });
+        if (error) { showToast(error); return; }
+      } else {
+        removePayment(client, payment);
+        syncCancelledCard(client, request.clientId);
+      }
+      const route = routeSettlements[client.route];
+      if (route) syncRouteCollections(clients, { [client.route]: route });
+    }
+    request.status = approved ? 'approved' : 'rejected';
+    request.resolvedAt = new Date().toISOString();
+  } else if (approved && (request.type === 'finance' || request.type === 'retanqueo')) {
     const error = applyRestructureRequest(request);
     if (error) { showToast(error); return; }
     request.status = 'approved';
@@ -177,7 +204,7 @@ function resolvePendingRequest(requestId, approved, approvedValue) {
   } else request.status = 'rejected';
   persistBusinessData();
   renderPendingRequests();
-  if (request.type === 'finance' || request.type === 'retanqueo') {
+  if (request.type === 'finance' || request.type === 'retanqueo' || request.type === 'interest-reduction') {
     renderClientRows(request.clientId);
     if (request.clientId === state.activeClient && state.currentView === 'detalle-cliente') openClient(request.clientId);
     renderAdminRoute(routeSelect.value);
@@ -242,6 +269,19 @@ export function mount() {
     const { pendingAction, pendingId } = button.dataset;
     const transfer = pendingRequests.find(item => item.id === pendingId && item.type === 'base-transfer');
     if (transfer) { handleBaseTransferAction(transfer, pendingAction); return; }
+    const reduction = pendingRequests.find(item => item.id === pendingId && item.type === 'interest-reduction');
+    if (reduction) {
+      const approve = pendingAction === 'approve';
+      openCustomModal({
+        title: approve ? 'Aprobar reducción de intereses' : 'Rechazar reducción de intereses',
+        description: approve
+          ? `Se descuentan ${formatMoney(reduction.amount)} del abono final de ${reduction.clientName} (${formatMoney(reduction.paymentAmount)}): ese valor sale del cobro y del total de la cartulina.`
+          : `Se elimina el abono final de ${formatMoney(reduction.paymentAmount)} de ${reduction.clientName} (${formatDate(reduction.paymentDate)}): sale del cobro y la cartulina vuelve a tener saldo.`,
+        submitLabel: approve ? 'Aprobar y aplicar' : 'Rechazar y eliminar el abono',
+        onSubmit: () => resolvePendingRequest(pendingId, approve),
+      });
+      return;
+    }
     if (pendingAction === 'approve') {
       const request = pendingRequests.find(item => item.id === pendingId);
       if (!request) return;

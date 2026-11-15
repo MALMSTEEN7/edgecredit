@@ -124,6 +124,43 @@ export function maxInterestReduction(client, payment) {
   return Math.max(0, Math.min(Number(payment?.amount) || 0, interest));
 }
 
+/** Días entre la entrega de la cartulina y el abono final. */
+function daysFromStart(client, payment) {
+  const start = Date.parse(`${client.creditStartDate}T12:00:00`);
+  const paid = Date.parse(`${payment?.date}T12:00:00`);
+  return Number.isFinite(start) && Number.isFinite(paid) ? Math.round((paid - start) / 86400000) : null;
+}
+
+/**
+ * ¿Se puede reducir intereses? Solo si la cartulina se canceló antes de la mitad del plazo
+ * (30 días → antes del día 15), y si queda algo que reducir.
+ */
+export function reductionAllowed(client, payment) {
+  const days = daysFromStart(client, payment);
+  const term = Number(client.totalDays) || 0;
+  return days !== null && term > 0 && days < term / 2 && maxInterestReduction(client, payment) > 0;
+}
+
+/** Día límite (mitad del plazo) para ofrecer la reducción, como texto «día 15 de 30». */
+export function reductionDeadlineLabel(client) {
+  const term = Number(client.totalDays) || 0;
+  return `antes del día ${Math.ceil(term / 2)} de ${term}`;
+}
+
+/**
+ * Rechazo de una reducción solicitada: ese abono final no se recibe así; se elimina y la
+ * cartulina vuelve a tener saldo (deja de estar cancelada).
+ */
+export function removePayment(client, payment) {
+  const index = (client.payments || []).indexOf(payment);
+  if (index < 0) return false;
+  client.payments.splice(index, 1);
+  client.balance = Number(client.balance) + (Number(payment.amount) || 0);
+  client.settledAt = Number(client.balance) <= 0 ? client.settledAt : null;
+  client.totalPaidAmount = client.payments.reduce((sum, item) => sum + (Number(item.amount) || 0), 0);
+  return true;
+}
+
 export function applyInterestReduction(client, payment, amount, { by = 'Administrador', today = localDateISO(), now = Date.now() } = {}) {
   const value = Math.round(Number(amount) || 0);
   if (!payment || Number(client.balance) > 0) return 'La reducción solo se aplica al abono con que se canceló la cartulina.';
@@ -136,6 +173,7 @@ export function applyInterestReduction(client, payment, amount, { by = 'Administ
   client.breakdown = `${formatMoney(client.principal)} / ${formatMoney(client.total - Number(client.principal || 0))}`;
   client.interestReductions ||= [];
   client.interestReductions.unshift({ date: today, at: new Date(now).toISOString(), amount: value, by, paymentDate: payment.date });
+  delete payment.reductionRequest;
   client.totalPaidAmount = (client.payments || []).reduce((sum, item) => sum + (Number(item.amount) || 0), 0);
   return '';
 }

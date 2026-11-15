@@ -1269,3 +1269,15 @@
 .worker-day-payments[open] > summary {
   margin-bottom: 6px;
 }
+
+/* Reducción de intereses solicitada (espera al admin) o ya aplicada, en «Abonos del día». */
+.worker-day-reduction-tag,
+.worker-metric-reduction {
+  color: #f5b84b !important;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.worker-day-reduction-tag.is-applied {
+  color: var(--muted) !important;
+}

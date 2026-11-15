@@ -74,6 +74,12 @@ export function renderWorkerDailyMetrics() {
   document.querySelector('#worker-metrics-route').textContent = `Ruta ${route.name}`;
   document.querySelector('#worker-day-base').textContent = formatMoney(route.base || 0);
   document.querySelector('#worker-day-collections').textContent = formatMoney(route.collections || 0);
+  // Reducciones de intereses que el trabajador pidió y el admin aún no responde.
+  const requested = pendingRoutePayments(clients, state.workerRoute, route)
+    .reduce((sum, { payment }) => sum + (Number(payment.reductionRequest?.amount) || 0), 0);
+  const reductionNote = document.querySelector('#worker-day-reductions');
+  reductionNote.hidden = !requested;
+  reductionNote.textContent = requested ? `Reducción solicitada: −${formatMoney(requested)} (pendiente del admin)` : '';
   // «Canceladas»: suma del abono con que se canceló cada cartulina desde el último cierre (va en el cobro).
   const cancelled = cancelledSinceClosureTotal(clients, state.workerRoute, route);
   document.querySelector('#worker-day-cancelled').textContent = formatMoney(cancelled.total);
@@ -133,6 +139,17 @@ function renderWorkerDayPayments() {
     const detail = document.createElement('small');
     detail.textContent = [paymentStamp(payment), payment.method === 'transfer' ? 'Transferencia' : 'Efectivo'].join(' · ');
     open.append(name, detail);
+    if (payment.reductionRequest) {
+      const reduction = document.createElement('small');
+      reduction.className = 'worker-day-reduction-tag';
+      reduction.textContent = `Reducción de intereses solicitada: −${formatMoney(payment.reductionRequest.amount)} (espera al administrador)`;
+      open.append(reduction);
+    } else if (Number(payment.interestReduction) > 0) {
+      const reduction = document.createElement('small');
+      reduction.className = 'worker-day-reduction-tag is-applied';
+      reduction.textContent = `Reducción de intereses aplicada: −${formatMoney(payment.interestReduction)}`;
+      open.append(reduction);
+    }
     const side = document.createElement('div');
     side.className = 'worker-day-payment-side';
     const amount = document.createElement('strong');

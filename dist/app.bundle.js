@@ -3513,6 +3513,43 @@ function maxInterestReduction(client, payment) {
   return Math.max(0, Math.min(Number(payment?.amount) || 0, interest));
 }
 
+/** Días entre la entrega de la cartulina y el abono final. */
+function daysFromStart(client, payment) {
+  const start = Date.parse(`${client.creditStartDate}T12:00:00`);
+  const paid = Date.parse(`${payment?.date}T12:00:00`);
+  return Number.isFinite(start) && Number.isFinite(paid) ? Math.round((paid - start) / 86400000) : null;
+}
+
+/**
+ * ¿Se puede reducir intereses? Solo si la cartulina se canceló antes de la mitad del plazo
+ * (30 días → antes del día 15), y si queda algo que reducir.
+ */
+function reductionAllowed(client, payment) {
+  const days = daysFromStart(client, payment);
+  const term = Number(client.totalDays) || 0;
+  return days !== null && term > 0 && days < term / 2 && maxInterestReduction(client, payment) > 0;
+}
+
+/** Día límite (mitad del plazo) para ofrecer la reducción, como texto «día 15 de 30». */
+function reductionDeadlineLabel(client) {
+  const term = Number(client.totalDays) || 0;
+  return `antes del día ${Math.ceil(term / 2)} de ${term}`;
+}
+
+/**
+ * Rechazo de una reducción solicitada: ese abono final no se recibe así; se elimina y la
+ * cartulina vuelve a tener saldo (deja de estar cancelada).
+ */
+function removePayment(client, payment) {
+  const index = (client.payments || []).indexOf(payment);
+  if (index < 0) return false;
+  client.payments.splice(index, 1);
+  client.balance = Number(client.balance) + (Number(payment.amount) || 0);
+  client.settledAt = Number(client.balance) <= 0 ? client.settledAt : null;
+  client.totalPaidAmount = client.payments.reduce((sum, item) => sum + (Number(item.amount) || 0), 0);
+  return true;
+}
+
 function applyInterestReduction(client, payment, amount, { by = 'Administrador', today = localDateISO(), now = Date.now() } = {}) {
   const value = Math.round(Number(amount) || 0);
   if (!payment || Number(client.balance) > 0) return 'La reducción solo se aplica al abono con que se canceló la cartulina.';
@@ -3525,6 +3562,7 @@ function applyInterestReduction(client, payment, amount, { by = 'Administrador',
   client.breakdown = `${formatMoney(client.principal)} / ${formatMoney(client.total - Number(client.principal || 0))}`;
   client.interestReductions ||= [];
   client.interestReductions.unshift({ date: today, at: new Date(now).toISOString(), amount: value, by, paymentDate: payment.date });
+  delete payment.reductionRequest;
   client.totalPaidAmount = (client.payments || []).reduce((sum, item) => sum + (Number(item.amount) || 0), 0);
   return '';
 }
@@ -5323,7 +5361,7 @@ function __mount_legacyImportModule() {
 
 
 
-const REQUEST_TITLES = { 'base-transfer': 'Traspaso de base', interest: 'Excepción de interés', insurance: 'Excepción de seguros', 'route-correction': 'Corrección de visita o pago', finance: 'Solicitud de financiación', retanqueo: 'Solicitud de retanqueo' };
+const REQUEST_TITLES = { 'base-transfer': 'Traspaso de base', interest: 'Excepción de interés', insurance: 'Excepción de seguros', 'route-correction': 'Corrección de visita o pago', finance: 'Solicitud de financiación', retanqueo: 'Solicitud de retanqueo', 'interest-reduction': 'Reducción de intereses' };
 
 /** Lo que pidió el trabajador al financiar o retanquear, en una línea. */
 function restructureSummary(request) {
@@ -5345,6 +5383,14 @@ function applyRestructureRequest(request) {
     recordRetanqueoInRoute(routeSettlements[client.route], client, request.clientId, values);
   }
   return '';
+}
+
+/** Abono final al que se le pidió la reducción (por su hora de registro, o fecha y monto). */
+function reductionPayment(client, request) {
+  const payments = client?.payments || [];
+  return payments.find(item => item.reductionRequest?.id === request.id)
+    || (request.paymentAt && payments.find(item => item.at === request.paymentAt))
+    || payments.find(item => item.date === request.paymentDate && Number(item.amount) === Number(request.paymentAmount));
 }
 
 /** Abono a corregir: el que eligió el trabajador (por su hora de registro) o el de esa fecha. */
@@ -5397,7 +5443,9 @@ function renderPendingRequests() {
     details.textContent = `${request.clientName} · ${routeSettlements[request.routeId || routeKey(request.route)]?.name || request.route} · Solicitó ${request.workerName}`;
     const value = document.createElement('p');
     value.className = 'pending-comment';
-    value.textContent = request.type === 'finance' || request.type === 'retanqueo' ? restructureSummary(request)
+    value.textContent = request.type === 'interest-reduction'
+      ? `Abono final del ${formatDate(request.paymentDate)}: ${formatMoney(request.paymentAmount)} · reducción de intereses ${formatMoney(request.amount)} → el abono queda en ${formatMoney(Math.max(0, Number(request.paymentAmount) - Number(request.amount)))}. Si la rechazas, ese abono se elimina y la cartulina vuelve a tener saldo.`
+      : request.type === 'finance' || request.type === 'retanqueo' ? restructureSummary(request)
       : request.type === 'route-correction' && request.paymentAmount ? `Abono del ${formatDate(request.visitDate)}: registrado ${formatMoney(request.paymentAmount)} → correcto ${formatMoney(request.requestedAmount)}. Motivo: ${request.comment || 'Sin comentario'}`
       : request.type === 'route-correction' && request.requestedAmount ? `Visita del ${formatDate(request.visitDate)} sin abono registrado → pagó ${formatMoney(request.requestedAmount)}. Motivo: ${request.comment || 'Sin comentario'}`
       : `${request.type === 'route-correction' ? 'Motivo enviado' : 'Acuerdo informado'}: ${request.comment || 'Sin comentario'}`;
@@ -5432,7 +5480,24 @@ function renderPendingRequests() {
 function resolvePendingRequest(requestId, approved, approvedValue) {
   const request = pendingRequests.find(item => item.id === requestId && item.status === 'pending');
   if (!request) return;
-  if (approved && (request.type === 'finance' || request.type === 'retanqueo')) {
+  if (request.type === 'interest-reduction') {
+    // Aprobada: se aplica la reducción. Rechazada: ese abono final no se recibió así y se elimina.
+    const client = clients[request.clientId];
+    const payment = client && reductionPayment(client, request);
+    if (client && payment) {
+      if (approved) {
+        const error = applyInterestReduction(client, payment, request.amount, { by: `Administrador (solicitó ${request.workerName})` });
+        if (error) { showToast(error); return; }
+      } else {
+        removePayment(client, payment);
+        syncCancelledCard(client, request.clientId);
+      }
+      const route = routeSettlements[client.route];
+      if (route) syncRouteCollections(clients, { [client.route]: route });
+    }
+    request.status = approved ? 'approved' : 'rejected';
+    request.resolvedAt = new Date().toISOString();
+  } else if (approved && (request.type === 'finance' || request.type === 'retanqueo')) {
     const error = applyRestructureRequest(request);
     if (error) { showToast(error); return; }
     request.status = 'approved';
@@ -5480,7 +5545,7 @@ function resolvePendingRequest(requestId, approved, approvedValue) {
   } else request.status = 'rejected';
   persistBusinessData();
   renderPendingRequests();
-  if (request.type === 'finance' || request.type === 'retanqueo') {
+  if (request.type === 'finance' || request.type === 'retanqueo' || request.type === 'interest-reduction') {
     renderClientRows(request.clientId);
     if (request.clientId === state.activeClient && state.currentView === 'detalle-cliente') openClient(request.clientId);
     renderAdminRoute(routeSelect.value);
@@ -5545,6 +5610,19 @@ function __mount_pendingModule() {
     const { pendingAction, pendingId } = button.dataset;
     const transfer = pendingRequests.find(item => item.id === pendingId && item.type === 'base-transfer');
     if (transfer) { handleBaseTransferAction(transfer, pendingAction); return; }
+    const reduction = pendingRequests.find(item => item.id === pendingId && item.type === 'interest-reduction');
+    if (reduction) {
+      const approve = pendingAction === 'approve';
+      openCustomModal({
+        title: approve ? 'Aprobar reducción de intereses' : 'Rechazar reducción de intereses',
+        description: approve
+          ? `Se descuentan ${formatMoney(reduction.amount)} del abono final de ${reduction.clientName} (${formatMoney(reduction.paymentAmount)}): ese valor sale del cobro y del total de la cartulina.`
+          : `Se elimina el abono final de ${formatMoney(reduction.paymentAmount)} de ${reduction.clientName} (${formatDate(reduction.paymentDate)}): sale del cobro y la cartulina vuelve a tener saldo.`,
+        submitLabel: approve ? 'Aprobar y aplicar' : 'Rechazar y eliminar el abono',
+        onSubmit: () => resolvePendingRequest(pendingId, approve),
+      });
+      return;
+    }
     if (pendingAction === 'approve') {
       const request = pendingRequests.find(item => item.id === pendingId);
       if (!request) return;
@@ -8149,6 +8227,8 @@ function __mount_twoFactorModule() {
 
 
 
+
+
 /** Dentro de la ficha: la «cicatriz» del historial de pagos de la cartulina. */
 function updatePaymentBehaviorUI(client) {
   const indicator = document.querySelector('#payment-behavior-indicator');
@@ -8224,6 +8304,13 @@ function renderHistory(client) {
     date.textContent = shortHistoryDate(payment.date);
     date.title = formatDate(payment.date);
     dateAndMethod.append(date, createMethodIcon(payment.method));
+    if (payment.reductionRequest) {
+      const requested = document.createElement('small');
+      requested.className = 'payment-pending-tag payment-reduction-tag';
+      requested.textContent = `Reducción solicitada −${formatMoney(payment.reductionRequest.amount)}`;
+      requested.title = 'El trabajador pidió reducir intereses de este abono: espera la respuesta del administrador.';
+      dateAndMethod.append(requested);
+    }
     if (Number(payment.interestReduction) > 0) {
       const reduction = document.createElement('small');
       reduction.className = 'payment-pending-tag payment-reduction-tag';
@@ -9151,8 +9238,16 @@ function __mount_clientDetailModule() {
       const payment = client.payments[index];
       const oldAmount = Number(payment.amount) || 0;
       const today = localDateISO();
+      // Abono final de una cartulina cancelada antes de la mitad del plazo: «Reducir intereses».
+      const reducible = payment === finalPayment(client) && canOfferReduction(client, payment);
       openCustomModal({
         title: 'Editar abono', description: `Abono registrado el ${formatDate(payment.date)}. Corrige el monto, la forma de pago o la fecha.`,
+        extraAction: reducible ? {
+          label: 'Reducir intereses',
+          onClick: () => openInterestReduction(state.activeClient, payment, {
+            onDone: () => { renderClientRows(state.activeClient); openClient(state.activeClient); },
+          }),
+        } : null,
         fields: [
           { name: 'amount', label: 'Monto del abono', money: true, thousands: true, type: 'number', min: 1, step: 1, value: payment.amount, required: true },
           { name: 'method', label: 'Forma de pago', type: 'select', value: payment.method === 'transfer' ? 'transfer' : 'cash', options: [{ value: 'cash', label: 'Efectivo (pasa a la base del día siguiente)' }, { value: 'transfer', label: 'Transferencia (queda en el banco)' }] },
@@ -11022,6 +11117,79 @@ function __mount_operationsListModule() {
   });
 }
 
+// ── js/features/payments/interest-reduction.js
+/**
+ * features/payments/interest-reduction · «Reducir intereses» del abono final de una cartulina
+ * cancelada antes de la mitad del plazo (el cliente pagó antes y se le descontaron intereses).
+ *
+ * - Admin: se aplica de una vez (domain/restructure · applyInterestReduction).
+ * - Trabajador: se envía como solicitud al admin. Mientras espera, el abono queda marcado
+ *   («Reducción solicitada») en su resumen del día. Si el admin la aprueba se aplica; si la
+ *   rechaza, ese abono final se elimina (admin/pending.js).
+ */
+
+
+
+
+
+
+
+
+
+
+
+/** ¿Se puede ofrecer «Reducir intereses» para este abono final? */
+function canOfferReduction(client, payment) {
+  return Boolean(client && payment) && Number(client.balance) <= 0 && !payment.reductionRequest
+    && !(Number(payment.interestReduction) > 0) && reductionAllowed(client, payment);
+}
+
+/**
+ * Abre el cuadro para escribir la reducción. `onDone()` se llama al aplicarla (admin) o al
+ * enviar la solicitud (trabajador); `onCancel()` si se cierra con «Cancelar».
+ */
+function openInterestReduction(clientId, payment, { onDone = () => {}, onCancel = () => {} } = {}) {
+  const client = clients[clientId];
+  if (!client || !payment) return;
+  const isAdmin = state.userRole === 'admin';
+  const max = maxInterestReduction(client, payment);
+  openCustomModal({
+    title: 'Reducir intereses',
+    description: `${client.name} pagó antes de tiempo (abono final del ${formatDate(payment.date)} por ${formatMoney(payment.amount)}). Escribe cuánto se le descontó de intereses: ese valor no entra a la caja. Máximo ${formatMoney(max)}.${isAdmin ? '' : ' La solicitud le llega al administrador para aprobarla.'}`,
+    fields: [{ name: 'amount', label: 'Valor de la reducción', money: true, thousands: true, type: 'number', min: 1, step: 1, required: true }],
+    submitLabel: isAdmin ? 'Aplicar reducción' : 'Solicitar reducción',
+    onSubmit: values => {
+      const amount = Math.round(Number(values.amount) || 0);
+      if (!(amount > 0)) { customModalError.textContent = 'Escribe el valor de la reducción.'; return false; }
+      if (amount > max) { customModalError.textContent = `La reducción no puede pasar de ${formatMoney(max)}.`; return false; }
+      if (isAdmin) {
+        const error = applyInterestReduction(client, payment, amount, { by: 'Administrador' });
+        if (error) { customModalError.textContent = error; return false; }
+        const route = routeSettlements[client.route];
+        if (route) syncRouteCollections(clients, { [client.route]: route });
+        syncCancelledCard(client, clientId);
+        persistBusinessData();
+        showToast(`Reducción de intereses de ${formatMoney(amount)} aplicada a ${client.name}: el abono final quedó en ${formatMoney(payment.amount)}.`);
+      } else {
+        const id = `request-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+        pendingRequests.unshift({
+          id, type: 'interest-reduction', routeId: routeKey(client.route), route: client.route,
+          workerId: state.activeWorker?.id, workerName: state.activeWorker?.name || 'Trabajador', clientId, clientName: client.name,
+          amount, paymentAt: payment.at || '', paymentDate: payment.date, paymentAmount: Number(payment.amount) || 0,
+          createdAt: new Date().toISOString(), status: 'pending',
+        });
+        payment.reductionRequest = { id, amount };
+        persistBusinessData();
+        renderPendingRequests();
+        showToast(`Solicitud de reducción de ${formatMoney(amount)} enviada al administrador.`);
+      }
+      window.setTimeout(onDone, 0);
+      return undefined;
+    },
+    onCancel: () => { window.setTimeout(onCancel, 0); },
+  });
+}
+
 // ── js/features/payments/payment.js
 /**
  * features/payments · Modal de registro de abonos (efectivo / transferencia con comprobante).
@@ -11128,8 +11296,8 @@ function updatePaymentMethod() {
 
 /**
  * El abono canceló la cartulina: ¿renovar el crédito? (Renovar abre el flujo de la ficha.)
- * Tercer botón «Reducción de intereses»: si el cliente pagó antes de tiempo y se le descontaron
- * intereses, ese valor no entró: se resta del abono final y del cobro (domain/restructure.js).
+ * Tercer botón «Reducir intereses» (solo si canceló antes de la mitad del plazo): el admin la
+ * aplica; el trabajador la solicita al admin (features/payments/interest-reduction.js).
  */
 function offerRenewal(clientId, returnHome, { reduced = false } = {}) {
   const client = clients[clientId];
@@ -11139,52 +11307,35 @@ function offerRenewal(clientId, returnHome, { reduced = false } = {}) {
   const goHome = () => { if (returnHome) showView('inicio'); };
   closeButton.addEventListener('click', goHome, { once: true });
   const payment = finalPayment(client);
-  const canReduce = !reduced && maxInterestReduction(client, payment) > 0;
+  const canReduce = !reduced && canOfferReduction(client, payment);
+  const refresh = () => {
+    updateCashTotal();
+    renderHistory(client);
+    renderClientRows(clientId);
+    const backView = state.previousView;
+    openClient(clientId);
+    state.previousView = backView;
+  };
   openCustomModal({
     title: 'Cartulina cancelada',
     description: reduced
-      ? `Se aplicó la reducción de intereses. ¿Desea renovarle el crédito a ${client.name}?`
+      ? `${state.userRole === 'admin' ? 'Se aplicó la reducción de intereses.' : 'Se envió la solicitud de reducción al administrador.'} ¿Desea renovarle el crédito a ${client.name}?`
       : `Con este abono ${client.name} pagó toda la deuda. ¿Desea renovarle el crédito?`,
     submitLabel: 'Sí, renovar',
     cancelLabel: returnHome ? 'No, volver al inicio' : 'No renovar',
     extraAction: canReduce ? {
-      label: 'Reducción de intereses',
-      onClick: () => { closeButton.removeEventListener('click', goHome); openInterestReduction(clientId, returnHome); },
+      label: 'Reducir intereses',
+      onClick: () => {
+        closeButton.removeEventListener('click', goHome);
+        openInterestReduction(clientId, payment, {
+          onDone: () => { refresh(); offerRenewal(clientId, returnHome, { reduced: true }); },
+          onCancel: () => offerRenewal(clientId, returnHome),
+        });
+      },
     } : null,
     // Se abre después de que esta ventana se cierre, para que no la cierre a ella.
     onSubmit: () => { closeButton.removeEventListener('click', goHome); window.setTimeout(() => document.querySelector('#renew-client')?.click(), 0); },
     onCancel: () => { closeButton.removeEventListener('click', goHome); goHome(); },
-  });
-}
-
-/** Cuadro para escribir cuánto se le redujo de intereses al cliente que pagó antes de tiempo. */
-function openInterestReduction(clientId, returnHome) {
-  const client = clients[clientId];
-  const payment = client && finalPayment(client);
-  if (!payment) return;
-  const max = maxInterestReduction(client, payment);
-  openCustomModal({
-    title: 'Reducción de intereses',
-    description: `${client.name} pagó antes de tiempo. Escribe cuánto se le descontó de intereses: ese valor no entra a la caja, se resta del último abono (${formatMoney(payment.amount)}) y del cobro. Máximo ${formatMoney(max)}.`,
-    fields: [{ name: 'amount', label: 'Valor de la reducción', money: true, thousands: true, type: 'number', min: 1, step: 1, required: true }],
-    submitLabel: 'Aplicar reducción',
-    onSubmit: values => {
-      const by = state.userRole === 'admin' ? 'Administrador' : state.activeWorker?.name || 'Trabajador';
-      const error = applyInterestReduction(client, payment, values.amount, { by });
-      if (error) { customModalError.textContent = error; return false; }
-      const route = routeSettlements[client.route];
-      if (route) syncRouteCollections(clients, { [client.route]: route });
-      updateCashTotal();
-      persistBusinessData();
-      renderHistory(client);
-      renderClientRows(clientId);
-      const backView = state.previousView;
-      openClient(clientId);
-      state.previousView = backView;
-      showToast(`Reducción de intereses de ${formatMoney(Number(values.amount))} aplicada a ${client.name}: el abono final quedó en ${formatMoney(payment.amount)}.`);
-      window.setTimeout(() => offerRenewal(clientId, returnHome, { reduced: true }), 0);
-    },
-    onCancel: () => { window.setTimeout(() => offerRenewal(clientId, returnHome), 0); },
   });
 }
 
@@ -11395,6 +11546,12 @@ function renderWorkerDailyMetrics() {
   document.querySelector('#worker-metrics-route').textContent = `Ruta ${route.name}`;
   document.querySelector('#worker-day-base').textContent = formatMoney(route.base || 0);
   document.querySelector('#worker-day-collections').textContent = formatMoney(route.collections || 0);
+  // Reducciones de intereses que el trabajador pidió y el admin aún no responde.
+  const requested = pendingRoutePayments(clients, state.workerRoute, route)
+    .reduce((sum, { payment }) => sum + (Number(payment.reductionRequest?.amount) || 0), 0);
+  const reductionNote = document.querySelector('#worker-day-reductions');
+  reductionNote.hidden = !requested;
+  reductionNote.textContent = requested ? `Reducción solicitada: −${formatMoney(requested)} (pendiente del admin)` : '';
   // «Canceladas»: suma del abono con que se canceló cada cartulina desde el último cierre (va en el cobro).
   const cancelled = cancelledSinceClosureTotal(clients, state.workerRoute, route);
   document.querySelector('#worker-day-cancelled').textContent = formatMoney(cancelled.total);
@@ -11454,6 +11611,17 @@ function renderWorkerDayPayments() {
     const detail = document.createElement('small');
     detail.textContent = [paymentStamp(payment), payment.method === 'transfer' ? 'Transferencia' : 'Efectivo'].join(' · ');
     open.append(name, detail);
+    if (payment.reductionRequest) {
+      const reduction = document.createElement('small');
+      reduction.className = 'worker-day-reduction-tag';
+      reduction.textContent = `Reducción de intereses solicitada: −${formatMoney(payment.reductionRequest.amount)} (espera al administrador)`;
+      open.append(reduction);
+    } else if (Number(payment.interestReduction) > 0) {
+      const reduction = document.createElement('small');
+      reduction.className = 'worker-day-reduction-tag is-applied';
+      reduction.textContent = `Reducción de intereses aplicada: −${formatMoney(payment.interestReduction)}`;
+      open.append(reduction);
+    }
     const side = document.createElement('div');
     side.className = 'worker-day-payment-side';
     const amount = document.createElement('strong');

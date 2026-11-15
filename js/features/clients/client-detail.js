@@ -22,6 +22,8 @@ import { bindImageViewer } from '../../ui/image-viewer.js';
 import { LOCATION_FAILURE_LABELS, hasCoordinates, isApproximateLocation, locateDevice } from '../../shared/geo.js';
 import { clientInsurance, generalInsuranceAmount, resolveInsurance } from '../../domain/insurance.js';
 import { canRenew, onClientRenewed } from './new-client.js';
+import { canOfferReduction, openInterestReduction } from '../payments/interest-reduction.js';
+import { finalPayment } from '../../domain/route-day.js';
 import { MAX_ACTIVE_CARDS_PER_PERSON, activeCardIds, canAddCard, loanCount, cardLoanHistory, loanNumber, loanTimeline, personLoanTotal } from '../../domain/person-cards.js';
 import { PAYDAY_OPTIONS, cardColor, paintCardColorBand, shiftDays, startDateForPayday, weekdayOf } from '../../domain/card-color.js';
 import { FINANCE_INTEREST_PERCENT, GENERAL_RETANQUEO, RETANQUEO_INTEREST_PERCENT, financeCard, pendingRestructure, percentOrAmount, recordRetanqueoInRoute, retanqueoCard } from '../../domain/restructure.js';
@@ -101,6 +103,13 @@ export function renderHistory(client) {
     date.textContent = shortHistoryDate(payment.date);
     date.title = formatDate(payment.date);
     dateAndMethod.append(date, createMethodIcon(payment.method));
+    if (payment.reductionRequest) {
+      const requested = document.createElement('small');
+      requested.className = 'payment-pending-tag payment-reduction-tag';
+      requested.textContent = `Reducción solicitada −${formatMoney(payment.reductionRequest.amount)}`;
+      requested.title = 'El trabajador pidió reducir intereses de este abono: espera la respuesta del administrador.';
+      dateAndMethod.append(requested);
+    }
     if (Number(payment.interestReduction) > 0) {
       const reduction = document.createElement('small');
       reduction.className = 'payment-pending-tag payment-reduction-tag';
@@ -1028,8 +1037,16 @@ export function mount() {
       const payment = client.payments[index];
       const oldAmount = Number(payment.amount) || 0;
       const today = localDateISO();
+      // Abono final de una cartulina cancelada antes de la mitad del plazo: «Reducir intereses».
+      const reducible = payment === finalPayment(client) && canOfferReduction(client, payment);
       openCustomModal({
         title: 'Editar abono', description: `Abono registrado el ${formatDate(payment.date)}. Corrige el monto, la forma de pago o la fecha.`,
+        extraAction: reducible ? {
+          label: 'Reducir intereses',
+          onClick: () => openInterestReduction(state.activeClient, payment, {
+            onDone: () => { renderClientRows(state.activeClient); openClient(state.activeClient); },
+          }),
+        } : null,
         fields: [
           { name: 'amount', label: 'Monto del abono', money: true, thousands: true, type: 'number', min: 1, step: 1, value: payment.amount, required: true },
           { name: 'method', label: 'Forma de pago', type: 'select', value: payment.method === 'transfer' ? 'transfer' : 'cash', options: [{ value: 'cash', label: 'Efectivo (pasa a la base del día siguiente)' }, { value: 'transfer', label: 'Transferencia (queda en el banco)' }] },

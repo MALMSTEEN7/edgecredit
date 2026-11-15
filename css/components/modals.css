@@ -168,9 +168,22 @@
   min-height: 43px;
 }
 
-/* Con tres botones, en pantallas angostas se acomodan en varias líneas. */
+/* Con tres botones (p. ej. «No renovar · Reducir intereses · Sí, renovar»): en una sola fila,
+   del mismo ancho y alto; si el texto no cabe, pasa a dos líneas dentro del botón. */
 .custom-modal-actions:has(.custom-modal-extra) {
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  align-items: stretch;
+}
+
+.custom-modal-actions:has(.custom-modal-extra) .primary-button,
+.custom-modal-actions:has(.custom-modal-extra) .secondary-button {
+  min-width: 0;
+  width: 100%;
+  padding: 8px 10px;
+  white-space: normal;
+  line-height: 1.2;
+  font-size: 12px;
 }
 
 .custom-modal .secondary-button.custom-modal-extra {
