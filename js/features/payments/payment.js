@@ -2,7 +2,7 @@
  * features/payments · Modal de registro de abonos (efectivo / transferencia con comprobante).
  */
 
-import { amountInput, customModal, interestModal, modal, newClientModal, paymentForm, voucherField, voucherFile } from '../../core/dom.js';
+import { amountInput, customModal, customModalError, interestModal, modal, newClientModal, paymentForm, voucherField, voucherFile } from '../../core/dom.js';
 import { state } from '../../core/state.js';
 import { clients, persistBusinessData, routeSettlements } from '../../core/store.js';
 import { addCancelledCard } from '../../domain/accounting.js';
@@ -19,6 +19,8 @@ import { showToast } from '../../ui/toast.js';
 import { showView } from '../../ui/navigation.js';
 import { openCustomModal } from '../../ui/custom-modal.js';
 import { closeVisit } from '../daily-route/daily-route.js';
+import { applyInterestReduction, maxInterestReduction } from '../../domain/restructure.js';
+import { finalPayment } from '../../domain/route-day.js';
 
 /** Comprobante elegido: captura de la galería («Subir captura») o foto («Tomar foto»). */
 function chosenVoucher() {
@@ -100,22 +102,65 @@ function updatePaymentMethod() {
   voucherFile.required = false;
 }
 
-/** El abono canceló la cartulina: ¿renovar el crédito? (Renovar abre el flujo de la ficha.) */
-function offerRenewal(clientId, returnHome) {
+/**
+ * El abono canceló la cartulina: ¿renovar el crédito? (Renovar abre el flujo de la ficha.)
+ * Tercer botón «Reducción de intereses»: si el cliente pagó antes de tiempo y se le descontaron
+ * intereses, ese valor no entró: se resta del abono final y del cobro (domain/restructure.js).
+ */
+function offerRenewal(clientId, returnHome, { reduced = false } = {}) {
   const client = clients[clientId];
   if (!client) return;
   // Cerrar con la ✕ (o con «atrás») cuenta como «No».
   const closeButton = document.querySelector('#custom-modal-close');
   const goHome = () => { if (returnHome) showView('inicio'); };
   closeButton.addEventListener('click', goHome, { once: true });
+  const payment = finalPayment(client);
+  const canReduce = !reduced && maxInterestReduction(client, payment) > 0;
   openCustomModal({
     title: 'Cartulina cancelada',
-    description: `Con este abono ${client.name} pagó toda la deuda. ¿Desea renovarle el crédito?`,
+    description: reduced
+      ? `Se aplicó la reducción de intereses. ¿Desea renovarle el crédito a ${client.name}?`
+      : `Con este abono ${client.name} pagó toda la deuda. ¿Desea renovarle el crédito?`,
     submitLabel: 'Sí, renovar',
     cancelLabel: returnHome ? 'No, volver al inicio' : 'No renovar',
+    extraAction: canReduce ? {
+      label: 'Reducción de intereses',
+      onClick: () => { closeButton.removeEventListener('click', goHome); openInterestReduction(clientId, returnHome); },
+    } : null,
     // Se abre después de que esta ventana se cierre, para que no la cierre a ella.
     onSubmit: () => { closeButton.removeEventListener('click', goHome); window.setTimeout(() => document.querySelector('#renew-client')?.click(), 0); },
     onCancel: () => { closeButton.removeEventListener('click', goHome); goHome(); },
+  });
+}
+
+/** Cuadro para escribir cuánto se le redujo de intereses al cliente que pagó antes de tiempo. */
+function openInterestReduction(clientId, returnHome) {
+  const client = clients[clientId];
+  const payment = client && finalPayment(client);
+  if (!payment) return;
+  const max = maxInterestReduction(client, payment);
+  openCustomModal({
+    title: 'Reducción de intereses',
+    description: `${client.name} pagó antes de tiempo. Escribe cuánto se le descontó de intereses: ese valor no entra a la caja, se resta del último abono (${formatMoney(payment.amount)}) y del cobro. Máximo ${formatMoney(max)}.`,
+    fields: [{ name: 'amount', label: 'Valor de la reducción', money: true, thousands: true, type: 'number', min: 1, step: 1, required: true }],
+    submitLabel: 'Aplicar reducción',
+    onSubmit: values => {
+      const by = state.userRole === 'admin' ? 'Administrador' : state.activeWorker?.name || 'Trabajador';
+      const error = applyInterestReduction(client, payment, values.amount, { by });
+      if (error) { customModalError.textContent = error; return false; }
+      const route = routeSettlements[client.route];
+      if (route) syncRouteCollections(clients, { [client.route]: route });
+      updateCashTotal();
+      persistBusinessData();
+      renderHistory(client);
+      renderClientRows(clientId);
+      const backView = state.previousView;
+      openClient(clientId);
+      state.previousView = backView;
+      showToast(`Reducción de intereses de ${formatMoney(Number(values.amount))} aplicada a ${client.name}: el abono final quedó en ${formatMoney(payment.amount)}.`);
+      window.setTimeout(() => offerRenewal(clientId, returnHome, { reduced: true }), 0);
+    },
+    onCancel: () => { window.setTimeout(() => offerRenewal(clientId, returnHome), 0); },
   });
 }
 

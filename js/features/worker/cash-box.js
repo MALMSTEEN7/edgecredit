@@ -9,6 +9,7 @@ import { createBaseTransfer, creditDestination } from '../../domain/base-transfe
 import { openCustomModal } from '../../ui/custom-modal.js';
 import { renderPendingRequests } from '../admin/pending.js';
 import { insurancePendingClose } from '../../domain/insurance.js';
+import { cancelledSinceClosureTotal } from '../../domain/route-day.js';
 import { closureCutoff, paymentStamp, pendingRoutePayments, syncRouteCollections } from '../../domain/ledger.js';
 import { localDateISO } from '../../shared/dates.js';
 import { formatMoney } from '../../shared/format.js';
@@ -48,7 +49,7 @@ function workerRoute() {
 /** Efectivo que debería tener el trabajador ahora: base + cobros − préstamos − gastos − otros gastos. */
 function cashInHand(route, todayCash) {
   const bankBase = Number(route.baseBank || 0);
-  return Number(route.base || 0) - bankBase + todayCash - Number(route.loans || 0) - Number(route.expenses || 0) - Number(route.otherExpenses || 0);
+  return Number(route.base || 0) - bankBase + todayCash - Number(route.loans || 0) - Number(route.otherExpenses || 0);
 }
 
 export function updateCashTotal() {
@@ -73,7 +74,10 @@ export function renderWorkerDailyMetrics() {
   document.querySelector('#worker-metrics-route').textContent = `Ruta ${route.name}`;
   document.querySelector('#worker-day-base').textContent = formatMoney(route.base || 0);
   document.querySelector('#worker-day-collections').textContent = formatMoney(route.collections || 0);
-  document.querySelector('#worker-day-expenses').textContent = formatMoney(route.expenses || 0);
+  // «Canceladas»: suma del abono con que se canceló cada cartulina desde el último cierre (va en el cobro).
+  const cancelled = cancelledSinceClosureTotal(clients, state.workerRoute, route);
+  document.querySelector('#worker-day-cancelled').textContent = formatMoney(cancelled.total);
+  document.querySelector('#worker-day-cancelled-count').textContent = cancelled.count ? `${cancelled.count} cartulina${cancelled.count === 1 ? '' : 's'} cancelada${cancelled.count === 1 ? '' : 's'} · abono final` : 'Sin cartulinas canceladas';
   document.querySelector('#worker-day-other-expenses').textContent = formatMoney(route.otherExpenses || 0);
   document.querySelector('#worker-day-loans').textContent = formatMoney(route.loans || 0);
   // Seguros cobrados desde el último cierre (también los de días en que no se cerró la ruta):
@@ -88,8 +92,15 @@ export function renderWorkerDailyMetrics() {
   renderWorkerDayPayments();
   // Efectivo del día = base + cobros − préstamos − gastos. Ya cerrada hoy la ruta, la base que
   // aparece es la de mañana (el efectivo del cierre): no se vuelve a contar como efectivo de hoy.
-  const movements = Number(route.collections || 0) - Number(route.loans || 0) - Number(route.expenses || 0) - Number(route.otherExpenses || 0);
+  const movements = Number(route.collections || 0) - Number(route.loans || 0) - Number(route.otherExpenses || 0);
   document.querySelector('#worker-day-cash').textContent = formatMoney(closure ? movements : route.cashDelivered || Number(route.base || 0) + movements);
+  // Del efectivo: cuánto llegó por transferencia (está en el banco, no en la mano).
+  const transfers = pendingRoutePayments(clients, state.workerRoute, route)
+    .filter(({ payment }) => payment.method === 'transfer')
+    .reduce((sum, { payment }) => sum + (Number(payment.amount) || 0), 0);
+  const transfersNote = document.querySelector('#worker-day-cash-transfers');
+  transfersNote.hidden = !transfers;
+  transfersNote.textContent = transfers ? `Incluye ${formatMoney(transfers)} en transferencias` : '';
   const cashNote = document.querySelector('#worker-day-cash-note');
   cashNote.hidden = !closure;
   cashNote.textContent = closure ? 'Ruta cerrada hoy: solo lo que entre después del cierre' : '';

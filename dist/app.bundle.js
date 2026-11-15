@@ -303,7 +303,7 @@ const clients = {};
 /** Estructura vacía de un cobro (ruta). */
 function emptyRoute(name) {
   return {
-    name, collections: 0, loans: 0, expenses: 0, base: 0, cashDelivered: 0, otherExpenses: 0, otherExpenseEntries: [],
+    name, collections: 0, loans: 0, base: 0, cashDelivered: 0, otherExpenses: 0, otherExpenseEntries: [],
     cardsCancelled: [], loansEntered: [], loansNew: [], weeklyCollections: 0, weeklyCardCount: 0, monthlyInsurance: 0,
     ledger: {}, cashBox: { opening: 0, openingDate: null }, insuranceCuts: [],
   };
@@ -1151,8 +1151,12 @@ async function downloadAll() {
   Object.keys(clients).forEach(key => delete clients[key]);
   pendingRequests.splice(0, pendingRequests.length);
   const previousWorkers = syncSession.role === 'admin' ? personnel.splice(0, personnel.length) : [];
-  // El admin ve exactamente las rutas del servidor (nada de rutas locales sobrantes).
-  if (syncSession.role === 'admin') Object.keys(routeSettlements).forEach(key => delete routeSettlements[key]);
+  // El admin ve exactamente las rutas del servidor (nada de rutas locales sobrantes). Las que
+  // siguen existiendo se actualizan sobre el mismo objeto (applyRow → replaceObject): si se
+  // borraban y se creaban de nuevo, lo que el admin escribía en la liquidación justo al volver
+  // el internet quedaba en la copia vieja y la pantalla «volvía» al valor anterior.
+  const downloadedRoutes = new Set(results.flatMap(result => result.table === 'routes' ? (result.data || []).map(row => row.id) : []));
+  if (syncSession.role === 'admin') Object.keys(routeSettlements).filter(key => !downloadedRoutes.has(key)).forEach(key => delete routeSettlements[key]);
   if (syncSession.role === 'worker') Object.keys(routeSettlements).filter(key => key !== syncSession.routeId).forEach(key => delete routeSettlements[key]);
   const previousSynced = lastSynced;
   lastSynced = new Map();
@@ -2034,8 +2038,9 @@ function insurancePendingClose(clients, routeId, cutoff, today, route = null) {
 
 
 const DAY_FIELDS = ['base', 'collections', 'loans', 'expenses', 'otherExpenses', 'cashDelivered', 'cashOut', 'cashIn', 'insurance'];
-const LIVE_FIELDS = ['base', 'collections', 'loans', 'expenses', 'otherExpenses', 'cashDelivered'];
-const EDITABLE_FIELDS = ['base', 'collections', 'loans', 'expenses', 'otherExpenses', 'cashOut', 'cashIn', 'cashDelivered'];
+// «Gastos» se quitó (todo va en «Otros gastos»): `expenses` solo se lee de días antiguos guardados (0 si no hay).
+const LIVE_FIELDS = ['base', 'collections', 'loans', 'otherExpenses', 'cashDelivered'];
+const EDITABLE_FIELDS = ['base', 'collections', 'loans', 'otherExpenses', 'cashOut', 'cashIn', 'cashDelivered'];
 
 function ensureLedger(route) {
   if (!route) return route;
@@ -2062,7 +2067,7 @@ function dayRecord(route, dateISO, liveInsurance = 0) {
   const salary = Number(stored?.salary || 0);
   if (dateISO === today && !closedToday(route)) {
     const live = Object.fromEntries(LIVE_FIELDS.map(field => [field, Number(route[field] || 0)]));
-    return { ...live, otherExpenses: live.otherExpenses + salary, salary, cashOut: Number(stored?.cashOut || 0), cashIn: Number(stored?.cashIn || 0), insurance: liveInsurance, closed: false, live: true };
+    return { ...live, expenses: 0, otherExpenses: live.otherExpenses + salary, salary, cashOut: Number(stored?.cashOut || 0), cashIn: Number(stored?.cashIn || 0), insurance: liveInsurance, closed: false, live: true };
   }
   if (!stored) return { ...Object.fromEntries(DAY_FIELDS.map(field => [field, 0])), salary: 0, closed: false, empty: true };
   const record = Object.fromEntries(DAY_FIELDS.map(field => [field, Number(stored[field] || 0)]));
@@ -2214,6 +2219,35 @@ function otherExpensesNote(route, dateISO) {
     .filter(entry => (entry.date || String(entry.createdAt || '').slice(0, 10)) === dateISO)
     .map(entry => `${entry.note || 'Sin descripción'} (${formatMoney(entry.amount)})`)
     .join('\n');
+}
+
+/**
+ * «Gastos» se quitó del sistema: lo que haya quedado anotado ahí (hoy o en días guardados) pasa a
+ * «Otros gastos» con una nota, así la caja y el cuadre no cambian. Devuelve true si movió algo.
+ */
+function mergeExpensesIntoOther(route) {
+  ensureLedger(route);
+  let changed = false;
+  const live = Number(route.expenses || 0);
+  if (live) {
+    route.otherExpenses = Number(route.otherExpenses || 0) + live;
+    route.otherExpenseEntries ||= [];
+    route.otherExpenseEntries.push({ amount: live, note: 'Gastos', date: localDateISO(), createdAt: new Date().toISOString() });
+    changed = true;
+  }
+  delete route.expenses; // un 0 no cambia nada: se quita sin contarlo como cambio
+  Object.entries(route.ledger).forEach(([dateISO, record]) => {
+    if (!record || !('expenses' in record)) return;
+    const amount = Number(record.expenses || 0);
+    if (amount) {
+      const note = otherExpensesNote(route, dateISO);
+      record.otherExpenses = Number(record.otherExpenses || 0) + amount;
+      record.otherExpensesNote = [note, `Gastos (${formatMoney(amount)})`].filter(Boolean).join('\n');
+      changed = true;
+    }
+    delete record.expenses;
+  });
+  return changed;
 }
 
 function setOtherExpensesNote(route, dateISO, text) {
@@ -2420,6 +2454,18 @@ function isPendingPayment(payment, cutoff, today = localDateISO()) {
   if (!cutoff || payment.date > cutoff.date) return true;
   if (payment.backdated) return false;
   return payment.date === cutoff.date && Boolean(cutoff.ts) && Boolean(payment.at) && Date.parse(payment.at) > cutoff.ts;
+}
+
+/**
+ * ¿Un movimiento (préstamo entregado, cartulina cancelada…) de `date` y hora `ts` todavía no
+ * entra a un cierre de ruta? Igual que los abonos: después del último cierre, aunque sea de días
+ * en que no se cerró la ruta. Sin ningún cierre, solo cuenta lo de hoy.
+ */
+function isSinceClosure(date, ts, cutoff, today = localDateISO()) {
+  if (!date || date > today) return false;
+  if (!cutoff) return date === today;
+  if (date > cutoff.date) return true;
+  return date === cutoff.date && Boolean(cutoff.ts) && Number(ts) > cutoff.ts;
 }
 
 /** Abonos de una cartulina que siguen pendientes de cierre (para el indicador «Abono por cerrar»). */
@@ -3456,6 +3502,113 @@ function pendingRestructure(requests, clientId) {
   return requests.find(request => request.status === 'pending' && request.clientId === clientId && (request.type === 'finance' || request.type === 'retanqueo'));
 }
 
+/**
+ * Reducción de intereses al cancelar antes de tiempo: el trabajador registró el último abono por
+ * el valor completo, pero el cliente pagó menos porque se le descontaron intereses. Ese descuento
+ * no es plata que entra: se resta del abono final (y así del cobro de la ruta) y del total de la
+ * cartulina, que sigue cancelada (saldo 0). Devuelve el error o '' si se aplicó.
+ */
+function maxInterestReduction(client, payment) {
+  const interest = Math.max(0, Number(client.total) - Number(client.principal || 0));
+  return Math.max(0, Math.min(Number(payment?.amount) || 0, interest));
+}
+
+function applyInterestReduction(client, payment, amount, { by = 'Administrador', today = localDateISO(), now = Date.now() } = {}) {
+  const value = Math.round(Number(amount) || 0);
+  if (!payment || Number(client.balance) > 0) return 'La reducción solo se aplica al abono con que se canceló la cartulina.';
+  if (!(value > 0)) return 'Escribe el valor de la reducción.';
+  const max = maxInterestReduction(client, payment);
+  if (value > max) return `La reducción no puede pasar de ${formatMoney(max)} (el abono final y los intereses de la cartulina).`;
+  payment.amount = Number(payment.amount) - value;
+  payment.interestReduction = Number(payment.interestReduction || 0) + value;
+  client.total = Number(client.total) - value;
+  client.breakdown = `${formatMoney(client.principal)} / ${formatMoney(client.total - Number(client.principal || 0))}`;
+  client.interestReductions ||= [];
+  client.interestReductions.unshift({ date: today, at: new Date(now).toISOString(), amount: value, by, paymentDate: payment.date });
+  client.totalPaidAmount = (client.payments || []).reduce((sum, item) => sum + (Number(item.amount) || 0), 0);
+  return '';
+}
+
+// ── js/domain/route-day.js
+/**
+ * domain/route-day · Movimientos de la ruta que aún no entran a un cierre: cartulinas canceladas y
+ * préstamos entregados. Igual que los abonos, se acumulan desde el último «Verificar y cerrar
+ * ruta» (aunque pasen varios días sin cerrar, p. ej. rutas que se pasan un día de por medio) y
+ * vuelven a cero al cerrar.
+ */
+
+
+
+
+/** Día en que se entregó la plata de la cartulina (si se creó un domingo, ese domingo). */
+function deliveryDate(client) {
+  return client.deliveredOn || client.insuranceCollectedAt || client.creditStartDate || '';
+}
+
+/** Abono con que se canceló la cartulina: el más reciente (por fecha y hora de registro). */
+function finalPayment(client) {
+  return (client.payments || []).reduce((last, payment) => {
+    if (!last) return payment;
+    const newer = String(payment.date).localeCompare(String(last.date)) || String(payment.at || '').localeCompare(String(last.at || ''));
+    return newer > 0 ? payment : last;
+  }, null);
+}
+
+/** Hora en que quedó cancelada: la del abono final de ese día (0 si no se registró). */
+function settledTs(client) {
+  const last = finalPayment(client);
+  return last && last.date === client.settledAt && last.at ? Date.parse(last.at) || 0 : 0;
+}
+
+/**
+ * Cartulinas canceladas de la ruta: entre `from` y `to` (fechas ISO, inclusivas) o, sin rango,
+ * las canceladas desde el último cierre. Cada una con el total de la cartulina y el abono final.
+ */
+function cancelledCards(clients, routeId, route, range = null, today = localDateISO()) {
+  const cutoff = range ? null : closureCutoff(route);
+  return Object.entries(clients)
+    .filter(([, client]) => client?.route === routeId && Number(client.balance) <= 0 && client.settledAt)
+    .filter(([, client]) => range ? client.settledAt >= range.from && client.settledAt <= range.to : isSinceClosure(client.settledAt, settledTs(client), cutoff, today))
+    .map(([clientId, client]) => {
+      const last = finalPayment(client);
+      return { clientId, name: client.name, amount: Number(client.total) || 0, date: client.settledAt, finalPayment: last && last.date === client.settledAt ? Number(last.amount) || 0 : 0 };
+    })
+    .sort((a, b) => b.date.localeCompare(a.date) || a.name.localeCompare(b.name));
+}
+
+/** Suma de los abonos con que se cancelaron las cartulinas desde el último cierre. */
+function cancelledSinceClosureTotal(clients, routeId, route, today = localDateISO()) {
+  const cards = cancelledCards(clients, routeId, route, null, today);
+  return { count: cards.length, total: cards.reduce((sum, card) => sum + card.finalPayment, 0) };
+}
+
+/**
+ * Préstamos entregados en la ruta: cartulinas nuevas (alta, renovación u otra cartulina) y
+ * retanqueos. Con `date` solo los de ese día; sin `date`, los entregados desde el último cierre.
+ * Es «nuevo» solo si la persona nunca antes había tenido una cartulina en el sistema.
+ */
+function deliveredLoans(clients, routeId, route, date = null, today = localDateISO()) {
+  const cutoff = date ? null : closureCutoff(route);
+  const counts = (day, ts) => date ? day === date : isSinceClosure(day, ts, cutoff, today);
+  const all = Object.entries(clients).filter(([, client]) => client);
+  const loans = [];
+  all.forEach(([clientId, client]) => {
+    if (client.route !== routeId || client.importedFrom?.cancelledCard) return;
+    const delivered = deliveryDate(client);
+    if (counts(delivered, Number(client.insuranceCollectedTs) || 0)) {
+      const key = personKey(client.id);
+      const before = all.some(([otherId, other]) => otherId !== clientId && personKey(other.id) === key
+        && (deliveryDate(other) < delivered || (deliveryDate(other) === delivered && otherId < clientId)));
+      const isNew = !before && !client.renewedFrom;
+      loans.push({ clientId, name: client.name, principal: Number(client.principal) || 0, amount: Number(client.total) || 0, isNew, date: delivered, kind: isNew ? 'Cliente nuevo' : client.renewedFrom ? 'Renovación' : 'Cliente que ya había estado' });
+    }
+    (client.restructures || []).filter(entry => entry.type === 'retanqueo' && counts(entry.date, Date.parse(entry.at || '') || 0)).forEach(entry => {
+      loans.push({ clientId, name: client.name, principal: Number(entry.extra) || 0, amount: (Number(entry.extra) || 0) + (Number(entry.interest) || 0), isNew: false, date: entry.date, kind: 'Retanqueo' });
+    });
+  });
+  return loans.sort((a, b) => a.name.localeCompare(b.name));
+}
+
 // ── js/features/admin/access-hours.js
 /**
  * features/admin/access-hours · Tarjeta «Horario de acceso de trabajadores»
@@ -3842,12 +3995,12 @@ function paintAdminRoute(routeId) {
   setField('#metric-collections', route.collections);
   setField('#metric-base', route.base);
   setField('#metric-loans', route.loans);
-  setField('#metric-expenses', route.expenses);
   setField('#metric-cash-delivered', route.cashDelivered);
   setField('#metric-other-expenses', route.otherExpenses);
   renderRouteOperations(route);
   renderDayPayments(routeId);
   renderBaseBreakdown(routeId);
+  renderSettlementExtras(routeId);
   renderSettlementOtherNote(routeId);
   renderMondayBase(routeId);
   renderRouteEvidence(routeId);
@@ -5994,7 +6147,7 @@ const COLUMNS = [
   { key: 'base', label: 'Base' },
   { key: 'collections', label: 'Cobro' },
   { key: 'loans', label: 'Préstamos' },
-  { key: 'expenses', label: 'Gastos' },
+  { key: 'paymentsCount', label: 'Nº abonos', count: true }, // cantidad de abonos del día (no se edita)
   { key: 'otherExpenses', label: 'Otros gastos' },
   { key: 'cashOut', label: 'Salida de caja' },
   { key: 'cashIn', label: 'Entrada a caja' },
@@ -6136,6 +6289,27 @@ function openCashEntry(route) {
 
 // ── Cierre semanal ──
 
+/** Celda con una cantidad (p. ej. número de abonos del día). */
+function countCell(value) {
+  const cell = document.createElement('td');
+  cell.className = 'numeric count-cell';
+  if (value === null || value === undefined) { cell.textContent = '—'; cell.classList.add('is-muted'); return cell; }
+  cell.textContent = String(value);
+  return cell;
+}
+
+/**
+ * Número de abonos de un día: el que quedó guardado al cerrar o, si no, los abonos de las
+ * cartulinas de la ruta con esa fecha.
+ */
+function dayPaymentsCount(route, dateISO) {
+  const stored = route.ledger?.[dateISO]?.paymentsCount;
+  if (Number.isFinite(Number(stored)) && stored !== null && stored !== undefined) return Number(stored);
+  const routeId = reportRouteId();
+  return Object.values(clients).reduce((sum, client) => client?.route === routeId
+    ? sum + (client.payments || []).filter(payment => payment.date === dateISO && Number(payment.amount) > 0).length : sum, 0);
+}
+
 function moneyCell(value, { negativeClass = false, negativeRed = false } = {}) {
   const cell = document.createElement('td');
   cell.className = 'numeric';
@@ -6249,7 +6423,7 @@ function totalsRow(label, totals, className) {
   head.scope = 'row';
   head.textContent = label;
   row.append(head);
-  COLUMNS.forEach(({ key }) => row.append(moneyCell(totals[key])));
+  COLUMNS.forEach(({ key, count }) => row.append(count ? countCell(totals[key]) : moneyCell(totals[key])));
   row.append(moneyCell(totals.difference, { negativeClass: true }), moneyCell(totals.cashBox, { negativeRed: true }));
   return row;
 }
@@ -6259,7 +6433,7 @@ function sumDays(route, days, liveTotal) {
   totals.difference = 0;
   days.forEach(({ iso }) => {
     const record = dayRecord(route, iso, liveTotal);
-    COLUMNS.forEach(({ key }) => { totals[key] += key === 'cashDelivered' ? cashInHandOf(route, iso, record) : record[key]; });
+    COLUMNS.forEach(({ key }) => { totals[key] += key === 'cashDelivered' ? cashInHandOf(route, iso, record) : key === 'paymentsCount' ? dayPaymentsCount(route, iso) : record[key]; });
     totals.difference += ledgerDifference(record) || 0;
   });
   // La base no se suma: se muestra la del primer día del periodo.
@@ -6314,6 +6488,7 @@ function renderWeeklyAudit(route, monthValue) {
     }
     row.append(dateCell);
     COLUMNS.forEach(({ key }) => {
+      if (key === 'paymentsCount') { row.append(countCell(future ? null : dayPaymentsCount(route, iso))); return; }
       if (key === 'cashDelivered') {
         // Se ve y se corrige el efectivo en mano; las transferencias del día se indican debajo.
         const cell = editableCell(iso, key, future ? 0 : cashInHandOf(route, iso, record), future);
@@ -6737,7 +6912,8 @@ function __mount_routePickerModule() {
 
 
 
-const CLOSURE_FIELDS = ['collections', 'base', 'loans', 'expenses', 'otherExpenses', 'cashDelivered'];
+
+const CLOSURE_FIELDS = ['collections', 'base', 'loans', 'otherExpenses', 'cashDelivered'];
 
 /** Estado del cierre de hoy: 'closed' (enviado y sin cambios), 'changed' (editado después) o null. */
 function closureStatus(route) {
@@ -6791,7 +6967,7 @@ function refreshRouteOptions() {
  * del lunes arranca en 0, salvo la «Base para el lunes» que el admin asigne ese sábado.
  */
 function resetRouteDay(route, routeId, transfers = 0) {
-  const computedCash = Number(route.collections || 0) + Number(route.base || 0) - Number(route.loans || 0) - Number(route.expenses || 0) - Number(route.otherExpenses || 0);
+  const computedCash = Number(route.collections || 0) + Number(route.base || 0) - Number(route.loans || 0) - Number(route.otherExpenses || 0);
   const cash = Number(route.cashDelivered || 0) > 0 ? Number(route.cashDelivered) : Math.max(0, computedCash);
   const saturday = new Date().getDay() === 6;
   // Lo que entró por transferencia está en el banco: no pasa a la base del día siguiente.
@@ -6799,7 +6975,6 @@ function resetRouteDay(route, routeId, transfers = 0) {
   const carried = saturday ? mondayBaseFor(route, localDateISO()) : Math.max(0, cash - transfers);
   route.collections = 0;
   route.loans = 0;
-  route.expenses = 0;
   route.otherExpenses = 0;
   route.cashDelivered = 0;
   // La base del día siguiente (la misma que ve el trabajador) arranca con ese efectivo.
@@ -6817,7 +6992,7 @@ function applyCarriedBases(today = localDateISO()) {
   let changed = false;
   Object.entries(routeSettlements).forEach(([routeId, route]) => {
     if (!route || route.baseCarriedOn === today || route.lastClosure?.date === today) return;
-    const started = ['collections', 'loans', 'expenses', 'otherExpenses', 'cashDelivered'].some(field => Number(route[field] || 0) !== 0);
+    const started = ['collections', 'loans', 'otherExpenses', 'cashDelivered'].some(field => Number(route[field] || 0) !== 0);
     if (started) return;
     const carried = carriedBase(route, today, date => transfersOn(routeId, date));
     if (!carried) return;
@@ -7000,6 +7175,31 @@ function openInsuranceEditor() {
   });
 }
 
+/**
+ * Casillas informativas de la liquidación (se calculan solas):
+ * - «Canceladas»: suma del abono con que se canceló cada cartulina desde el último cierre (ese
+ *   dinero ya está dentro del Cobro; se muestra aparte para revisarlo).
+ * - Bajo «Efectivo»: cuánto de lo cobrado llegó por transferencia (está en el banco).
+ */
+function renderSettlementExtras(routeId) {
+  const route = routeSettlements[routeId];
+  if (!route) return;
+  const cancelled = cancelledSinceClosureTotal(clients, routeId, route);
+  const input = document.querySelector('#metric-cancelled');
+  if (input) input.value = cancelled.total;
+  document.querySelector('#metric-cancelled-label').textContent = cancelled.count ? `Canceladas (${cancelled.count})` : 'Canceladas';
+  document.querySelector('#metric-cancelled-note').textContent = cancelled.count
+    ? `Abono final de ${cancelled.count === 1 ? 'la cartulina cancelada' : `las ${cancelled.count} cartulinas canceladas`}`
+    : 'Sin cartulinas canceladas desde el último cierre';
+  const transfers = pendingRoutePayments(clients, routeId, route)
+    .filter(({ payment }) => payment.method === 'transfer')
+    .reduce((sum, { payment }) => sum + (Number(payment.amount) || 0), 0);
+  const note = document.querySelector('#metric-transfers-note');
+  note.hidden = !transfers;
+  note.textContent = transfers ? `Incluye ${formatMoney(transfers)} en transferencias` : '';
+  note.title = 'Abonos recibidos por transferencia: están en el banco y no pasan a la base del día siguiente.';
+}
+
 /** Comentario de «Otros gastos» del día: es el mismo que sale en Reportes financieros. */
 function renderSettlementOtherNote(routeId) {
   const route = routeSettlements[routeId];
@@ -7040,7 +7240,7 @@ function recalculateSettlement() {
   const route = state.activeSettlement;
   if (!route) return;
   // Efectivo entregado menos el que debía haber: positivo = sobra plata, negativo = falta.
-  state.settlementDifference = route.cashDelivered - (route.collections + route.base - route.loans - route.expenses - route.otherExpenses);
+  state.settlementDifference = Number(route.cashDelivered || 0) - (Number(route.collections || 0) + Number(route.base || 0) - Number(route.loans || 0) - Number(route.otherExpenses || 0));
   const difference = document.querySelector('#metric-difference');
   const differenceCard = document.querySelector('#difference-card');
   difference.textContent = formatMoney(state.settlementDifference);
@@ -7062,10 +7262,19 @@ function __mount_settlementModule() {
   let saveTimer = null;
   settlementInputs.forEach(input => input.addEventListener('input', () => {
     const field = input.dataset.settlementField;
-    if (field === 'collections' || !state.activeSettlement) return; // el cobro se calcula de los abonos
+    // Se escribe en la ruta vigente (la de la lista de cobros), no en una copia: si mientras tanto
+    // llegó una descarga del servidor (p. ej. al volver el internet), lo escrito no se pierde.
+    const route = routeSettlements[routeSelect.value] || state.activeSettlement;
+    if (field === 'collections' || !route) return; // el cobro se calcula de los abonos
+    state.activeSettlement = route;
     const amount = Number(input.value);
-    state.activeSettlement[field] = Number.isFinite(amount) && amount >= 0 ? amount : 0;
-    if (field === 'base') renderBaseBreakdown(routeSelect.value);
+    route[field] = Number.isFinite(amount) && amount >= 0 ? amount : 0;
+    if (field === 'base') {
+      // Base puesta a mano: el paso automático de la base del último cierre ya no la reemplaza hoy.
+      route.baseCarriedOn = localDateISO();
+      route.baseCarriedFrom = 'manual';
+      renderBaseBreakdown(routeSelect.value);
+    }
     recalculateSettlement();
     window.clearTimeout(saveTimer);
     saveTimer = window.setTimeout(persistBusinessData, 700);
@@ -7080,7 +7289,6 @@ function __mount_settlementModule() {
         collections: state.activeSettlement.collections,
         base: state.activeSettlement.base,
         loans: state.activeSettlement.loans,
-        expenses: state.activeSettlement.expenses,
         otherExpenses: state.activeSettlement.otherExpenses,
         cashDelivered: state.activeSettlement.cashDelivered,
         difference: state.settlementDifference,
@@ -7104,6 +7312,10 @@ function __mount_settlementModule() {
       };
       // Libro diario: el día queda guardado con su fecha antes de reiniciar el resumen.
       recordClosure(route, localDateISO(), { ...route, insurance, transfers }, Date.parse(payload.submittedAt));
+      // Número de abonos del día (Reportes financieros): se guarda porque los abonos de las
+      // cartulinas canceladas se archivan a la semana.
+      route.ledger[localDateISO()].paymentsCount = Object.values(clients).reduce((sum, client) => client?.route === routeId
+        ? sum + (client.payments || []).filter(payment => payment.date === localDateISO() && Number(payment.amount) > 0).length : sum, 0);
       const reset = resetRouteDay(route, routeId, transfers);
       route.lastClosure.carriedBase = reset.carried;
       route.lastClosure.after = Object.fromEntries(CLOSURE_FIELDS.map(field => [field, Number(route[field] || 0)]));
@@ -8012,6 +8224,13 @@ function renderHistory(client) {
     date.textContent = shortHistoryDate(payment.date);
     date.title = formatDate(payment.date);
     dateAndMethod.append(date, createMethodIcon(payment.method));
+    if (Number(payment.interestReduction) > 0) {
+      const reduction = document.createElement('small');
+      reduction.className = 'payment-pending-tag payment-reduction-tag';
+      reduction.textContent = `−${formatMoney(payment.interestReduction)} intereses`;
+      reduction.title = 'Reducción de intereses por pagar antes de tiempo: ese valor no entró a la caja.';
+      dateAndMethod.append(reduction);
+    }
     if (pendingClose.has(payment)) {
       const pendingTag = document.createElement('small');
       pendingTag.className = 'payment-pending-tag';
@@ -10708,43 +10927,6 @@ function operationRoute() {
   return state.userRole === 'admin' ? routeSelect.value : state.workerRoute;
 }
 
-/** Día en que se entregó la plata de la cartulina (si se creó un domingo, ese domingo). */
-function deliveryDate(client) {
-  return client.deliveredOn || client.insuranceCollectedAt || client.creditStartDate || '';
-}
-
-/** Cartulinas canceladas (saldo en cero) de la ruta entre `from` y `to`, la más reciente primero. */
-function cancelledCards(routeId, from, to) {
-  return Object.entries(clients)
-    .filter(([, client]) => client?.route === routeId && Number(client.balance) <= 0 && client.settledAt && client.settledAt >= from && client.settledAt <= to)
-    .map(([clientId, client]) => ({ clientId, name: client.name, amount: Number(client.total) || 0, date: client.settledAt }))
-    .sort((a, b) => b.date.localeCompare(a.date) || a.name.localeCompare(b.name));
-}
-
-/**
- * Préstamos entregados en la ruta en `date`: cartulinas nuevas (alta, renovación u otra
- * cartulina) y retanqueos. Es «nuevo» solo si la persona nunca antes había tenido una
- * cartulina en el sistema; los demás son de clientes que ya habían estado.
- */
-function loansOn(routeId, date) {
-  const all = Object.entries(clients).filter(([, client]) => client);
-  const loans = [];
-  all.forEach(([clientId, client]) => {
-    if (client.route !== routeId || client.importedFrom?.cancelledCard) return;
-    if (deliveryDate(client) === date) {
-      const key = personKey(client.id);
-      const before = all.some(([otherId, other]) => otherId !== clientId && personKey(other.id) === key
-        && (deliveryDate(other) < date || (deliveryDate(other) === date && otherId < clientId)));
-      const isNew = !before && !client.renewedFrom;
-      loans.push({ clientId, name: client.name, principal: Number(client.principal) || 0, amount: Number(client.total) || 0, isNew, kind: isNew ? 'Cliente nuevo' : client.renewedFrom ? 'Renovación' : 'Cliente que ya había estado' });
-    }
-    (client.restructures || []).filter(entry => entry.type === 'retanqueo' && entry.date === date).forEach(entry => {
-      loans.push({ clientId, name: client.name, principal: Number(entry.extra) || 0, amount: (Number(entry.extra) || 0) + (Number(entry.interest) || 0), isNew: false, kind: 'Retanqueo' });
-    });
-  });
-  return loans.sort((a, b) => a.name.localeCompare(b.name));
-}
-
 function renderOperationsModal() {
   const routeId = operationRoute();
   const route = routeSettlements[routeId];
@@ -10753,26 +10935,28 @@ function renderOperationsModal() {
   const yesterday = shiftDateISO(today, -1);
   const list = state.activeOperationList;
   const isCancelledList = ['cancelled', 'yesterday-cancelled', 'range-cancelled'].includes(list);
-  // Canceladas: las de hoy; «Canceladas ayer»: las del día anterior. Préstamos nuevos: solo personas
-  // que entran por primera vez; ingresados: todos los préstamos del día (nuevos y de clientes que ya habían estado).
-  const entries = list === 'cancelled' ? cancelledCards(routeId, today, today)
-    : list === 'yesterday-cancelled' ? cancelledCards(routeId, yesterday, yesterday)
-      : list === 'range-cancelled' && activeRange ? cancelledCards(routeId, activeRange.from, activeRange.to)
-        : list === 'new' ? loansOn(routeId, today).filter(loan => loan.isNew).map(loan => ({ ...loan, amount: loan.principal }))
-          : loansOn(routeId, today);
+  // Canceladas y préstamos: los que aún no entran a un cierre (se acumulan hasta «Verificar y cerrar
+  // ruta», aunque pasen varios días). «Canceladas ayer»: las del día anterior. Préstamos nuevos: solo
+  // personas que entran por primera vez; ingresados: todos (nuevos y de clientes que ya habían estado).
+  const entries = list === 'cancelled' ? cancelledCards(clients, routeId, route)
+    : list === 'yesterday-cancelled' ? cancelledCards(clients, routeId, route, { from: yesterday, to: yesterday })
+      : list === 'range-cancelled' && activeRange ? cancelledCards(clients, routeId, route, activeRange)
+        : list === 'new' ? deliveredLoans(clients, routeId, route).filter(loan => loan.isNew).map(loan => ({ ...loan, amount: loan.principal }))
+          : deliveredLoans(clients, routeId, route);
   const term = normalizeSearch(operationsSearch.value.trim());
   const filtered = entries.filter(entry => {
     const client = clients[entry.clientId];
     return normalizeSearch(`${entry.name} ${client?.id || ''}`).includes(term);
   });
   document.querySelector('#operations-list-route').textContent = `RUTA ${route.name.toLocaleUpperCase('es')}`;
-  document.querySelector('#operations-list-title').textContent = state.activeOperationList === 'range-cancelled' && activeRange ? `Tarjetas canceladas · ${activeRange.label}` : state.activeOperationList === 'yesterday-cancelled' ? `Tarjetas canceladas · ${formatDate(yesterday)}` : state.activeOperationList === 'cancelled' ? `Tarjetas canceladas · hoy ${formatDate(today)}` : state.activeOperationList === 'new' ? `Préstamos nuevos · hoy ${formatDate(today)}` : `Préstamos ingresados · hoy ${formatDate(today)}`;
+  const sinceLabel = 'desde el último cierre';
+  document.querySelector('#operations-list-title').textContent = state.activeOperationList === 'range-cancelled' && activeRange ? `Tarjetas canceladas · ${activeRange.label}` : state.activeOperationList === 'yesterday-cancelled' ? `Tarjetas canceladas · ${formatDate(yesterday)}` : state.activeOperationList === 'cancelled' ? `Tarjetas canceladas · ${sinceLabel}` : state.activeOperationList === 'new' ? `Préstamos nuevos · ${sinceLabel}` : `Préstamos ingresados · ${sinceLabel}`;
   document.querySelector('#operations-results-count').textContent = `${filtered.length} de ${entries.length} registros`;
   operationsResults.replaceChildren();
   if (!filtered.length) {
     const empty = document.createElement('p');
     empty.className = 'operations-empty';
-    empty.textContent = entries.length ? 'No hay resultados para esa búsqueda.' : state.activeOperationList === 'range-cancelled' ? 'No hubo tarjetas canceladas en esa semana en esta ruta.' : state.activeOperationList === 'yesterday-cancelled' ? 'No hay tarjetas canceladas el día anterior en esta ruta.' : state.activeOperationList === 'cancelled' ? 'Hoy no se han cancelado tarjetas en esta ruta.' : state.activeOperationList === 'new' ? 'Hoy no hay préstamos a clientes nuevos en esta ruta.' : 'Hoy no se han entregado préstamos en esta ruta.';
+    empty.textContent = entries.length ? 'No hay resultados para esa búsqueda.' : state.activeOperationList === 'range-cancelled' ? 'No hubo tarjetas canceladas en esa semana en esta ruta.' : state.activeOperationList === 'yesterday-cancelled' ? 'No hay tarjetas canceladas el día anterior en esta ruta.' : state.activeOperationList === 'cancelled' ? 'No se han cancelado tarjetas desde el último cierre.' : state.activeOperationList === 'new' ? 'No hay préstamos a clientes nuevos desde el último cierre.' : 'No se han entregado préstamos desde el último cierre.';
     operationsResults.append(empty);
     return;
   }
@@ -10787,7 +10971,7 @@ function renderOperationsModal() {
     const name = document.createElement('strong');
     name.textContent = entry.name;
     const id = document.createElement('small');
-    id.textContent = `${clients[entry.clientId]?.id ? `Cédula ${clients[entry.clientId].id}` : 'Cliente'}${isCancelledList && entry.date ? ` · cancelada el ${formatDate(entry.date)}` : ''}${!isCancelledList && entry.kind ? ` · ${entry.kind}` : ''}`;
+    id.textContent = `${clients[entry.clientId]?.id ? `Cédula ${clients[entry.clientId].id}` : 'Cliente'}${isCancelledList && entry.date ? ` · cancelada el ${formatDate(entry.date)}` : ''}${isCancelledList && entry.finalPayment ? ` · último abono ${formatMoney(entry.finalPayment)}` : ''}${!isCancelledList && entry.kind ? ` · ${entry.kind}` : ''}${!isCancelledList && entry.date && entry.date !== today ? ` · ${formatDate(entry.date)}` : ''}`;
     customer.append(name, id);
     const amount = document.createElement('strong');
     amount.className = 'operations-result-amount';
@@ -10842,6 +11026,8 @@ function __mount_operationsListModule() {
 /**
  * features/payments · Modal de registro de abonos (efectivo / transferencia con comprobante).
  */
+
+
 
 
 
@@ -10940,22 +11126,65 @@ function updatePaymentMethod() {
   voucherFile.required = false;
 }
 
-/** El abono canceló la cartulina: ¿renovar el crédito? (Renovar abre el flujo de la ficha.) */
-function offerRenewal(clientId, returnHome) {
+/**
+ * El abono canceló la cartulina: ¿renovar el crédito? (Renovar abre el flujo de la ficha.)
+ * Tercer botón «Reducción de intereses»: si el cliente pagó antes de tiempo y se le descontaron
+ * intereses, ese valor no entró: se resta del abono final y del cobro (domain/restructure.js).
+ */
+function offerRenewal(clientId, returnHome, { reduced = false } = {}) {
   const client = clients[clientId];
   if (!client) return;
   // Cerrar con la ✕ (o con «atrás») cuenta como «No».
   const closeButton = document.querySelector('#custom-modal-close');
   const goHome = () => { if (returnHome) showView('inicio'); };
   closeButton.addEventListener('click', goHome, { once: true });
+  const payment = finalPayment(client);
+  const canReduce = !reduced && maxInterestReduction(client, payment) > 0;
   openCustomModal({
     title: 'Cartulina cancelada',
-    description: `Con este abono ${client.name} pagó toda la deuda. ¿Desea renovarle el crédito?`,
+    description: reduced
+      ? `Se aplicó la reducción de intereses. ¿Desea renovarle el crédito a ${client.name}?`
+      : `Con este abono ${client.name} pagó toda la deuda. ¿Desea renovarle el crédito?`,
     submitLabel: 'Sí, renovar',
     cancelLabel: returnHome ? 'No, volver al inicio' : 'No renovar',
+    extraAction: canReduce ? {
+      label: 'Reducción de intereses',
+      onClick: () => { closeButton.removeEventListener('click', goHome); openInterestReduction(clientId, returnHome); },
+    } : null,
     // Se abre después de que esta ventana se cierre, para que no la cierre a ella.
     onSubmit: () => { closeButton.removeEventListener('click', goHome); window.setTimeout(() => document.querySelector('#renew-client')?.click(), 0); },
     onCancel: () => { closeButton.removeEventListener('click', goHome); goHome(); },
+  });
+}
+
+/** Cuadro para escribir cuánto se le redujo de intereses al cliente que pagó antes de tiempo. */
+function openInterestReduction(clientId, returnHome) {
+  const client = clients[clientId];
+  const payment = client && finalPayment(client);
+  if (!payment) return;
+  const max = maxInterestReduction(client, payment);
+  openCustomModal({
+    title: 'Reducción de intereses',
+    description: `${client.name} pagó antes de tiempo. Escribe cuánto se le descontó de intereses: ese valor no entra a la caja, se resta del último abono (${formatMoney(payment.amount)}) y del cobro. Máximo ${formatMoney(max)}.`,
+    fields: [{ name: 'amount', label: 'Valor de la reducción', money: true, thousands: true, type: 'number', min: 1, step: 1, required: true }],
+    submitLabel: 'Aplicar reducción',
+    onSubmit: values => {
+      const by = state.userRole === 'admin' ? 'Administrador' : state.activeWorker?.name || 'Trabajador';
+      const error = applyInterestReduction(client, payment, values.amount, { by });
+      if (error) { customModalError.textContent = error; return false; }
+      const route = routeSettlements[client.route];
+      if (route) syncRouteCollections(clients, { [client.route]: route });
+      updateCashTotal();
+      persistBusinessData();
+      renderHistory(client);
+      renderClientRows(clientId);
+      const backView = state.previousView;
+      openClient(clientId);
+      state.previousView = backView;
+      showToast(`Reducción de intereses de ${formatMoney(Number(values.amount))} aplicada a ${client.name}: el abono final quedó en ${formatMoney(payment.amount)}.`);
+      window.setTimeout(() => offerRenewal(clientId, returnHome, { reduced: true }), 0);
+    },
+    onCancel: () => { window.setTimeout(() => offerRenewal(clientId, returnHome), 0); },
   });
 }
 
@@ -11108,6 +11337,7 @@ function __mount_paymentModule() {
 
 
 
+
 /** Momento en que se cerró hoy la ruta («Verificar y cerrar ruta»), o 0 si hoy no se ha cerrado. */
 function todayClosureTs(route) {
   return route?.lastClosure?.date === localDateISO() ? Date.parse(route.lastClosure.submittedAt) || 0 : 0;
@@ -11140,7 +11370,7 @@ function workerRoute() {
 /** Efectivo que debería tener el trabajador ahora: base + cobros − préstamos − gastos − otros gastos. */
 function cashInHand(route, todayCash) {
   const bankBase = Number(route.baseBank || 0);
-  return Number(route.base || 0) - bankBase + todayCash - Number(route.loans || 0) - Number(route.expenses || 0) - Number(route.otherExpenses || 0);
+  return Number(route.base || 0) - bankBase + todayCash - Number(route.loans || 0) - Number(route.otherExpenses || 0);
 }
 
 function updateCashTotal() {
@@ -11165,7 +11395,10 @@ function renderWorkerDailyMetrics() {
   document.querySelector('#worker-metrics-route').textContent = `Ruta ${route.name}`;
   document.querySelector('#worker-day-base').textContent = formatMoney(route.base || 0);
   document.querySelector('#worker-day-collections').textContent = formatMoney(route.collections || 0);
-  document.querySelector('#worker-day-expenses').textContent = formatMoney(route.expenses || 0);
+  // «Canceladas»: suma del abono con que se canceló cada cartulina desde el último cierre (va en el cobro).
+  const cancelled = cancelledSinceClosureTotal(clients, state.workerRoute, route);
+  document.querySelector('#worker-day-cancelled').textContent = formatMoney(cancelled.total);
+  document.querySelector('#worker-day-cancelled-count').textContent = cancelled.count ? `${cancelled.count} cartulina${cancelled.count === 1 ? '' : 's'} cancelada${cancelled.count === 1 ? '' : 's'} · abono final` : 'Sin cartulinas canceladas';
   document.querySelector('#worker-day-other-expenses').textContent = formatMoney(route.otherExpenses || 0);
   document.querySelector('#worker-day-loans').textContent = formatMoney(route.loans || 0);
   // Seguros cobrados desde el último cierre (también los de días en que no se cerró la ruta):
@@ -11180,8 +11413,15 @@ function renderWorkerDailyMetrics() {
   renderWorkerDayPayments();
   // Efectivo del día = base + cobros − préstamos − gastos. Ya cerrada hoy la ruta, la base que
   // aparece es la de mañana (el efectivo del cierre): no se vuelve a contar como efectivo de hoy.
-  const movements = Number(route.collections || 0) - Number(route.loans || 0) - Number(route.expenses || 0) - Number(route.otherExpenses || 0);
+  const movements = Number(route.collections || 0) - Number(route.loans || 0) - Number(route.otherExpenses || 0);
   document.querySelector('#worker-day-cash').textContent = formatMoney(closure ? movements : route.cashDelivered || Number(route.base || 0) + movements);
+  // Del efectivo: cuánto llegó por transferencia (está en el banco, no en la mano).
+  const transfers = pendingRoutePayments(clients, state.workerRoute, route)
+    .filter(({ payment }) => payment.method === 'transfer')
+    .reduce((sum, { payment }) => sum + (Number(payment.amount) || 0), 0);
+  const transfersNote = document.querySelector('#worker-day-cash-transfers');
+  transfersNote.hidden = !transfers;
+  transfersNote.textContent = transfers ? `Incluye ${formatMoney(transfers)} en transferencias` : '';
   const cashNote = document.querySelector('#worker-day-cash-note');
   cashNote.hidden = !closure;
   cashNote.textContent = closure ? 'Ruta cerrada hoy: solo lo que entre después del cierre' : '';
@@ -11378,14 +11618,19 @@ function closeExpenseModal() {
 
 /** Registra los listeners del módulo. Se invoca una sola vez desde app.js. */
 function __mount_expensesModule() {
-  document.querySelector('#worker-expense-receipt').addEventListener('change', event => {
+  // Comprobante: de la galería o tomado con la cámara; el último que se elige es el que vale.
+  const showChosen = event => {
     const preview = document.querySelector('#worker-expense-preview');
     const file = event.target.files?.[0];
+    const other = event.target.id === 'worker-expense-gallery' ? '#worker-expense-receipt' : '#worker-expense-gallery';
+    if (file) document.querySelector(other).value = '';
     document.querySelector('#worker-expense-file-name').textContent = file?.name || 'Ningún archivo seleccionado';
     if (!file) { preview.hidden = true; preview.removeAttribute('src'); return; }
     preview.src = URL.createObjectURL(file);
     preview.hidden = false;
-  });
+  };
+  document.querySelector('#worker-expense-receipt').addEventListener('change', showChosen);
+  document.querySelector('#worker-expense-gallery').addEventListener('change', showChosen);
   document.querySelector('#worker-expense-form').addEventListener('submit', async event => {
     event.preventDefault();
     const form = event.currentTarget;
@@ -11393,7 +11638,7 @@ function __mount_expensesModule() {
     error.textContent = '';
     if (state.userRole !== 'worker' || !form.reportValidity()) return;
     const amount = Math.round(Number(form.elements.amount.value));
-    const file = form.elements.receipt.files?.[0];
+    const file = form.elements.receipt.files?.[0] || document.querySelector('#worker-expense-gallery').files?.[0];
     const route = routeSettlements[state.workerRoute];
     if (!route || !Number.isFinite(amount) || amount <= 0) {
       error.textContent = 'Ingresa un monto válido.';
@@ -12391,7 +12636,8 @@ function __mount_backNavigationModule() {
 // ── js/ui/custom-modal.js
 /**
  * ui/custom-modal · Modal genérico de formulario/confirmación reutilizado por todos los módulos.
- * Contrato: openCustomModal({ title, description, fields, submitLabel, onSubmit, cancelLabel, onCancel }).
+ * Contrato: openCustomModal({ title, description, fields, submitLabel, onSubmit, cancelLabel, onCancel, extraAction }).
+ * extraAction: { label, onClick } agrega un tercer botón (p. ej. «Reducción de intereses»); cierra el modal y luego llama onClick.
  * cancelLabel/onCancel permiten usar el botón secundario como acción (p. ej. «No recordar más»);
  * si onCancel devuelve false, el modal sigue abierto.
  * onSubmit puede ser async; si devuelve false, el modal queda abierto.
@@ -12406,13 +12652,29 @@ function __mount_backNavigationModule() {
 
 
 
-function openCustomModal({ title, description = '', fields = [], submitLabel = 'Guardar', onSubmit, cancelLabel = 'Cancelar', onCancel = null, onInput = null }) {
+function openCustomModal({ title, description = '', fields = [], submitLabel = 'Guardar', onSubmit, cancelLabel = 'Cancelar', onCancel = null, onInput = null, extraAction = null }) {
   state.lastFocusedElement = document.activeElement;
   document.querySelector('#custom-modal-title').textContent = title;
   document.querySelector('#custom-modal-description').textContent = description;
   document.querySelector('#custom-modal-save').textContent = submitLabel;
   document.querySelector('#custom-modal-cancel').textContent = cancelLabel;
   state.customModalCancel = onCancel;
+  // Tercer botón opcional (entre Cancelar y Guardar).
+  document.querySelector('#custom-modal-extra')?.remove();
+  if (extraAction) {
+    const extra = document.createElement('button');
+    extra.type = 'button';
+    extra.id = 'custom-modal-extra';
+    extra.className = 'secondary-button custom-modal-extra';
+    extra.textContent = extraAction.label;
+    extra.addEventListener('click', () => {
+      state.customModalCancel = null;
+      closeCustomModal();
+      // Se abre después de cerrar este modal, por si abre otro.
+      window.setTimeout(() => extraAction.onClick(), 0);
+    });
+    document.querySelector('#custom-modal-save').before(extra);
+  }
   customModalError.textContent = '';
   customModalFields.replaceChildren();
   state.customModalSubmit = onSubmit;
@@ -12505,6 +12767,7 @@ function openCustomModal({ title, description = '', fields = [], submitLabel = '
 
 function closeCustomModal() {
   customModal.hidden = true;
+  document.querySelector('#custom-modal-extra')?.remove();
   customModal.classList.remove('active');
   state.customModalSubmit = null;
   if (interestModal.hidden && modal.hidden && newClientModal.hidden) document.body.classList.remove('modal-open');
@@ -14399,6 +14662,7 @@ function boot() {
   window.setInterval(pruneExpiredPaymentHistories, 60 * 60 * 1000);
   // Cierres de caja: se guardan los últimos 4 meses (sin servidor, en este navegador).
   if (!backendEnabled() && pruneLedgers()) persistBusinessData();
+  if (!backendEnabled() && mergeOldExpenses()) persistBusinessData();
   if (!backendEnabled() && applyCarriedBases()) persistBusinessData();
   if (!backendEnabled() && syncRouteCollections(clients, routeSettlements)) persistBusinessData();
   window.setInterval(() => {
@@ -14423,6 +14687,11 @@ function boot() {
 /** Borra los cierres de caja de más de 4 meses en todos los cobros. ¿Borró algo? */
 function pruneLedgers() {
   return Object.values(routeSettlements).map(route => pruneOldLedger(route)).some(Boolean);
+}
+
+/** «Gastos» se quitó: lo anotado ahí pasa a «Otros gastos» (domain/ledger · mergeExpensesIntoOther). */
+function mergeOldExpenses() {
+  return Object.values(routeSettlements).map(route => mergeExpensesIntoOther(route)).some(Boolean);
 }
 
 /** Último cierre conocido de cada ruta: si cambia, hay que repintar sus clientes. */
@@ -14451,6 +14720,7 @@ function refreshFromServer(changes) {
   if ((state.userRole === 'admin' || syncRole() === 'admin') && pruneOrphanRoutes()) persistBusinessData();
   // Solo el admin depura el libro (una sola fuente de cambios sobre las rutas).
   if ((state.userRole === 'admin' || syncRole() === 'admin') && pruneLedgers()) persistBusinessData();
+  if ((state.userRole === 'admin' || syncRole() === 'admin') && mergeOldExpenses()) persistBusinessData();
   // Día nuevo: el efectivo del último cierre pasa a ser la base de hoy (admin o trabajador, el primero que entre).
   if (applyCarriedBases()) persistBusinessData();
   // Cobro de cada ruta = abonos registrados desde su último cierre (no un acumulador que se pueda pisar).

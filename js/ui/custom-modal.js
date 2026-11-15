@@ -1,6 +1,7 @@
 /**
  * ui/custom-modal · Modal genérico de formulario/confirmación reutilizado por todos los módulos.
- * Contrato: openCustomModal({ title, description, fields, submitLabel, onSubmit, cancelLabel, onCancel }).
+ * Contrato: openCustomModal({ title, description, fields, submitLabel, onSubmit, cancelLabel, onCancel, extraAction }).
+ * extraAction: { label, onClick } agrega un tercer botón (p. ej. «Reducción de intereses»); cierra el modal y luego llama onClick.
  * cancelLabel/onCancel permiten usar el botón secundario como acción (p. ej. «No recordar más»);
  * si onCancel devuelve false, el modal sigue abierto.
  * onSubmit puede ser async; si devuelve false, el modal queda abierto.
@@ -16,13 +17,29 @@
 import { customModal, customModalError, customModalFields, customModalForm, interestModal, modal, newClientModal } from '../core/dom.js';
 import { state } from '../core/state.js';
 
-export function openCustomModal({ title, description = '', fields = [], submitLabel = 'Guardar', onSubmit, cancelLabel = 'Cancelar', onCancel = null, onInput = null }) {
+export function openCustomModal({ title, description = '', fields = [], submitLabel = 'Guardar', onSubmit, cancelLabel = 'Cancelar', onCancel = null, onInput = null, extraAction = null }) {
   state.lastFocusedElement = document.activeElement;
   document.querySelector('#custom-modal-title').textContent = title;
   document.querySelector('#custom-modal-description').textContent = description;
   document.querySelector('#custom-modal-save').textContent = submitLabel;
   document.querySelector('#custom-modal-cancel').textContent = cancelLabel;
   state.customModalCancel = onCancel;
+  // Tercer botón opcional (entre Cancelar y Guardar).
+  document.querySelector('#custom-modal-extra')?.remove();
+  if (extraAction) {
+    const extra = document.createElement('button');
+    extra.type = 'button';
+    extra.id = 'custom-modal-extra';
+    extra.className = 'secondary-button custom-modal-extra';
+    extra.textContent = extraAction.label;
+    extra.addEventListener('click', () => {
+      state.customModalCancel = null;
+      closeCustomModal();
+      // Se abre después de cerrar este modal, por si abre otro.
+      window.setTimeout(() => extraAction.onClick(), 0);
+    });
+    document.querySelector('#custom-modal-save').before(extra);
+  }
   customModalError.textContent = '';
   customModalFields.replaceChildren();
   state.customModalSubmit = onSubmit;
@@ -115,6 +132,7 @@ export function openCustomModal({ title, description = '', fields = [], submitLa
 
 export function closeCustomModal() {
   customModal.hidden = true;
+  document.querySelector('#custom-modal-extra')?.remove();
   customModal.classList.remove('active');
   state.customModalSubmit = null;
   if (interestModal.hidden && modal.hidden && newClientModal.hidden) document.body.classList.remove('modal-open');

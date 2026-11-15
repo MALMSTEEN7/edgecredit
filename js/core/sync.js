@@ -676,8 +676,12 @@ async function downloadAll() {
   Object.keys(clients).forEach(key => delete clients[key]);
   pendingRequests.splice(0, pendingRequests.length);
   const previousWorkers = syncSession.role === 'admin' ? personnel.splice(0, personnel.length) : [];
-  // El admin ve exactamente las rutas del servidor (nada de rutas locales sobrantes).
-  if (syncSession.role === 'admin') Object.keys(routeSettlements).forEach(key => delete routeSettlements[key]);
+  // El admin ve exactamente las rutas del servidor (nada de rutas locales sobrantes). Las que
+  // siguen existiendo se actualizan sobre el mismo objeto (applyRow → replaceObject): si se
+  // borraban y se creaban de nuevo, lo que el admin escribía en la liquidación justo al volver
+  // el internet quedaba en la copia vieja y la pantalla «volvía» al valor anterior.
+  const downloadedRoutes = new Set(results.flatMap(result => result.table === 'routes' ? (result.data || []).map(row => row.id) : []));
+  if (syncSession.role === 'admin') Object.keys(routeSettlements).filter(key => !downloadedRoutes.has(key)).forEach(key => delete routeSettlements[key]);
   if (syncSession.role === 'worker') Object.keys(routeSettlements).filter(key => key !== syncSession.routeId).forEach(key => delete routeSettlements[key]);
   const previousSynced = lastSynced;
   lastSynced = new Map();

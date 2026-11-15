@@ -112,3 +112,30 @@ export function recordRetanqueoInRoute(route, client, clientId, { extra, interes
 export function pendingRestructure(requests, clientId) {
   return requests.find(request => request.status === 'pending' && request.clientId === clientId && (request.type === 'finance' || request.type === 'retanqueo'));
 }
+
+/**
+ * Reducción de intereses al cancelar antes de tiempo: el trabajador registró el último abono por
+ * el valor completo, pero el cliente pagó menos porque se le descontaron intereses. Ese descuento
+ * no es plata que entra: se resta del abono final (y así del cobro de la ruta) y del total de la
+ * cartulina, que sigue cancelada (saldo 0). Devuelve el error o '' si se aplicó.
+ */
+export function maxInterestReduction(client, payment) {
+  const interest = Math.max(0, Number(client.total) - Number(client.principal || 0));
+  return Math.max(0, Math.min(Number(payment?.amount) || 0, interest));
+}
+
+export function applyInterestReduction(client, payment, amount, { by = 'Administrador', today = localDateISO(), now = Date.now() } = {}) {
+  const value = Math.round(Number(amount) || 0);
+  if (!payment || Number(client.balance) > 0) return 'La reducción solo se aplica al abono con que se canceló la cartulina.';
+  if (!(value > 0)) return 'Escribe el valor de la reducción.';
+  const max = maxInterestReduction(client, payment);
+  if (value > max) return `La reducción no puede pasar de ${formatMoney(max)} (el abono final y los intereses de la cartulina).`;
+  payment.amount = Number(payment.amount) - value;
+  payment.interestReduction = Number(payment.interestReduction || 0) + value;
+  client.total = Number(client.total) - value;
+  client.breakdown = `${formatMoney(client.principal)} / ${formatMoney(client.total - Number(client.principal || 0))}`;
+  client.interestReductions ||= [];
+  client.interestReductions.unshift({ date: today, at: new Date(now).toISOString(), amount: value, by, paymentDate: payment.date });
+  client.totalPaidAmount = (client.payments || []).reduce((sum, item) => sum + (Number(item.amount) || 0), 0);
+  return '';
+}

@@ -15,7 +15,7 @@ export const clients = {};
 /** Estructura vacía de un cobro (ruta). */
 export function emptyRoute(name) {
   return {
-    name, collections: 0, loans: 0, expenses: 0, base: 0, cashDelivered: 0, otherExpenses: 0, otherExpenseEntries: [],
+    name, collections: 0, loans: 0, base: 0, cashDelivered: 0, otherExpenses: 0, otherExpenseEntries: [],
     cardsCancelled: [], loansEntered: [], loansNew: [], weeklyCollections: 0, weeklyCardCount: 0, monthlyInsurance: 0,
     ledger: {}, cashBox: { opening: 0, openingDate: null }, insuranceCuts: [],
   };

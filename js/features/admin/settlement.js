@@ -16,8 +16,9 @@ import { showToast } from '../../ui/toast.js';
 import { renderAdminRoute } from './admin-shell.js';
 import { renderRoutePicker } from './route-picker.js';
 import { renderClientsBulk } from '../clients/directory.js';
+import { cancelledSinceClosureTotal } from '../../domain/route-day.js';
 
-const CLOSURE_FIELDS = ['collections', 'base', 'loans', 'expenses', 'otherExpenses', 'cashDelivered'];
+const CLOSURE_FIELDS = ['collections', 'base', 'loans', 'otherExpenses', 'cashDelivered'];
 
 /** Estado del cierre de hoy: 'closed' (enviado y sin cambios), 'changed' (editado después) o null. */
 function closureStatus(route) {
@@ -71,7 +72,7 @@ export function refreshRouteOptions() {
  * del lunes arranca en 0, salvo la «Base para el lunes» que el admin asigne ese sábado.
  */
 function resetRouteDay(route, routeId, transfers = 0) {
-  const computedCash = Number(route.collections || 0) + Number(route.base || 0) - Number(route.loans || 0) - Number(route.expenses || 0) - Number(route.otherExpenses || 0);
+  const computedCash = Number(route.collections || 0) + Number(route.base || 0) - Number(route.loans || 0) - Number(route.otherExpenses || 0);
   const cash = Number(route.cashDelivered || 0) > 0 ? Number(route.cashDelivered) : Math.max(0, computedCash);
   const saturday = new Date().getDay() === 6;
   // Lo que entró por transferencia está en el banco: no pasa a la base del día siguiente.
@@ -79,7 +80,6 @@ function resetRouteDay(route, routeId, transfers = 0) {
   const carried = saturday ? mondayBaseFor(route, localDateISO()) : Math.max(0, cash - transfers);
   route.collections = 0;
   route.loans = 0;
-  route.expenses = 0;
   route.otherExpenses = 0;
   route.cashDelivered = 0;
   // La base del día siguiente (la misma que ve el trabajador) arranca con ese efectivo.
@@ -97,7 +97,7 @@ export function applyCarriedBases(today = localDateISO()) {
   let changed = false;
   Object.entries(routeSettlements).forEach(([routeId, route]) => {
     if (!route || route.baseCarriedOn === today || route.lastClosure?.date === today) return;
-    const started = ['collections', 'loans', 'expenses', 'otherExpenses', 'cashDelivered'].some(field => Number(route[field] || 0) !== 0);
+    const started = ['collections', 'loans', 'otherExpenses', 'cashDelivered'].some(field => Number(route[field] || 0) !== 0);
     if (started) return;
     const carried = carriedBase(route, today, date => transfersOn(routeId, date));
     if (!carried) return;
@@ -280,6 +280,31 @@ function openInsuranceEditor() {
   });
 }
 
+/**
+ * Casillas informativas de la liquidación (se calculan solas):
+ * - «Canceladas»: suma del abono con que se canceló cada cartulina desde el último cierre (ese
+ *   dinero ya está dentro del Cobro; se muestra aparte para revisarlo).
+ * - Bajo «Efectivo»: cuánto de lo cobrado llegó por transferencia (está en el banco).
+ */
+export function renderSettlementExtras(routeId) {
+  const route = routeSettlements[routeId];
+  if (!route) return;
+  const cancelled = cancelledSinceClosureTotal(clients, routeId, route);
+  const input = document.querySelector('#metric-cancelled');
+  if (input) input.value = cancelled.total;
+  document.querySelector('#metric-cancelled-label').textContent = cancelled.count ? `Canceladas (${cancelled.count})` : 'Canceladas';
+  document.querySelector('#metric-cancelled-note').textContent = cancelled.count
+    ? `Abono final de ${cancelled.count === 1 ? 'la cartulina cancelada' : `las ${cancelled.count} cartulinas canceladas`}`
+    : 'Sin cartulinas canceladas desde el último cierre';
+  const transfers = pendingRoutePayments(clients, routeId, route)
+    .filter(({ payment }) => payment.method === 'transfer')
+    .reduce((sum, { payment }) => sum + (Number(payment.amount) || 0), 0);
+  const note = document.querySelector('#metric-transfers-note');
+  note.hidden = !transfers;
+  note.textContent = transfers ? `Incluye ${formatMoney(transfers)} en transferencias` : '';
+  note.title = 'Abonos recibidos por transferencia: están en el banco y no pasan a la base del día siguiente.';
+}
+
 /** Comentario de «Otros gastos» del día: es el mismo que sale en Reportes financieros. */
 export function renderSettlementOtherNote(routeId) {
   const route = routeSettlements[routeId];
@@ -320,7 +345,7 @@ export function recalculateSettlement() {
   const route = state.activeSettlement;
   if (!route) return;
   // Efectivo entregado menos el que debía haber: positivo = sobra plata, negativo = falta.
-  state.settlementDifference = route.cashDelivered - (route.collections + route.base - route.loans - route.expenses - route.otherExpenses);
+  state.settlementDifference = Number(route.cashDelivered || 0) - (Number(route.collections || 0) + Number(route.base || 0) - Number(route.loans || 0) - Number(route.otherExpenses || 0));
   const difference = document.querySelector('#metric-difference');
   const differenceCard = document.querySelector('#difference-card');
   difference.textContent = formatMoney(state.settlementDifference);
@@ -342,10 +367,19 @@ export function mount() {
   let saveTimer = null;
   settlementInputs.forEach(input => input.addEventListener('input', () => {
     const field = input.dataset.settlementField;
-    if (field === 'collections' || !state.activeSettlement) return; // el cobro se calcula de los abonos
+    // Se escribe en la ruta vigente (la de la lista de cobros), no en una copia: si mientras tanto
+    // llegó una descarga del servidor (p. ej. al volver el internet), lo escrito no se pierde.
+    const route = routeSettlements[routeSelect.value] || state.activeSettlement;
+    if (field === 'collections' || !route) return; // el cobro se calcula de los abonos
+    state.activeSettlement = route;
     const amount = Number(input.value);
-    state.activeSettlement[field] = Number.isFinite(amount) && amount >= 0 ? amount : 0;
-    if (field === 'base') renderBaseBreakdown(routeSelect.value);
+    route[field] = Number.isFinite(amount) && amount >= 0 ? amount : 0;
+    if (field === 'base') {
+      // Base puesta a mano: el paso automático de la base del último cierre ya no la reemplaza hoy.
+      route.baseCarriedOn = localDateISO();
+      route.baseCarriedFrom = 'manual';
+      renderBaseBreakdown(routeSelect.value);
+    }
     recalculateSettlement();
     window.clearTimeout(saveTimer);
     saveTimer = window.setTimeout(persistBusinessData, 700);
@@ -360,7 +394,6 @@ export function mount() {
         collections: state.activeSettlement.collections,
         base: state.activeSettlement.base,
         loans: state.activeSettlement.loans,
-        expenses: state.activeSettlement.expenses,
         otherExpenses: state.activeSettlement.otherExpenses,
         cashDelivered: state.activeSettlement.cashDelivered,
         difference: state.settlementDifference,
@@ -384,6 +417,10 @@ export function mount() {
       };
       // Libro diario: el día queda guardado con su fecha antes de reiniciar el resumen.
       recordClosure(route, localDateISO(), { ...route, insurance, transfers }, Date.parse(payload.submittedAt));
+      // Número de abonos del día (Reportes financieros): se guarda porque los abonos de las
+      // cartulinas canceladas se archivan a la semana.
+      route.ledger[localDateISO()].paymentsCount = Object.values(clients).reduce((sum, client) => client?.route === routeId
+        ? sum + (client.payments || []).filter(payment => payment.date === localDateISO() && Number(payment.amount) > 0).length : sum, 0);
       const reset = resetRouteDay(route, routeId, transfers);
       route.lastClosure.carriedBase = reset.carried;
       route.lastClosure.after = Object.fromEntries(CLOSURE_FIELDS.map(field => [field, Number(route[field] || 0)]));

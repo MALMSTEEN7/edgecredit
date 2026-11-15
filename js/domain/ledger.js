@@ -23,8 +23,9 @@ import { localDateISO, shiftDateISO } from '../shared/dates.js';
 import { formatMoney } from '../shared/format.js';
 
 export const DAY_FIELDS = ['base', 'collections', 'loans', 'expenses', 'otherExpenses', 'cashDelivered', 'cashOut', 'cashIn', 'insurance'];
-const LIVE_FIELDS = ['base', 'collections', 'loans', 'expenses', 'otherExpenses', 'cashDelivered'];
-export const EDITABLE_FIELDS = ['base', 'collections', 'loans', 'expenses', 'otherExpenses', 'cashOut', 'cashIn', 'cashDelivered'];
+// «Gastos» se quitó (todo va en «Otros gastos»): `expenses` solo se lee de días antiguos guardados (0 si no hay).
+const LIVE_FIELDS = ['base', 'collections', 'loans', 'otherExpenses', 'cashDelivered'];
+export const EDITABLE_FIELDS = ['base', 'collections', 'loans', 'otherExpenses', 'cashOut', 'cashIn', 'cashDelivered'];
 
 export function ensureLedger(route) {
   if (!route) return route;
@@ -51,7 +52,7 @@ export function dayRecord(route, dateISO, liveInsurance = 0) {
   const salary = Number(stored?.salary || 0);
   if (dateISO === today && !closedToday(route)) {
     const live = Object.fromEntries(LIVE_FIELDS.map(field => [field, Number(route[field] || 0)]));
-    return { ...live, otherExpenses: live.otherExpenses + salary, salary, cashOut: Number(stored?.cashOut || 0), cashIn: Number(stored?.cashIn || 0), insurance: liveInsurance, closed: false, live: true };
+    return { ...live, expenses: 0, otherExpenses: live.otherExpenses + salary, salary, cashOut: Number(stored?.cashOut || 0), cashIn: Number(stored?.cashIn || 0), insurance: liveInsurance, closed: false, live: true };
   }
   if (!stored) return { ...Object.fromEntries(DAY_FIELDS.map(field => [field, 0])), salary: 0, closed: false, empty: true };
   const record = Object.fromEntries(DAY_FIELDS.map(field => [field, Number(stored[field] || 0)]));
@@ -203,6 +204,35 @@ export function otherExpensesNote(route, dateISO) {
     .filter(entry => (entry.date || String(entry.createdAt || '').slice(0, 10)) === dateISO)
     .map(entry => `${entry.note || 'Sin descripción'} (${formatMoney(entry.amount)})`)
     .join('\n');
+}
+
+/**
+ * «Gastos» se quitó del sistema: lo que haya quedado anotado ahí (hoy o en días guardados) pasa a
+ * «Otros gastos» con una nota, así la caja y el cuadre no cambian. Devuelve true si movió algo.
+ */
+export function mergeExpensesIntoOther(route) {
+  ensureLedger(route);
+  let changed = false;
+  const live = Number(route.expenses || 0);
+  if (live) {
+    route.otherExpenses = Number(route.otherExpenses || 0) + live;
+    route.otherExpenseEntries ||= [];
+    route.otherExpenseEntries.push({ amount: live, note: 'Gastos', date: localDateISO(), createdAt: new Date().toISOString() });
+    changed = true;
+  }
+  delete route.expenses; // un 0 no cambia nada: se quita sin contarlo como cambio
+  Object.entries(route.ledger).forEach(([dateISO, record]) => {
+    if (!record || !('expenses' in record)) return;
+    const amount = Number(record.expenses || 0);
+    if (amount) {
+      const note = otherExpensesNote(route, dateISO);
+      record.otherExpenses = Number(record.otherExpenses || 0) + amount;
+      record.otherExpensesNote = [note, `Gastos (${formatMoney(amount)})`].filter(Boolean).join('\n');
+      changed = true;
+    }
+    delete record.expenses;
+  });
+  return changed;
 }
 
 export function setOtherExpensesNote(route, dateISO, text) {
@@ -409,6 +439,18 @@ export function isPendingPayment(payment, cutoff, today = localDateISO()) {
   if (!cutoff || payment.date > cutoff.date) return true;
   if (payment.backdated) return false;
   return payment.date === cutoff.date && Boolean(cutoff.ts) && Boolean(payment.at) && Date.parse(payment.at) > cutoff.ts;
+}
+
+/**
+ * ¿Un movimiento (préstamo entregado, cartulina cancelada…) de `date` y hora `ts` todavía no
+ * entra a un cierre de ruta? Igual que los abonos: después del último cierre, aunque sea de días
+ * en que no se cerró la ruta. Sin ningún cierre, solo cuenta lo de hoy.
+ */
+export function isSinceClosure(date, ts, cutoff, today = localDateISO()) {
+  if (!date || date > today) return false;
+  if (!cutoff) return date === today;
+  if (date > cutoff.date) return true;
+  return date === cutoff.date && Boolean(cutoff.ts) && Number(ts) > cutoff.ts;
 }
 
 /** Abonos de una cartulina que siguen pendientes de cierre (para el indicador «Abono por cerrar»). */

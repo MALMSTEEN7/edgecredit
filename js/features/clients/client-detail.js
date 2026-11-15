@@ -101,6 +101,13 @@ export function renderHistory(client) {
     date.textContent = shortHistoryDate(payment.date);
     date.title = formatDate(payment.date);
     dateAndMethod.append(date, createMethodIcon(payment.method));
+    if (Number(payment.interestReduction) > 0) {
+      const reduction = document.createElement('small');
+      reduction.className = 'payment-pending-tag payment-reduction-tag';
+      reduction.textContent = `−${formatMoney(payment.interestReduction)} intereses`;
+      reduction.title = 'Reducción de intereses por pagar antes de tiempo: ese valor no entró a la caja.';
+      dateAndMethod.append(reduction);
+    }
     if (pendingClose.has(payment)) {
       const pendingTag = document.createElement('small');
       pendingTag.className = 'payment-pending-tag';

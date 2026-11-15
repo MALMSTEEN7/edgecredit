@@ -854,7 +854,9 @@
 
 /* El título y su botón no se recortan: la caja del monto cede espacio. */
 .settlement-layout .settlement-fields .other-expenses-card .finance-label-stack,
-.settlement-layout .settlement-fields .base-card .finance-label-stack {
+.settlement-layout .settlement-fields .base-card .finance-label-stack,
+.settlement-layout .settlement-fields .cancelled-card .finance-label-stack,
+.settlement-layout .settlement-fields .closing-card .finance-label-stack {
   flex-shrink: 0;
   max-width: 55%;
 }
@@ -865,12 +867,14 @@
   font-size: 11px;
 }
 
-.collections-card .editable-money {
+.collections-card .editable-money,
+.cancelled-card .editable-money {
   background: color-mix(in srgb, var(--surface) 70%, transparent) !important;
   border-style: dashed !important;
 }
 
-.collections-card .finance-amount[readonly] {
+.collections-card .finance-amount[readonly],
+.cancelled-card .finance-amount[readonly] {
   cursor: default;
 }
 
@@ -904,4 +908,15 @@ button.base-breakdown-insurance:focus-visible {
   right: -6px;
   font-size: 10px;
   color: var(--muted);
+}
+
+/* Efectivo: cuánto del cobro llegó por transferencia (está en el banco, no en la mano). */
+.settlement-transfers-note {
+  color: var(--primary);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.settlement-transfers-note[hidden] {
+  display: none;
 }

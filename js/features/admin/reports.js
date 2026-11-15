@@ -27,7 +27,7 @@ const COLUMNS = [
   { key: 'base', label: 'Base' },
   { key: 'collections', label: 'Cobro' },
   { key: 'loans', label: 'Préstamos' },
-  { key: 'expenses', label: 'Gastos' },
+  { key: 'paymentsCount', label: 'Nº abonos', count: true }, // cantidad de abonos del día (no se edita)
   { key: 'otherExpenses', label: 'Otros gastos' },
   { key: 'cashOut', label: 'Salida de caja' },
   { key: 'cashIn', label: 'Entrada a caja' },
@@ -169,6 +169,27 @@ function openCashEntry(route) {
 
 // ── Cierre semanal ──
 
+/** Celda con una cantidad (p. ej. número de abonos del día). */
+function countCell(value) {
+  const cell = document.createElement('td');
+  cell.className = 'numeric count-cell';
+  if (value === null || value === undefined) { cell.textContent = '—'; cell.classList.add('is-muted'); return cell; }
+  cell.textContent = String(value);
+  return cell;
+}
+
+/**
+ * Número de abonos de un día: el que quedó guardado al cerrar o, si no, los abonos de las
+ * cartulinas de la ruta con esa fecha.
+ */
+function dayPaymentsCount(route, dateISO) {
+  const stored = route.ledger?.[dateISO]?.paymentsCount;
+  if (Number.isFinite(Number(stored)) && stored !== null && stored !== undefined) return Number(stored);
+  const routeId = reportRouteId();
+  return Object.values(clients).reduce((sum, client) => client?.route === routeId
+    ? sum + (client.payments || []).filter(payment => payment.date === dateISO && Number(payment.amount) > 0).length : sum, 0);
+}
+
 function moneyCell(value, { negativeClass = false, negativeRed = false } = {}) {
   const cell = document.createElement('td');
   cell.className = 'numeric';
@@ -282,7 +303,7 @@ function totalsRow(label, totals, className) {
   head.scope = 'row';
   head.textContent = label;
   row.append(head);
-  COLUMNS.forEach(({ key }) => row.append(moneyCell(totals[key])));
+  COLUMNS.forEach(({ key, count }) => row.append(count ? countCell(totals[key]) : moneyCell(totals[key])));
   row.append(moneyCell(totals.difference, { negativeClass: true }), moneyCell(totals.cashBox, { negativeRed: true }));
   return row;
 }
@@ -292,7 +313,7 @@ function sumDays(route, days, liveTotal) {
   totals.difference = 0;
   days.forEach(({ iso }) => {
     const record = dayRecord(route, iso, liveTotal);
-    COLUMNS.forEach(({ key }) => { totals[key] += key === 'cashDelivered' ? cashInHandOf(route, iso, record) : record[key]; });
+    COLUMNS.forEach(({ key }) => { totals[key] += key === 'cashDelivered' ? cashInHandOf(route, iso, record) : key === 'paymentsCount' ? dayPaymentsCount(route, iso) : record[key]; });
     totals.difference += ledgerDifference(record) || 0;
   });
   // La base no se suma: se muestra la del primer día del periodo.
@@ -347,6 +368,7 @@ function renderWeeklyAudit(route, monthValue) {
     }
     row.append(dateCell);
     COLUMNS.forEach(({ key }) => {
+      if (key === 'paymentsCount') { row.append(countCell(future ? null : dayPaymentsCount(route, iso))); return; }
       if (key === 'cashDelivered') {
         // Se ve y se corrige el efectivo en mano; las transferencias del día se indican debajo.
         const cell = editableCell(iso, key, future ? 0 : cashInHandOf(route, iso, record), future);

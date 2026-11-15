@@ -1610,6 +1610,16 @@ button {
   min-height: 43px;
 }
 
+/* Con tres botones, en pantallas angostas se acomodan en varias líneas. */
+.custom-modal-actions:has(.custom-modal-extra) {
+  flex-wrap: wrap;
+}
+
+.custom-modal .secondary-button.custom-modal-extra {
+  border-color: color-mix(in srgb, var(--primary) 60%, var(--line));
+  color: var(--text);
+}
+
 .custom-modal .secondary-button {
   border-color: var(--line);
   border-radius: 12px;
@@ -5118,6 +5128,34 @@ html.session-restoring .login-gateway .session-splash,
 
 .base-transfer-list li.is-in strong {
   color: var(--success);
+}
+
+/* «Abonos del día» del resumen: botón azul para que se vea (se despliega la lista). */
+.worker-day-payments > summary {
+  border-radius: 12px;
+  background: linear-gradient(135deg, var(--primary), color-mix(in srgb, var(--primary) 70%, #000));
+  box-shadow: 0 6px 16px color-mix(in srgb, var(--primary) 30%, transparent);
+  color: #fff;
+  font-weight: 800;
+}
+
+.worker-day-payments > summary .history-count {
+  color: color-mix(in srgb, #fff 85%, transparent);
+  font-weight: 600;
+}
+
+.worker-day-payments > summary::after {
+  content: "▾";
+  margin-left: 6px;
+  transition: transform .2s ease;
+}
+
+.worker-day-payments[open] > summary::after {
+  transform: rotate(180deg);
+}
+
+.worker-day-payments[open] > summary {
+  margin-bottom: 6px;
 }
 
 /* ── css/features/clients.css */
@@ -8889,7 +8927,9 @@ button.evidence-link:active {
 
 /* El título y su botón no se recortan: la caja del monto cede espacio. */
 .settlement-layout .settlement-fields .other-expenses-card .finance-label-stack,
-.settlement-layout .settlement-fields .base-card .finance-label-stack {
+.settlement-layout .settlement-fields .base-card .finance-label-stack,
+.settlement-layout .settlement-fields .cancelled-card .finance-label-stack,
+.settlement-layout .settlement-fields .closing-card .finance-label-stack {
   flex-shrink: 0;
   max-width: 55%;
 }
@@ -8900,12 +8940,14 @@ button.evidence-link:active {
   font-size: 11px;
 }
 
-.collections-card .editable-money {
+.collections-card .editable-money,
+.cancelled-card .editable-money {
   background: color-mix(in srgb, var(--surface) 70%, transparent) !important;
   border-style: dashed !important;
 }
 
-.collections-card .finance-amount[readonly] {
+.collections-card .finance-amount[readonly],
+.cancelled-card .finance-amount[readonly] {
   cursor: default;
 }
 
@@ -8939,6 +8981,17 @@ button.base-breakdown-insurance:focus-visible {
   right: -6px;
   font-size: 10px;
   color: var(--muted);
+}
+
+/* Efectivo: cuánto del cobro llegó por transferencia (está en el banco, no en la mano). */
+.settlement-transfers-note {
+  color: var(--primary);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.settlement-transfers-note[hidden] {
+  display: none;
 }
 
 /* ── css/features/admin-reports.css */

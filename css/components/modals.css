@@ -168,6 +168,16 @@
   min-height: 43px;
 }
 
+/* Con tres botones, en pantallas angostas se acomodan en varias líneas. */
+.custom-modal-actions:has(.custom-modal-extra) {
+  flex-wrap: wrap;
+}
+
+.custom-modal .secondary-button.custom-modal-extra {
+  border-color: color-mix(in srgb, var(--primary) 60%, var(--line));
+  color: var(--text);
+}
+
 .custom-modal .secondary-button {
   border-color: var(--line);
   border-radius: 12px;

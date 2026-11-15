@@ -1241,3 +1241,31 @@
 .base-transfer-list li.is-in strong {
   color: var(--success);
 }
+
+/* «Abonos del día» del resumen: botón azul para que se vea (se despliega la lista). */
+.worker-day-payments > summary {
+  border-radius: 12px;
+  background: linear-gradient(135deg, var(--primary), color-mix(in srgb, var(--primary) 70%, #000));
+  box-shadow: 0 6px 16px color-mix(in srgb, var(--primary) 30%, transparent);
+  color: #fff;
+  font-weight: 800;
+}
+
+.worker-day-payments > summary .history-count {
+  color: color-mix(in srgb, #fff 85%, transparent);
+  font-weight: 600;
+}
+
+.worker-day-payments > summary::after {
+  content: "▾";
+  margin-left: 6px;
+  transition: transform .2s ease;
+}
+
+.worker-day-payments[open] > summary::after {
+  transform: rotate(180deg);
+}
+
+.worker-day-payments[open] > summary {
+  margin-bottom: 6px;
+}

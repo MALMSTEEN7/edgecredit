@@ -52,7 +52,7 @@ import { renderRouteBuilder } from './js/features/daily-route/daily-route.js';
 import { filterClientCards } from './js/features/clients/directory.js';
 import { normalizeClientSchedules, pruneExpiredPaymentHistories } from './js/domain/loan-schedule.js';
 import { normalizeCancelledCards } from './js/domain/accounting.js';
-import { closureCutoff, ensureLedger, pruneOldLedger, syncRouteCollections } from './js/domain/ledger.js';
+import { closureCutoff, ensureLedger, mergeExpensesIntoOther, pruneOldLedger, syncRouteCollections } from './js/domain/ledger.js';
 import { applyPendingBaseTransfers } from './js/domain/base-transfer.js';
 import { renderAdminRoute, syncRouteSelect } from './js/features/admin/admin-shell.js';
 import { renderPendingRequests } from './js/features/admin/pending.js';
@@ -133,6 +133,7 @@ function boot() {
   window.setInterval(pruneExpiredPaymentHistories, 60 * 60 * 1000);
   // Cierres de caja: se guardan los últimos 4 meses (sin servidor, en este navegador).
   if (!backendEnabled() && pruneLedgers()) persistBusinessData();
+  if (!backendEnabled() && mergeOldExpenses()) persistBusinessData();
   if (!backendEnabled() && applyCarriedBases()) persistBusinessData();
   if (!backendEnabled() && syncRouteCollections(clients, routeSettlements)) persistBusinessData();
   window.setInterval(() => {
@@ -157,6 +158,11 @@ function boot() {
 /** Borra los cierres de caja de más de 4 meses en todos los cobros. ¿Borró algo? */
 function pruneLedgers() {
   return Object.values(routeSettlements).map(route => pruneOldLedger(route)).some(Boolean);
+}
+
+/** «Gastos» se quitó: lo anotado ahí pasa a «Otros gastos» (domain/ledger · mergeExpensesIntoOther). */
+function mergeOldExpenses() {
+  return Object.values(routeSettlements).map(route => mergeExpensesIntoOther(route)).some(Boolean);
 }
 
 /** Último cierre conocido de cada ruta: si cambia, hay que repintar sus clientes. */
@@ -185,6 +191,7 @@ function refreshFromServer(changes) {
   if ((state.userRole === 'admin' || syncRole() === 'admin') && pruneOrphanRoutes()) persistBusinessData();
   // Solo el admin depura el libro (una sola fuente de cambios sobre las rutas).
   if ((state.userRole === 'admin' || syncRole() === 'admin') && pruneLedgers()) persistBusinessData();
+  if ((state.userRole === 'admin' || syncRole() === 'admin') && mergeOldExpenses()) persistBusinessData();
   // Día nuevo: el efectivo del último cierre pasa a ser la base de hoy (admin o trabajador, el primero que entre).
   if (applyCarriedBases()) persistBusinessData();
   // Cobro de cada ruta = abonos registrados desde su último cierre (no un acumulador que se pueda pisar).

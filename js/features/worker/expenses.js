@@ -48,14 +48,19 @@ function closeExpenseModal() {
 
 /** Registra los listeners del módulo. Se invoca una sola vez desde app.js. */
 export function mount() {
-  document.querySelector('#worker-expense-receipt').addEventListener('change', event => {
+  // Comprobante: de la galería o tomado con la cámara; el último que se elige es el que vale.
+  const showChosen = event => {
     const preview = document.querySelector('#worker-expense-preview');
     const file = event.target.files?.[0];
+    const other = event.target.id === 'worker-expense-gallery' ? '#worker-expense-receipt' : '#worker-expense-gallery';
+    if (file) document.querySelector(other).value = '';
     document.querySelector('#worker-expense-file-name').textContent = file?.name || 'Ningún archivo seleccionado';
     if (!file) { preview.hidden = true; preview.removeAttribute('src'); return; }
     preview.src = URL.createObjectURL(file);
     preview.hidden = false;
-  });
+  };
+  document.querySelector('#worker-expense-receipt').addEventListener('change', showChosen);
+  document.querySelector('#worker-expense-gallery').addEventListener('change', showChosen);
   document.querySelector('#worker-expense-form').addEventListener('submit', async event => {
     event.preventDefault();
     const form = event.currentTarget;
@@ -63,7 +68,7 @@ export function mount() {
     error.textContent = '';
     if (state.userRole !== 'worker' || !form.reportValidity()) return;
     const amount = Math.round(Number(form.elements.amount.value));
-    const file = form.elements.receipt.files?.[0];
+    const file = form.elements.receipt.files?.[0] || document.querySelector('#worker-expense-gallery').files?.[0];
     const route = routeSettlements[state.workerRoute];
     if (!route || !Number.isFinite(amount) || amount <= 0) {
       error.textContent = 'Ingresa un monto válido.';
