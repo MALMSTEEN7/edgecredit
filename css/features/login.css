@@ -338,3 +338,54 @@ html.session-restoring .login-gateway .session-splash,
 @media (prefers-reduced-motion: reduce) {
   .session-splash .brand-mark { animation: none; }
 }
+
+/* Contraseña con botón «ver / ocultar» */
+.password-wrap {
+  position: relative;
+  display: block;
+}
+
+.password-wrap input {
+  padding-right: 48px;
+}
+
+.password-toggle {
+  position: absolute;
+  top: 50%;
+  right: 4px;
+  transform: translateY(-50%);
+  width: 40px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.password-toggle:hover,
+.password-toggle:focus-visible {
+  color: var(--text);
+  background: rgba(255,255,255,.06);
+}
+
+.password-toggle svg {
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.password-toggle .eye-closed,
+.password-toggle[aria-pressed="true"] .eye-open {
+  display: none;
+}
+
+.password-toggle[aria-pressed="true"] .eye-closed {
+  display: block;
+}
