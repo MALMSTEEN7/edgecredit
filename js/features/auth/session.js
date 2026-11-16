@@ -97,6 +97,16 @@ function failSecondFactor() {
   if (lockRemainingSeconds() > 0) cancelSecondFactor();
 }
 
+/** Ver u ocultar la contraseña del ingreso. */
+function setPasswordVisible(visible) {
+  const input = document.querySelector('#login-password');
+  const toggle = document.querySelector('#login-password-toggle');
+  if (!input || !toggle) return;
+  input.type = visible ? 'text' : 'password';
+  toggle.setAttribute('aria-pressed', String(visible));
+  toggle.setAttribute('aria-label', visible ? 'Ocultar contraseña' : 'Mostrar contraseña');
+}
+
 function logout() {
   if (backendEnabled()) endServerSession();
   forgetActivity();
@@ -104,6 +114,7 @@ function logout() {
   document.querySelector('#login-form').reset();
   document.querySelector('#login-user').value = '';
   document.querySelector('#login-password').value = '';
+  setPasswordVisible(false);
   paymentForm.reset();
   if (state.locationWatchId !== null && navigator.geolocation) navigator.geolocation.clearWatch(state.locationWatchId);
   state.locationWatchId = null;
@@ -416,6 +427,7 @@ function enterApp(account, isAdmin) {
     markActivity(true);
     state.authenticatedWorker = account.worker || null;
     document.querySelector('#login-password').value = '';
+    setPasswordVisible(false);
     loginGateway.hidden = true;
     document.body.classList.remove('login-active');
     state.userRole = isAdmin ? 'admin' : 'worker';
@@ -460,6 +472,12 @@ function enterApp(account, isAdmin) {
 
 /** Registra los listeners del módulo. Se invoca una sola vez desde app.js. */
 export function mount() {
+  document.querySelector('#login-password-toggle')?.addEventListener('click', () => {
+    const input = document.querySelector('#login-password');
+    const visible = input.type === 'password';
+    setPasswordVisible(visible);
+    input.focus();
+  });
   document.querySelector('#login-form').addEventListener('submit', async event => {
     event.preventDefault();
     if (!event.currentTarget.reportValidity()) return;

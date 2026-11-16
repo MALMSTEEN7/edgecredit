@@ -34,7 +34,7 @@
   <link rel="icon" href="icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="icon-192.png">
   <meta name="apple-mobile-web-app-capable" content="yes">
-  <link rel="stylesheet" id="app-styles" href="dist/styles.bundle.css?v=001714c9bd">
+  <link rel="stylesheet" id="app-styles" href="dist/styles.bundle.css?v=928efb403c">
   <script>
     // Si hay una sesión guardada, al recargar se muestra «Cargando tu sesión…» en vez del
     // formulario de ingreso mientras la app la restaura (features/auth/session.js).
@@ -50,7 +50,7 @@
       <a class="brand login-brand" href="#login" aria-label="EdgeCredit"><span class="brand-mark" aria-hidden="true">E</span><span>Edge<span class="brand-accent">Credit</span></span></a>
       <p class="eyebrow">GESTIÓN DE CARTERA</p><h1 id="login-title">Bienvenido</h1><p class="login-copy">Ingresa para continuar.</p>
       <label class="login-field" for="login-user">Usuario<input id="login-user" name="username" type="text" autocomplete="username" placeholder="Tu usuario" required></label>
-      <label class="login-field" for="login-password">Contraseña<input id="login-password" name="password" type="password" autocomplete="current-password" placeholder="Tu contraseña" required></label>
+      <label class="login-field" for="login-password">Contraseña<span class="password-wrap"><input id="login-password" name="password" type="password" autocomplete="current-password" placeholder="Tu contraseña" required><button type="button" class="password-toggle" id="login-password-toggle" aria-label="Mostrar contraseña" aria-pressed="false" aria-controls="login-password"><svg class="eye-open" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg><svg class="eye-closed" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3l18 18"/><path d="M10.6 5.1A10.4 10.4 0 0 1 12 5c6.4 0 10 7 10 7a17.6 17.6 0 0 1-3.2 4.2M6.6 6.6C3.9 8.4 2 12 2 12s3.6 7 10 7a9.9 9.9 0 0 0 5.4-1.6"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/></svg></button></span></label>
       <p class="trusted-device-note" id="trusted-device-note" hidden><span>✓ Dispositivo recordado: no se pedirá el código de verificación.</span><button type="button" id="forget-device">Olvidar este dispositivo</button></p>
       <p class="login-error" id="login-error" role="alert" aria-live="polite"></p>
       <small class="login-demo-hint">Usuarios iniciales: camila, andres o valentina / Ruta#2026 · admin / Admin#2026 (cámbialos en Personal → Credenciales). En el primer ingreso de cada cuenta se configura la verificación en dos pasos.</small>
@@ -532,7 +532,7 @@
     // al cambiar el sello, el navegador descarga el JS/CSS nuevo en vez de usar su caché.
     // Para desarrollar con los módulos sueltos, abre index.html?dev desde un servidor local.
     (() => {
-      const APP_VERSION = '001714c9bd';
+      const APP_VERSION = '928efb403c';
       const dev = new URLSearchParams(location.search).has('dev') && location.protocol !== 'file:';
       if (dev) {
         document.getElementById('app-styles').href = 'styles.css';
