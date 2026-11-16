@@ -258,3 +258,20 @@ button.expense-receipt-link:active {
 .evidence-comment button {
   flex: 0 0 auto;
 }
+
+/* Comprobante cuya foto ya se borró por la regla de 24 horas: neutro, no es una alerta. */
+.evidence-purged-badge {
+  flex: 0 0 auto;
+  min-width: 100px;
+  min-height: 42px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 12px;
+  border: 1px dashed var(--line);
+  border-radius: 10px;
+  color: var(--muted, inherit);
+  font-size: .78rem;
+  font-weight: 600;
+  white-space: nowrap;
+}

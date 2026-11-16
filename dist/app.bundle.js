@@ -3387,6 +3387,58 @@ function routePortfolio(clients, routeId, { months = clavoMonths(), today = loca
   return { all, clavos, rows, months };
 }
 
+// ── js/domain/receipt-retention.js
+/**
+ * domain/receipt-retention · Las fotos de comprobantes (transferencias y otros gastos)
+ * solo se conservan RECEIPT_RETENTION_HOURS horas. Después se borra la imagen y queda
+ * el registro con `receiptPurgedAt`, para que no aparezca como «sin comprobante».
+ *
+ * Motivo: las fotos viajan dentro del registro del cliente o de la ruta y cada cambio
+ * las vuelve a descargar en todos los equipos (egress de Supabase).
+ */
+
+
+const RECEIPT_RETENTION_HOURS = 24;
+const RETENTION_MS = RECEIPT_RETENTION_HOURS * 60 * 60 * 1000;
+
+/** Momento en que se tomó el comprobante; si no hay hora, el final del día del registro. */
+function receiptTakenAt(item) {
+  const stamp = Date.parse(item.at || item.createdAt || '');
+  if (Number.isFinite(stamp)) return stamp;
+  const day = Date.parse(`${item.date}T23:59:59`);
+  return Number.isFinite(day) ? day : NaN;
+}
+
+function purgeItem(item, now) {
+  if (!item?.receiptData) return false;
+  const taken = receiptTakenAt(item);
+  if (!Number.isFinite(taken) || now - taken < RETENTION_MS) return false;
+  item.receiptData = '';
+  item.receiptPurgedAt = new Date(now).toISOString();
+  return true;
+}
+
+/** Función pura (se prueba sin DOM): borra las fotos vencidas y dice si cambió algo. */
+function purgeReceipts(clientMap, routeMap, now = Date.now()) {
+  let changed = false;
+  Object.values(clientMap || {}).forEach(client => {
+    (client.payments || []).forEach(payment => { if (purgeItem(payment, now)) changed = true; });
+  });
+  Object.values(routeMap || {}).forEach(route => {
+    (route.otherExpenseEntries || []).forEach(entry => { if (purgeItem(entry, now)) changed = true; });
+  });
+  return changed;
+}
+
+function purgeExpiredReceipts() {
+  if (purgeReceipts(clients, routeSettlements)) persistBusinessData();
+}
+
+/** Texto para un comprobante que ya se borró por la regla de 24 horas. */
+function purgedReceiptLabel() {
+  return `Foto borrada (${RECEIPT_RETENTION_HOURS} h)`;
+}
+
 // ── js/domain/restructure.js
 /**
  * domain/restructure · Cambios a una cartulina con saldo, hechos por el admin.
@@ -4999,6 +5051,7 @@ function __mount_clientMapModule() {
 
 
 
+
 let selectedDate = '';
 const qs = selector => document.querySelector(selector);
 
@@ -5007,10 +5060,10 @@ function evidenceDate() {
 }
 
 /** Tarjeta común: monto, descripción y miniatura del comprobante o indicador de faltante. */
-function evidenceItem({ amount, title, detail, receiptData, receiptLabel }) {
+function evidenceItem({ amount, title, detail, receiptData, receiptLabel, purged }) {
   const item = document.createElement('article');
   item.className = 'expense-evidence-item';
-  item.classList.toggle('is-missing-evidence', !receiptData);
+  item.classList.toggle('is-missing-evidence', !receiptData && !purged);
   const details = document.createElement('div');
   const value = document.createElement('strong');
   value.textContent = formatMoney(amount);
@@ -5033,6 +5086,12 @@ function evidenceItem({ amount, title, detail, receiptData, receiptLabel }) {
     label.textContent = 'Ampliar';
     receipt.append(image, label);
     item.append(details, receipt);
+  } else if (purged) {
+    const gone = document.createElement('span');
+    gone.className = 'evidence-purged-badge';
+    gone.textContent = purgedReceiptLabel();
+    gone.title = 'El comprobante se revisó y la foto se borró automáticamente para ahorrar datos.';
+    item.append(details, gone);
   } else {
     const missing = document.createElement('span');
     missing.className = 'evidence-missing-badge';
@@ -5045,7 +5104,7 @@ function evidenceItem({ amount, title, detail, receiptData, receiptLabel }) {
 
 function renderList(list, summary, items, emptyText) {
   list.replaceChildren();
-  const missing = items.filter(item => !item.receiptData).length;
+  const missing = items.filter(item => !item.receiptData && !item.purged).length;
   const total = items.reduce((sum, item) => sum + (Number(item.amount) || 0), 0);
   summary.replaceChildren();
   if (items.length) {
@@ -5063,7 +5122,7 @@ function renderList(list, summary, items, emptyText) {
     return;
   }
   // Primero los que no tienen comprobante: son los que requieren atención.
-  items.sort((a, b) => Number(Boolean(a.receiptData)) - Number(Boolean(b.receiptData)) || String(b.sortKey).localeCompare(String(a.sortKey)));
+  items.sort((a, b) => Number(Boolean(a.receiptData || a.purged)) - Number(Boolean(b.receiptData || b.purged)) || String(b.sortKey).localeCompare(String(a.sortKey)));
   items.forEach(item => list.append(evidenceItem(item)));
 }
 
@@ -5075,6 +5134,7 @@ function renderTransferEvidence(routeId, date) {
       title: client.name,
       detail: `${formatDate(payment.date)}${worker ? ` · Cobró ${worker.name}` : ''}`,
       receiptData: payment.receiptData || '',
+      purged: Boolean(payment.receiptPurgedAt),
       receiptLabel: `comprobante de transferencia de ${client.name}`,
       sortKey: payment.createdAt || payment.date
     }))
@@ -5088,6 +5148,7 @@ function renderOtherExpenseEvidence(route, date) {
     title: entry.note || 'Gasto sin descripción',
     detail: `${entry.workerName || 'Trabajador'} · ${formatDate(entry.date)}`,
     receiptData: entry.receiptData || '',
+    purged: Boolean(entry.receiptPurgedAt),
     receiptLabel: `comprobante de ${formatMoney(entry.amount)}: ${entry.note}`,
     sortKey: entry.createdAt
   }));
@@ -8247,6 +8308,7 @@ function __mount_twoFactorModule() {
 
 
 
+
 /** Dentro de la ficha: la «cicatriz» del historial de pagos de la cartulina. */
 function updatePaymentBehaviorUI(client) {
   const indicator = document.querySelector('#payment-behavior-indicator');
@@ -8343,7 +8405,13 @@ function renderHistory(client) {
       pendingTag.title = 'Abono que aún no entra a un cierre de ruta. La marca se quita al verificar y cerrar la ruta.';
       dateAndMethod.append(pendingTag);
     }
-    if (payment.method === 'transfer' && !payment.receiptData) {
+    if (payment.method === 'transfer' && !payment.receiptData && payment.receiptPurgedAt) {
+      const gone = document.createElement('small');
+      gone.className = 'evidence-purged';
+      gone.textContent = purgedReceiptLabel();
+      dateAndMethod.append(gone);
+    }
+    if (payment.method === 'transfer' && !payment.receiptData && !payment.receiptPurgedAt) {
       const missing = document.createElement('small');
       missing.className = 'evidence-missing';
       missing.textContent = 'Falta evidencia';
@@ -11831,7 +11899,7 @@ function __mount_expensesModule() {
       return;
     }
     try {
-      const receiptData = file ? await compressClientPhoto(file, { maxDimension: 1200, quality: 0.78 }) : '';
+      const receiptData = file ? await compressClientPhoto(file, { maxDimension: 720, quality: 0.6 }) : '';
       route.otherExpenses = Math.max(0, Number(route.otherExpenses) || 0) + amount;
       route.otherExpenseEntries ||= [];
       route.otherExpenseEntries.unshift({ id: `expense-${Date.now()}`, amount, note: form.elements.note.value.trim(), date: localDateISO(), createdAt: new Date().toISOString(), workerId: state.activeWorker.id, workerName: state.activeWorker.name, receiptName: file?.name || '', receiptData });
@@ -14779,6 +14847,7 @@ const syncModule = { mount: __mount_syncModule };
 
 
 
+
 /**
  * Composición de módulos (equivalente a un docker-compose): cada entrada es un
  * contenedor autónomo que expone mount(). El orden importa solo para listeners
@@ -14844,8 +14913,11 @@ function boot() {
   Object.values(routeSettlements).forEach(ensureLedger);
   normalizeClientSchedules();
   pruneExpiredPaymentHistories();
+  purgeExpiredReceipts();
   persistBusinessData();
   window.setInterval(pruneExpiredPaymentHistories, 60 * 60 * 1000);
+  // Fotos de comprobantes: se borran a las 24 horas (revisión cada 15 minutos).
+  window.setInterval(purgeExpiredReceipts, 15 * 60 * 1000);
   // Cierres de caja: se guardan los últimos 4 meses (sin servidor, en este navegador).
   if (!backendEnabled() && pruneLedgers()) persistBusinessData();
   if (!backendEnabled() && mergeOldExpenses()) persistBusinessData();
@@ -14911,6 +14983,8 @@ function refreshFromServer(changes) {
   if (applyCarriedBases()) persistBusinessData();
   // Cobro de cada ruta = abonos registrados desde su último cierre (no un acumulador que se pueda pisar).
   if (syncRouteCollections(clients, routeSettlements)) persistBusinessData();
+  // Fotos de comprobantes de más de 24 horas: con servidor, los datos llegan después del arranque.
+  if (full && purgeReceipts(clients, routeSettlements)) persistBusinessData();
   // Admin: los traspasos de base que mandaron los trabajadores se suman al cobro de destino.
   if ((state.userRole === 'admin' || syncRole() === 'admin') && applyPendingBaseTransfers(pendingRequests, routeSettlements)) persistBusinessData();
   syncRouteSelect();
