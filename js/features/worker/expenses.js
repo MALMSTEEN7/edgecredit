@@ -75,7 +75,7 @@ export function mount() {
       return;
     }
     try {
-      const receiptData = file ? await compressClientPhoto(file, { maxDimension: 1200, quality: 0.78 }) : '';
+      const receiptData = file ? await compressClientPhoto(file, { maxDimension: 720, quality: 0.6 }) : '';
       route.otherExpenses = Math.max(0, Number(route.otherExpenses) || 0) + amount;
       route.otherExpenseEntries ||= [];
       route.otherExpenseEntries.unshift({ id: `expense-${Date.now()}`, amount, note: form.elements.note.value.trim(), date: localDateISO(), createdAt: new Date().toISOString(), workerId: state.activeWorker.id, workerName: state.activeWorker.name, receiptName: file?.name || '', receiptData });

@@ -27,6 +27,7 @@ import { finalPayment } from '../../domain/route-day.js';
 import { MAX_ACTIVE_CARDS_PER_PERSON, activeCardIds, canAddCard, loanCount, cardLoanHistory, loanNumber, loanTimeline, personLoanTotal } from '../../domain/person-cards.js';
 import { PAYDAY_OPTIONS, cardColor, paintCardColorBand, shiftDays, startDateForPayday, weekdayOf } from '../../domain/card-color.js';
 import { FINANCE_INTEREST_PERCENT, GENERAL_RETANQUEO, RETANQUEO_INTEREST_PERCENT, financeCard, pendingRestructure, percentOrAmount, recordRetanqueoInRoute, retanqueoCard } from '../../domain/restructure.js';
+import { purgedReceiptLabel } from '../../domain/receipt-retention.js';
 
 /** Dentro de la ficha: la «cicatriz» del historial de pagos de la cartulina. */
 function updatePaymentBehaviorUI(client) {
@@ -124,7 +125,13 @@ export function renderHistory(client) {
       pendingTag.title = 'Abono que aún no entra a un cierre de ruta. La marca se quita al verificar y cerrar la ruta.';
       dateAndMethod.append(pendingTag);
     }
-    if (payment.method === 'transfer' && !payment.receiptData) {
+    if (payment.method === 'transfer' && !payment.receiptData && payment.receiptPurgedAt) {
+      const gone = document.createElement('small');
+      gone.className = 'evidence-purged';
+      gone.textContent = purgedReceiptLabel();
+      dateAndMethod.append(gone);
+    }
+    if (payment.method === 'transfer' && !payment.receiptData && !payment.receiptPurgedAt) {
       const missing = document.createElement('small');
       missing.className = 'evidence-missing';
       missing.textContent = 'Falta evidencia';

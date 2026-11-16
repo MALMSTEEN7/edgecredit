@@ -7,6 +7,7 @@
 import { routeSelect } from '../../core/dom.js';
 import { clients, persistBusinessData, routeSettlements, workerForRoute } from '../../core/store.js';
 import { otherExpensesNote, setOtherExpensesNote } from '../../domain/ledger.js';
+import { purgedReceiptLabel } from '../../domain/receipt-retention.js';
 import { localDateISO } from '../../shared/dates.js';
 import { formatDate, formatMoney } from '../../shared/format.js';
 import { openCustomModal } from '../../ui/custom-modal.js';
@@ -21,10 +22,10 @@ function evidenceDate() {
 }
 
 /** Tarjeta común: monto, descripción y miniatura del comprobante o indicador de faltante. */
-function evidenceItem({ amount, title, detail, receiptData, receiptLabel }) {
+function evidenceItem({ amount, title, detail, receiptData, receiptLabel, purged }) {
   const item = document.createElement('article');
   item.className = 'expense-evidence-item';
-  item.classList.toggle('is-missing-evidence', !receiptData);
+  item.classList.toggle('is-missing-evidence', !receiptData && !purged);
   const details = document.createElement('div');
   const value = document.createElement('strong');
   value.textContent = formatMoney(amount);
@@ -47,6 +48,12 @@ function evidenceItem({ amount, title, detail, receiptData, receiptLabel }) {
     label.textContent = 'Ampliar';
     receipt.append(image, label);
     item.append(details, receipt);
+  } else if (purged) {
+    const gone = document.createElement('span');
+    gone.className = 'evidence-purged-badge';
+    gone.textContent = purgedReceiptLabel();
+    gone.title = 'El comprobante se revisó y la foto se borró automáticamente para ahorrar datos.';
+    item.append(details, gone);
   } else {
     const missing = document.createElement('span');
     missing.className = 'evidence-missing-badge';
@@ -59,7 +66,7 @@ function evidenceItem({ amount, title, detail, receiptData, receiptLabel }) {
 
 function renderList(list, summary, items, emptyText) {
   list.replaceChildren();
-  const missing = items.filter(item => !item.receiptData).length;
+  const missing = items.filter(item => !item.receiptData && !item.purged).length;
   const total = items.reduce((sum, item) => sum + (Number(item.amount) || 0), 0);
   summary.replaceChildren();
   if (items.length) {
@@ -77,7 +84,7 @@ function renderList(list, summary, items, emptyText) {
     return;
   }
   // Primero los que no tienen comprobante: son los que requieren atención.
-  items.sort((a, b) => Number(Boolean(a.receiptData)) - Number(Boolean(b.receiptData)) || String(b.sortKey).localeCompare(String(a.sortKey)));
+  items.sort((a, b) => Number(Boolean(a.receiptData || a.purged)) - Number(Boolean(b.receiptData || b.purged)) || String(b.sortKey).localeCompare(String(a.sortKey)));
   items.forEach(item => list.append(evidenceItem(item)));
 }
 
@@ -89,6 +96,7 @@ function renderTransferEvidence(routeId, date) {
       title: client.name,
       detail: `${formatDate(payment.date)}${worker ? ` · Cobró ${worker.name}` : ''}`,
       receiptData: payment.receiptData || '',
+      purged: Boolean(payment.receiptPurgedAt),
       receiptLabel: `comprobante de transferencia de ${client.name}`,
       sortKey: payment.createdAt || payment.date
     }))
@@ -102,6 +110,7 @@ function renderOtherExpenseEvidence(route, date) {
     title: entry.note || 'Gasto sin descripción',
     detail: `${entry.workerName || 'Trabajador'} · ${formatDate(entry.date)}`,
     receiptData: entry.receiptData || '',
+    purged: Boolean(entry.receiptPurgedAt),
     receiptLabel: `comprobante de ${formatMoney(entry.amount)}: ${entry.note}`,
     sortKey: entry.createdAt
   }));

@@ -51,6 +51,7 @@ import { applyCarriedBases } from './js/features/admin/settlement.js';
 import { renderRouteBuilder } from './js/features/daily-route/daily-route.js';
 import { filterClientCards } from './js/features/clients/directory.js';
 import { normalizeClientSchedules, pruneExpiredPaymentHistories } from './js/domain/loan-schedule.js';
+import { purgeExpiredReceipts, purgeReceipts } from './js/domain/receipt-retention.js';
 import { normalizeCancelledCards } from './js/domain/accounting.js';
 import { closureCutoff, ensureLedger, mergeExpensesIntoOther, pruneOldLedger, syncRouteCollections } from './js/domain/ledger.js';
 import { applyPendingBaseTransfers } from './js/domain/base-transfer.js';
@@ -129,8 +130,11 @@ function boot() {
   Object.values(routeSettlements).forEach(ensureLedger);
   normalizeClientSchedules();
   pruneExpiredPaymentHistories();
+  purgeExpiredReceipts();
   persistBusinessData();
   window.setInterval(pruneExpiredPaymentHistories, 60 * 60 * 1000);
+  // Fotos de comprobantes: se borran a las 24 horas (revisión cada 15 minutos).
+  window.setInterval(purgeExpiredReceipts, 15 * 60 * 1000);
   // Cierres de caja: se guardan los últimos 4 meses (sin servidor, en este navegador).
   if (!backendEnabled() && pruneLedgers()) persistBusinessData();
   if (!backendEnabled() && mergeOldExpenses()) persistBusinessData();
@@ -196,6 +200,8 @@ function refreshFromServer(changes) {
   if (applyCarriedBases()) persistBusinessData();
   // Cobro de cada ruta = abonos registrados desde su último cierre (no un acumulador que se pueda pisar).
   if (syncRouteCollections(clients, routeSettlements)) persistBusinessData();
+  // Fotos de comprobantes de más de 24 horas: con servidor, los datos llegan después del arranque.
+  if (full && purgeReceipts(clients, routeSettlements)) persistBusinessData();
   // Admin: los traspasos de base que mandaron los trabajadores se suman al cobro de destino.
   if ((state.userRole === 'admin' || syncRole() === 'admin') && applyPendingBaseTransfers(pendingRequests, routeSettlements)) persistBusinessData();
   syncRouteSelect();
