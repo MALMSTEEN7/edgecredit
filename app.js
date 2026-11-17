@@ -44,6 +44,7 @@ import { state } from './js/core/state.js';
 import { clients, ensureRoute, pendingRequests, hydrateBusinessData, pruneOrphanRoutes, normalizeClientNotes, normalizeGeoData, normalizeWorkerAccounts, persistBusinessData, personnel, routeSettlements, setLocalPersistence } from './js/core/store.js';
 import { backendEnabled } from './js/core/backend.js';
 import * as syncModule from './js/core/sync.js';
+import * as auditConsoleModule from './js/features/admin/audit-console.js';
 import { setRenderHook, syncRole } from './js/core/sync.js';
 import { setAfterServerLoad } from './js/features/auth/session.js';
 import { renderPersonnel } from './js/features/admin/personnel.js';
@@ -107,6 +108,7 @@ const MODULES = [
   clientMapModule,
   evidenceModule,
   operationsListModule,
+  auditConsoleModule,
 ];
 
 /** Secuencia de arranque: hidrata datos, normaliza y pinta el estado inicial. */

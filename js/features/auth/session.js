@@ -717,6 +717,8 @@ export function mount() {
     const submit = document.querySelector('#login-submit');
     submit.disabled = true;
     try {
+      // Si se acaba de cerrar sesión, se espera a que termine de cerrarse (y de guardar la copia).
+      await sessionEnding.catch(() => {});
       const result = backendEnabled() ? await authenticateWithServer() : await authenticateLocally();
       if (!result) return;
       const { account, isAdmin } = result;

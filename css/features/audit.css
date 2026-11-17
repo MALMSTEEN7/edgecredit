@@ -1,0 +1,22 @@
+/* features/admin/audit-console · Consola de movimientos (solo admin). */
+.audit-filters { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; align-items: end; margin: 12px 0; }
+.audit-filters label { display: grid; gap: 4px; font-size: 0.82rem; color: var(--muted); }
+.audit-filters select, .audit-filters input[type="date"], .audit-filters input[type="search"] { min-width: 0; }
+.audit-filters .audit-alerts-toggle { display: flex; gap: 8px; align-items: center; color: var(--text); min-height: 40px; }
+.audit-status { color: var(--muted); margin: 6px 0 10px; }
+.audit-list { display: grid; gap: 10px; }
+.audit-entry { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 14px; }
+.audit-entry.is-alert { border-left: 4px solid var(--alert-color); }
+.audit-entry header { display: flex; justify-content: space-between; gap: 10px; align-items: flex-start; }
+.audit-title { display: grid; gap: 2px; min-width: 0; }
+.audit-title strong { overflow-wrap: anywhere; }
+.audit-title span { color: var(--muted); font-size: 0.82rem; }
+.audit-tag { flex: none; background: var(--alert-color); color: #fff; border-radius: 999px; padding: 2px 10px; font-size: 0.75rem; font-weight: 600; }
+.audit-changes { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 4px; font-size: 0.88rem; overflow-wrap: anywhere; }
+.audit-added { color: var(--success-color); }
+.audit-removed { color: var(--muted); }
+.audit-removed.is-lost { color: var(--alert-color); font-weight: 600; }
+.audit-more { color: var(--muted); }
+.audit-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.audit-actions .secondary-button { padding: 6px 12px; font-size: 0.85rem; }
+button.audit-more { margin: 12px auto 0; display: block; }

@@ -1136,6 +1136,28 @@ function mergeThreeWay(base, local, remote, depth) {
 
 const MERGEABLE = ['routes', 'clients', 'route_state'];
 
+/** Resumen corto de un valor para el historial (las listas, solo cuántos elementos tienen). */
+function mergeSummary(value) {
+  if (Array.isArray(value)) return `lista de ${value.length}`;
+  if (isPlainObject(value)) return `${Object.keys(value).length} datos`;
+  return value ?? null;
+}
+
+/**
+ * Choque real: el mismo campo cambió aquí y en otro equipo. Se anota en el historial del
+ * servidor (consola del administrador) sin esperar respuesta; si falla no pasa nada.
+ */
+function logMerge(table, key, routeId, base, mine, theirs) {
+  if (table === 'route_state' || !navigator.onLine || !isPlainObject(mine) || !isPlainObject(theirs)) return;
+  const fields = [...new Set([...Object.keys(mine), ...Object.keys(theirs)])]
+    .filter(field => stable(mine[field]) !== stable(base?.[field]) && stable(theirs[field]) !== stable(base?.[field]) && stable(mine[field]) !== stable(theirs[field]));
+  if (!fields.length) return;
+  const changes = fields.slice(0, 20).map(field => ({ p: [field], base: mergeSummary(base?.[field]), mine: mergeSummary(mine[field]), theirs: mergeSummary(theirs[field]) }));
+  backend().then(db => db.rpc('log_sync_merge', { p_table: table, p_key: String(key), p_route: routeId || null, p_changes: changes }))
+    .then(result => { if (result?.error) console.warn('Historial: choque sin anotar', result.error); })
+    .catch(() => {});
+}
+
 /**
  * Llega un cambio de un registro que aquí también tiene cambios sin enviar. Antes se descartaba
  * lo recibido y se subía la copia de aquí completa, borrando lo del otro equipo (p. ej. la base
@@ -1151,6 +1173,7 @@ function mergeIntoLocal(table, key, row) {
   if (!local || !isPlainObject(row.data)) return false;
   if (!isPlainObject(base)) base = {}; // sin versión común: se junta todo y en lo distinto gana lo de aquí
   const merged = mergeThreeWay(base, local.data, row.data, 2);
+  logMerge(table, key, row.route_id ?? (table === 'routes' ? key : null), base, local.data, row.data);
   applyRow(table, { ...row, data: merged });
   // Lo conocido pasa a ser la versión del servidor: lo que la combinación conserva de aquí
   // queda pendiente y se envía.
@@ -1324,6 +1347,7 @@ function restorePending(pending, previousWorkers = [], previousSynced = new Map(
       let base = item.base ?? previousSynced.get(item.id) ?? null;
       try { base = base ? JSON.parse(base)?.data : null; } catch { base = null; }
       const merged = mergeThreeWay(isPlainObject(base) ? base : {}, item.row.data, downloaded.data, 2);
+      logMerge(item.table, item.row[TABLE_KEYS[item.table]], item.row.route_id ?? (item.table === 'routes' ? item.row.id : null), isPlainObject(base) ? base : {}, item.row.data, downloaded.data);
       applyRow(item.table, { ...item.row, data: merged });
       lastSynced.set(item.id, stable(downloaded));
       return;
@@ -1691,14 +1715,17 @@ async function startSync({ userId, role, routeId, routeName }) {
 }
 
 async function stopSync() {
-  if (syncSession) {
+  const ending = syncSession;
+  if (ending) {
     // flush() guarda la cola en el acto (antes de cualquier espera) y envía lo que pueda.
     window.clearTimeout(flushTimer);
     await flush().catch(() => {});
     await flushing;
     // La copia local queda guardada (cerrar sesión no borra los datos del celular).
-    saveSnapshot();
+    if (syncSession === ending) saveSnapshot();
     await offlineSaved();
+    // Mientras se cerraba ya empezó otra sesión (salir y entrar enseguida): no se toca.
+    if (syncSession !== ending) return;
   }
   window.clearTimeout(flushTimer);
   window.clearTimeout(pollTimer);
@@ -2052,6 +2079,136 @@ function normalizeCancelledCards() {
     });
   });
   Object.entries(clients).forEach(([clientId, client]) => { if (Number(client.balance) <= 0) addCancelledCard(client, clientId, client.settledAt || localDateISO()); });
+}
+
+// ── js/domain/audit-undo.js
+/**
+ * domain/audit-undo · Deshacer un movimiento del historial (consola del administrador).
+ *
+ * Un movimiento trae la lista de cambios que anotó el servidor (supabase/consola.sql):
+ *   { p: ['campo', 'subcampo'], old, new }      un valor cambió
+ *   { p: ['payments'], added: […], removed: […] } en una lista se agregaron/quitaron elementos
+ *
+ * Deshacer aplica lo contrario SOBRE LO ACTUAL, sin pisar lo que pasó después:
+ * - Listas: vuelve a poner lo quitado (si no está) y quita lo agregado (si sigue igual).
+ * - Montos: resta la diferencia (saldo 120.000 → 116.000 se deshace sumando 4.000 a lo que
+ *   haya hoy), así un abono posterior no se pierde.
+ * - Otros valores: vuelven al anterior solo si nadie los cambió después; si no, se avisa.
+ */
+
+/** JSON con las claves ordenadas (el servidor devuelve los objetos con otro orden). */
+function auditCanonical(value) {
+  if (Array.isArray(value)) return `[${value.map(item => auditCanonical(item === undefined ? null : item)).join(',')}]`;
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value).filter(key => value[key] !== undefined).sort().map(key => `${JSON.stringify(key)}:${auditCanonical(value[key])}`).join(',')}}`;
+  }
+  return JSON.stringify(value ?? null);
+}
+
+const sameValue = (a, b) => auditCanonical(a) === auditCanonical(b);
+const IDENTITY = ['id', 'clientId', 'at', 'ts'];
+
+/** Identidad de un elemento de lista (abono, préstamo, gasto…), o null. */
+function auditItemIdentity(item) {
+  if (!item || typeof item !== 'object') return null;
+  const key = IDENTITY.find(name => item[name] !== undefined && item[name] !== null && item[name] !== '');
+  return key ? `${key}:${item[key]}` : null;
+}
+
+/** Las fotos no se guardan en el historial: al volver a poner un elemento se quita la marca «[foto]». */
+function withoutPhotoMarks(value) {
+  if (Array.isArray(value)) return value.map(withoutPhotoMarks);
+  if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).filter(([, item]) => item !== '[foto]').map(([key, item]) => [key, withoutPhotoMarks(item)]));
+  return value;
+}
+
+/** Elementos quitados en un movimiento que no volvieron (no reaparecen entre los agregados). */
+function lostItems(change) {
+  if (!Array.isArray(change?.removed) || !change.removed.length) return [];
+  const added = new Set((change.added || []).map(auditItemIdentity).filter(Boolean));
+  return change.removed.filter(item => {
+    const identity = auditItemIdentity(item);
+    return !identity || !added.has(identity);
+  });
+}
+
+function parentFor(target, path, create) {
+  let node = target;
+  for (const key of path.slice(0, -1)) {
+    if (!node[key] || typeof node[key] !== 'object') {
+      if (!create) return null;
+      node[key] = {};
+    }
+    node = node[key];
+  }
+  return node;
+}
+
+/**
+ * Aplica sobre `target` (cliente o cobro actual) lo contrario de `changes`. Devuelve qué hizo:
+ * { applied: [texto], skipped: [texto] }. Con `dryRun` solo lo calcula.
+ */
+function undoAuditChanges(target, changes, { dryRun = false, label = path => path.join(' › '), format = value => String(value) } = {}) {
+  const applied = [];
+  const skipped = [];
+  const work = dryRun ? JSON.parse(JSON.stringify(target)) : target;
+  (changes || []).forEach(change => {
+    const path = Array.isArray(change?.p) ? change.p : [];
+    if (!path.length) return;
+    const name = label(path);
+    const key = path[path.length - 1];
+    if ('added' in change || 'removed' in change) {
+      const parent = parentFor(work, path, true);
+      if (!Array.isArray(parent[key])) parent[key] = [];
+      const list = parent[key];
+      let removedCount = 0;
+      (change.added || []).forEach(item => {
+        const index = list.findIndex(current => sameValue(current, item));
+        if (index >= 0) { list.splice(index, 1); removedCount += 1; }
+        else skipped.push(`${name}: un elemento agregado ya cambió después; se deja como está`);
+      });
+      let restoredCount = 0;
+      (change.removed || []).forEach(item => {
+        const identity = auditItemIdentity(item);
+        const present = list.some(current => (identity && auditItemIdentity(current) === identity) || sameValue(current, item));
+        if (present) return;
+        list.push(withoutPhotoMarks(item));
+        restoredCount += 1;
+      });
+      if (restoredCount) applied.push(`${name}: se vuelve${restoredCount === 1 ? '' : 'n'} a poner ${restoredCount} elemento${restoredCount === 1 ? '' : 's'}`);
+      if (removedCount) applied.push(`${name}: se quita${removedCount === 1 ? '' : 'n'} ${removedCount} elemento${removedCount === 1 ? '' : 's'} agregado${removedCount === 1 ? '' : 's'}`);
+      return;
+    }
+    const parent = parentFor(work, path, true);
+    const current = parent[key];
+    const before = change.old;
+    const after = change.new;
+    if (typeof before === 'number' && typeof after === 'number' && typeof current === 'number') {
+      if (before === after) return;
+      parent[key] = current + (before - after);
+      applied.push(`${name}: ${format(current, key)} → ${format(parent[key], key)}`);
+      return;
+    }
+    if (sameValue(current ?? null, after ?? null)) {
+      if (before === null || before === undefined) delete parent[key];
+      else parent[key] = withoutPhotoMarks(JSON.parse(JSON.stringify(before)));
+      applied.push(`${name}: vuelve al valor anterior`);
+      return;
+    }
+    if (sameValue(current ?? null, before ?? null)) return; // ya está como antes
+    skipped.push(`${name}: cambió otra vez después; se deja el valor actual`);
+  });
+  return { applied, skipped, result: work };
+}
+
+/** Datos de un registro borrado, reconstruidos desde su movimiento de borrado. */
+function rebuildDeleted(changes) {
+  const data = {};
+  (changes || []).forEach(change => {
+    if (!Array.isArray(change?.p) || change.p.length !== 1 || !('old' in change) || change.old === null) return;
+    data[change.p[0]] = withoutPhotoMarks(change.old);
+  });
+  return data;
 }
 
 // ── js/domain/base-transfer.js
@@ -4512,6 +4669,362 @@ function __mount_adminShellModule() {
   document.querySelectorAll('#admin-global-directory, [data-admin-section]').forEach(button => button.addEventListener('click', closeMenu));
   document.addEventListener('keydown', event => { if (event.key === 'Escape' && document.body.classList.contains('admin-menu-open')) closeMenu(); });
   window.matchMedia('(min-width:768px)').addEventListener('change', event => { if (event.matches) closeMenu(); });
+}
+
+// ── js/features/admin/audit-console.js
+/**
+ * features/admin/audit-console · Consola de movimientos (solo el administrador).
+ *
+ * Muestra el historial que anota el servidor (supabase/consola.sql): quién cambió qué, cuándo
+ * y en qué cobro. Marca lo que conviene revisar:
+ *   - «Se quitó»: un abono, préstamo, gasto… desapareció en ese cambio (posible pisada de un
+ *     equipo con datos viejos, o un borrado a propósito).
+ *   - «Choque resuelto»: dos equipos cambiaron lo mismo a la vez y la app los combinó.
+ * Desde aquí se puede deshacer un cambio (domain/audit-undo), recuperar un cliente borrado o
+ * abrir el cliente para corregirlo a mano. Los arreglos se guardan como cualquier cambio del
+ * administrador y también quedan en el historial.
+ */
+
+
+
+
+
+
+
+
+
+
+
+
+const AUDIT_PAGE = 200;
+
+const FIELD_LABELS = {
+  balance: 'Saldo', payments: 'Abonos', totalPaidAmount: 'Total abonado', paid: 'Pagado', principal: 'Préstamo', total: 'Total a pagar',
+  installment: 'Cuota', installments: 'Cuotas', totalDays: 'Días', frequency: 'Frecuencia', status: 'Estado', late: 'Atrasado',
+  name: 'Nombre', phone: 'Teléfono', address: 'Dirección', addressNotes: 'Indicaciones', interestPercent: 'Interés %', creditStartDate: 'Inicio del crédito',
+  notes: 'Notas', note: 'Nota', route: 'Cobro', location: 'Ubicación', settledAt: 'Pagada el', loanHistory: 'Historial de préstamos', visitHistory: 'Visitas',
+  base: 'Base', baseBank: 'Base en banco', loans: 'Préstamos', loansNew: 'Préstamos del día', loansEntered: 'Préstamos ingresados', collections: 'Cobro',
+  expenses: 'Gastos', otherExpenses: 'Otros gastos', otherExpenseEntries: 'Otros gastos (detalle)', cashDelivered: 'Efectivo entregado',
+  cardsCancelled: 'Cartulinas canceladas', monthlyInsurance: 'Seguros del mes', extraInsurance: 'Seguros adicionales', ledger: 'Libro de caja',
+  cashBox: 'Caja', insuranceCuts: 'Cortes de seguros', weeklyCollections: 'Cobro semanal', weeklyCardCount: 'Cartulinas de la semana',
+  access_enabled: 'Acceso', route_id: 'Cobro asignado', role: 'Rol', username: 'Usuario', data: 'Datos',
+};
+const TABLE_LABELS = { clients: 'Cliente', routes: 'Cobro', pending_requests: 'Solicitud', profiles: 'Trabajador', app_settings: 'Ajuste', route_state: 'Recorrido' };
+const ACTION_LABELS = { insert: 'Creó', update: 'Cambió', delete: 'Borró', merge: 'Choque resuelto' };
+const MONEY_FIELDS = new Set(['balance', 'totalPaidAmount', 'paid', 'principal', 'total', 'installment', 'base', 'baseBank', 'loans', 'collections', 'expenses',
+  'otherExpenses', 'cashDelivered', 'monthlyInsurance', 'weeklyCollections', 'amount', 'value', 'insurance', 'cash']);
+
+let auditRows = [];
+let auditDone = false;
+let auditLoading = false;
+
+const fieldLabel = path => path.map(key => FIELD_LABELS[key] || key).join(' › ');
+
+function shortValue(value, key) {
+  if (value === null || value === undefined || value === '') return '—';
+  if (typeof value === 'number') return MONEY_FIELDS.has(key) ? formatMoney(value) : String(value);
+  if (typeof value === 'boolean') return value ? 'sí' : 'no';
+  if (typeof value === 'string') return value.length > 60 ? `${value.slice(0, 57)}…` : value;
+  if (Array.isArray(value)) return `lista de ${value.length}`;
+  return itemSummary(value);
+}
+
+/** Un abono, préstamo, gasto… en pocas palabras. */
+function itemSummary(item) {
+  if (!item || typeof item !== 'object') return shortValue(item);
+  const amount = [item.amount, item.value, item.principal, item.cash].find(value => typeof value === 'number');
+  const parts = [];
+  if (item.name || item.clientName) parts.push(item.name || item.clientName);
+  if (typeof amount === 'number') parts.push(formatMoney(amount));
+  const when = item.date || item.at || (item.ts ? new Date(item.ts).toISOString() : '');
+  if (when) parts.push(formatWhen(when));
+  if (item.note) parts.push(`«${String(item.note).slice(0, 40)}»`);
+  return parts.join(' · ') || `${Object.keys(item).length} datos`;
+}
+
+function formatWhen(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(String(value))) return date.toLocaleDateString('es-CO', { timeZone: 'UTC', day: '2-digit', month: '2-digit' });
+  return date.toLocaleString('es-CO', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+}
+
+function actorName(row) {
+  if (row.actor_name) return row.actor_name;
+  const worker = personnel.find(item => item.id === row.actor);
+  return worker?.name || worker?.username || (row.actor ? 'Usuario' : 'Servidor');
+}
+
+function recordName(row) {
+  if (row.table_name === 'clients') {
+    const fromChanges = (row.changes || []).find(change => change.p?.[0] === 'name');
+    return clients[row.row_key]?.name || fromChanges?.new || fromChanges?.old || row.row_key;
+  }
+  if (row.table_name === 'routes') return routeSettlements[row.row_key]?.name || row.row_key;
+  if (row.table_name === 'profiles') return personnel.find(item => item.id === row.row_key)?.name || row.row_key;
+  return row.row_key;
+}
+
+const rowLost = row => (row.changes || []).flatMap(change => lostItems(change).map(item => ({ change, item })));
+const isAlert = row => row.action === 'merge' || row.action === 'delete' || rowLost(row).length > 0;
+
+// ── Datos ──
+
+function auditFilters() {
+  const panel = document.querySelector('[data-admin-panel="audit"]');
+  return {
+    route: panel.querySelector('#audit-route').value,
+    actor: panel.querySelector('#audit-actor').value,
+    since: panel.querySelector('#audit-since').value,
+    search: panel.querySelector('#audit-search').value.trim().toLocaleLowerCase('es'),
+    alertsOnly: panel.querySelector('#audit-alerts').checked,
+  };
+}
+
+function matchingClientIds(search) {
+  if (!search) return null;
+  return Object.entries(clients).filter(([id, client]) => id.toLocaleLowerCase('es').includes(search)
+    || String(client?.name || '').toLocaleLowerCase('es').includes(search) || String(client?.id || '').includes(search)).map(([id]) => id).slice(0, 80);
+}
+
+async function fetchAuditPage(before) {
+  const filters = auditFilters();
+  const db = await backend();
+  let query = db.from('audit_log').select('*');
+  if (filters.route) query = query.eq('route_id', filters.route);
+  if (filters.actor) query = query.eq('actor', filters.actor);
+  if (filters.since) query = query.gte('at', new Date(`${filters.since}T00:00:00`).toISOString());
+  const ids = matchingClientIds(filters.search);
+  if (ids) {
+    if (!ids.length) return [];
+    query = query.eq('table_name', 'clients').in('row_key', ids);
+  }
+  if (before) query = query.lt('id', before);
+  const { data, error } = await query.order('id', { ascending: false }).limit(AUDIT_PAGE);
+  if (error) throw error;
+  return data || [];
+}
+
+async function loadAudit({ more = false } = {}) {
+  if (auditLoading) return;
+  auditLoading = true;
+  const status = document.querySelector('#audit-status');
+  status.textContent = 'Cargando movimientos…';
+  try {
+    if (!more) { auditRows = []; auditDone = false; }
+    const before = auditRows.length ? auditRows[auditRows.length - 1].id : null;
+    const page = await fetchAuditPage(before);
+    auditRows.push(...page);
+    auditDone = page.length < AUDIT_PAGE;
+    renderAudit();
+  } catch (error) {
+    status.textContent = /audit_log|relation|does not exist|schema cache/i.test(String(error?.message))
+      ? 'Falta activar el historial en el servidor (supabase/consola.sql).'
+      : `No se pudieron cargar los movimientos: ${backendErrorMessage(error)}`;
+  } finally { auditLoading = false; }
+}
+
+// ── Pantalla ──
+
+function changeLine(change) {
+  const line = document.createElement('li');
+  const name = fieldLabel(change.p || []);
+  const key = (change.p || [])[(change.p || []).length - 1];
+  if ('added' in change || 'removed' in change) {
+    const lost = new Set(lostItems(change));
+    (change.added || []).forEach(item => {
+      const entry = document.createElement('div');
+      entry.className = 'audit-added';
+      entry.textContent = `+ ${name}: ${itemSummary(item)}`;
+      line.append(entry);
+    });
+    (change.removed || []).forEach(item => {
+      const entry = document.createElement('div');
+      entry.className = lost.has(item) ? 'audit-removed is-lost' : 'audit-removed';
+      entry.textContent = `${lost.has(item) ? '⚠ Se quitó' : '− Reemplazado'} · ${name}: ${itemSummary(item)}`;
+      line.append(entry);
+    });
+    return line;
+  }
+  if ('base' in change || 'mine' in change || 'theirs' in change) {
+    line.textContent = `${name}: antes ${shortValue(change.base, key)} · este equipo ${shortValue(change.mine, key)} · el otro ${shortValue(change.theirs, key)}`;
+    return line;
+  }
+  line.textContent = `${name}: ${shortValue(change.old, key)} → ${shortValue(change.new, key)}`;
+  return line;
+}
+
+function auditEntry(row) {
+  const item = document.createElement('article');
+  item.className = 'audit-entry';
+  item.dataset.auditId = row.id;
+  const lost = rowLost(row);
+  item.classList.toggle('is-alert', isAlert(row));
+  const head = document.createElement('header');
+  const title = document.createElement('div');
+  title.className = 'audit-title';
+  const strong = document.createElement('strong');
+  strong.textContent = `${ACTION_LABELS[row.action] || row.action} · ${TABLE_LABELS[row.table_name] || row.table_name} ${recordName(row)}`;
+  const meta = document.createElement('span');
+  const routeName = row.route_id ? (routeSettlements[row.route_id]?.name || row.route_id) : '';
+  meta.textContent = `${formatWhen(row.at)} · ${actorName(row)}${routeName ? ` · ${routeName}` : ''}`;
+  title.append(strong, meta);
+  head.append(title);
+  if (lost.length || row.action === 'merge' || row.action === 'delete') {
+    const tag = document.createElement('span');
+    tag.className = 'audit-tag';
+    tag.textContent = row.action === 'merge' ? 'Choque entre equipos' : row.action === 'delete' ? 'Borrado' : `Se quitó ${lost.length}`;
+    head.append(tag);
+  }
+  item.append(head);
+  const list = document.createElement('ul');
+  list.className = 'audit-changes';
+  const changes = row.changes || [];
+  const shown = row.action === 'insert' || row.action === 'delete' ? changes.filter(change => ['name', 'balance', 'principal', 'route', 'base', 'amount', 'access_enabled'].includes(change.p?.[0])) : changes;
+  shown.slice(0, 30).forEach(change => list.append(changeLine(change)));
+  if (changes.length > shown.length) {
+    const more = document.createElement('li');
+    more.className = 'audit-more';
+    more.textContent = `${changes.length - shown.length} dato(s) más`;
+    list.append(more);
+  }
+  item.append(list);
+  const actions = document.createElement('div');
+  actions.className = 'audit-actions';
+  const editable = ['clients', 'routes'].includes(row.table_name);
+  if (editable && row.action === 'update') actions.append(actionButton('Deshacer este cambio', () => confirmUndo(row)));
+  if (row.table_name === 'clients' && row.action === 'delete' && !clients[row.row_key]) actions.append(actionButton('Recuperar cliente', () => confirmRestoreClient(row)));
+  if (row.table_name === 'clients' && clients[row.row_key]) {
+    actions.append(actionButton('Abrir cliente', () => { enterAdminDirectory(); openClient(row.row_key); }));
+    actions.append(actionButton('Historial del cliente', () => showClientHistory(row.row_key)));
+  }
+  if (actions.childElementCount) item.append(actions);
+  return item;
+}
+
+function actionButton(text, onClick) {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'secondary-button';
+  button.textContent = text;
+  button.addEventListener('click', onClick);
+  return button;
+}
+
+function renderAudit() {
+  const list = document.querySelector('#audit-list');
+  const { alertsOnly } = auditFilters();
+  const rows = alertsOnly ? auditRows.filter(isAlert) : auditRows;
+  list.replaceChildren(...rows.map(auditEntry));
+  const alerts = auditRows.filter(isAlert).length;
+  document.querySelector('#audit-status').textContent = auditRows.length
+    ? `${auditRows.length} movimiento${auditRows.length === 1 ? '' : 's'}${alerts ? ` · ${alerts} para revisar` : ''}${alertsOnly ? ' (mostrando solo los de revisar)' : ''}`
+    : 'Sin movimientos con estos filtros.';
+  document.querySelector('#audit-more').hidden = auditDone || !auditRows.length;
+}
+
+function showClientHistory(clientId) {
+  const search = document.querySelector('#audit-search');
+  search.value = clients[clientId]?.name || clientId;
+  document.querySelector('#audit-route').value = '';
+  document.querySelector('#audit-actor').value = '';
+  document.querySelector('#audit-since').value = '';
+  loadAudit();
+}
+
+// ── Arreglos ──
+
+function targetFor(row) {
+  if (row.table_name === 'clients') return clients[row.row_key] || null;
+  if (row.table_name === 'routes') return routeSettlements[row.row_key] || null;
+  return null;
+}
+
+function afterFix(row) {
+  persistBusinessData();
+  if (row.table_name === 'clients') renderClientRows(row.row_key);
+  else renderClientsBulk(Object.keys(clients));
+  if (routeSettlements[routeSelect.value]) renderAdminRoute(routeSelect.value);
+}
+
+function confirmUndo(row) {
+  const target = targetFor(row);
+  if (!target) { showToast('Ese registro ya no existe en este equipo.'); return; }
+  const preview = undoAuditChanges(target, row.changes, { dryRun: true, label: fieldLabel, format: shortValue });
+  if (!preview.applied.length) {
+    showToast(preview.skipped.length ? 'No hay nada que deshacer: esos datos cambiaron después. Ábrelo y corrígelo a mano.' : 'Ese cambio ya está deshecho.');
+    return;
+  }
+  openCustomModal({
+    title: 'Deshacer este cambio',
+    description: `${TABLE_LABELS[row.table_name]} ${recordName(row)} · ${formatWhen(row.at)} · ${actorName(row)}. Se aplica sobre los datos de hoy, sin borrar lo que pasó después.`,
+    submitLabel: 'Deshacer',
+    fields: [
+      { type: 'note', label: 'Se hará', value: preview.applied.join(' · ') },
+      ...(preview.skipped.length ? [{ type: 'note', label: 'No se toca', value: preview.skipped.join(' · ') }] : []),
+    ],
+    onSubmit: () => {
+      const current = targetFor(row);
+      if (!current) return;
+      const done = undoAuditChanges(current, row.changes, { label: fieldLabel });
+      afterFix(row);
+      showToast(`Cambio deshecho (${done.applied.length} ajuste${done.applied.length === 1 ? '' : 's'}).`);
+      window.setTimeout(() => loadAudit(), 1500);
+    },
+  });
+}
+
+function confirmRestoreClient(row) {
+  const data = rebuildDeleted(row.changes);
+  if (!data.name) { showToast('No hay datos suficientes para recuperar este cliente.'); return; }
+  openCustomModal({
+    title: 'Recuperar cliente',
+    description: `${data.name} se borró el ${formatWhen(row.at)} (${actorName(row)}). Vuelve con sus datos y abonos de ese momento (las fotos de comprobantes no se recuperan).`,
+    submitLabel: 'Recuperar',
+    fields: [{ type: 'note', label: 'Saldo', value: shortValue(data.balance, 'balance') }],
+    onSubmit: () => {
+      if (clients[row.row_key]) { showToast('Ese cliente ya existe.'); return; }
+      clients[row.row_key] = data;
+      afterFix(row);
+      renderClientsBulk(Object.keys(clients));
+      showToast(`${data.name} recuperado.`);
+      window.setTimeout(() => loadAudit(), 1500);
+    },
+  });
+}
+
+// ── Filtros ──
+
+function fillAuditFilters() {
+  const routeFilter = document.querySelector('#audit-route');
+  const selectedRoute = routeFilter.value;
+  routeFilter.replaceChildren(new Option('Todos los cobros', ''), ...Object.entries(routeSettlements)
+    .sort(([, a], [, b]) => String(a?.name).localeCompare(String(b?.name), 'es')).map(([id, route]) => new Option(route?.name || id, id)));
+  routeFilter.value = selectedRoute && routeSettlements[selectedRoute] ? selectedRoute : '';
+  const actorFilter = document.querySelector('#audit-actor');
+  const selectedActor = actorFilter.value;
+  actorFilter.replaceChildren(new Option('Todas las personas', ''), ...personnel.filter(worker => worker.id && !String(worker.id).startsWith('worker-'))
+    .map(worker => new Option(worker.name || worker.username, worker.id)));
+  actorFilter.value = selectedActor;
+}
+
+/** Al abrir la sección: filtros al día y primera página (los últimos movimientos). */
+function renderAuditConsole() {
+  if (!backendEnabled() || state.userRole !== 'admin') return;
+  fillAuditFilters();
+  loadAudit();
+}
+
+/** Registra los listeners del módulo. Se invoca una sola vez desde app.js. */
+function __mount_auditConsoleModule() {
+  const menuItem = document.querySelector('[data-admin-section="audit"]');
+  if (!menuItem) return;
+  // La consola necesita el servidor (el historial vive allá).
+  menuItem.hidden = !backendEnabled();
+  menuItem.addEventListener('click', renderAuditConsole);
+  document.querySelector('#audit-filters').addEventListener('submit', event => { event.preventDefault(); loadAudit(); });
+  document.querySelector('#audit-alerts').addEventListener('change', renderAudit);
+  document.querySelector('#audit-more').addEventListener('click', () => loadAudit({ more: true }));
 }
 
 // ── js/features/admin/backup.js
@@ -8604,6 +9117,8 @@ function __mount_sessionModule() {
     const submit = document.querySelector('#login-submit');
     submit.disabled = true;
     try {
+      // Si se acaba de cerrar sesión, se espera a que termine de cerrarse (y de guardar la copia).
+      await sessionEnding.catch(() => {});
       const result = backendEnabled() ? await authenticateWithServer() : await authenticateLocally();
       if (!result) return;
       const { account, isAdmin } = result;
@@ -15366,11 +15881,13 @@ const clientMapModule = { mount: __mount_clientMapModule };
 const evidenceModule = { mount: __mount_evidenceModule };
 const operationsListModule = { mount: __mount_operationsListModule };
 const syncModule = { mount: __mount_syncModule };
+const auditConsoleModule = { mount: __mount_auditConsoleModule };
 /**
  * EdgeCredit · raíz de composición.
  * Monta cada módulo (contenedor) y ejecuta la secuencia de arranque.
  * No contiene lógica de negocio: solo orquesta.
  */
+
 
 
 
@@ -15474,6 +15991,7 @@ const MODULES = [
   clientMapModule,
   evidenceModule,
   operationsListModule,
+  auditConsoleModule,
 ];
 
 /** Secuencia de arranque: hidrata datos, normaliza y pinta el estado inicial. */

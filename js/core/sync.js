@@ -569,6 +569,28 @@ function mergeThreeWay(base, local, remote, depth) {
 
 const MERGEABLE = ['routes', 'clients', 'route_state'];
 
+/** Resumen corto de un valor para el historial (las listas, solo cuántos elementos tienen). */
+function mergeSummary(value) {
+  if (Array.isArray(value)) return `lista de ${value.length}`;
+  if (isPlainObject(value)) return `${Object.keys(value).length} datos`;
+  return value ?? null;
+}
+
+/**
+ * Choque real: el mismo campo cambió aquí y en otro equipo. Se anota en el historial del
+ * servidor (consola del administrador) sin esperar respuesta; si falla no pasa nada.
+ */
+function logMerge(table, key, routeId, base, mine, theirs) {
+  if (table === 'route_state' || !navigator.onLine || !isPlainObject(mine) || !isPlainObject(theirs)) return;
+  const fields = [...new Set([...Object.keys(mine), ...Object.keys(theirs)])]
+    .filter(field => stable(mine[field]) !== stable(base?.[field]) && stable(theirs[field]) !== stable(base?.[field]) && stable(mine[field]) !== stable(theirs[field]));
+  if (!fields.length) return;
+  const changes = fields.slice(0, 20).map(field => ({ p: [field], base: mergeSummary(base?.[field]), mine: mergeSummary(mine[field]), theirs: mergeSummary(theirs[field]) }));
+  backend().then(db => db.rpc('log_sync_merge', { p_table: table, p_key: String(key), p_route: routeId || null, p_changes: changes }))
+    .then(result => { if (result?.error) console.warn('Historial: choque sin anotar', result.error); })
+    .catch(() => {});
+}
+
 /**
  * Llega un cambio de un registro que aquí también tiene cambios sin enviar. Antes se descartaba
  * lo recibido y se subía la copia de aquí completa, borrando lo del otro equipo (p. ej. la base
@@ -584,6 +606,7 @@ function mergeIntoLocal(table, key, row) {
   if (!local || !isPlainObject(row.data)) return false;
   if (!isPlainObject(base)) base = {}; // sin versión común: se junta todo y en lo distinto gana lo de aquí
   const merged = mergeThreeWay(base, local.data, row.data, 2);
+  logMerge(table, key, row.route_id ?? (table === 'routes' ? key : null), base, local.data, row.data);
   applyRow(table, { ...row, data: merged });
   // Lo conocido pasa a ser la versión del servidor: lo que la combinación conserva de aquí
   // queda pendiente y se envía.
@@ -757,6 +780,7 @@ function restorePending(pending, previousWorkers = [], previousSynced = new Map(
       let base = item.base ?? previousSynced.get(item.id) ?? null;
       try { base = base ? JSON.parse(base)?.data : null; } catch { base = null; }
       const merged = mergeThreeWay(isPlainObject(base) ? base : {}, item.row.data, downloaded.data, 2);
+      logMerge(item.table, item.row[TABLE_KEYS[item.table]], item.row.route_id ?? (item.table === 'routes' ? item.row.id : null), isPlainObject(base) ? base : {}, item.row.data, downloaded.data);
       applyRow(item.table, { ...item.row, data: merged });
       lastSynced.set(item.id, stable(downloaded));
       return;
@@ -1124,14 +1148,17 @@ export async function startSync({ userId, role, routeId, routeName }) {
 }
 
 export async function stopSync() {
-  if (syncSession) {
+  const ending = syncSession;
+  if (ending) {
     // flush() guarda la cola en el acto (antes de cualquier espera) y envía lo que pueda.
     window.clearTimeout(flushTimer);
     await flush().catch(() => {});
     await flushing;
     // La copia local queda guardada (cerrar sesión no borra los datos del celular).
-    saveSnapshot();
+    if (syncSession === ending) saveSnapshot();
     await offlineSaved();
+    // Mientras se cerraba ya empezó otra sesión (salir y entrar enseguida): no se toca.
+    if (syncSession !== ending) return;
   }
   window.clearTimeout(flushTimer);
   window.clearTimeout(pollTimer);
