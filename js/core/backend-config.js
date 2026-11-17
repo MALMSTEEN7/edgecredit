@@ -18,5 +18,9 @@ export const SUPABASE_ANON_KEY = '';
 /** Los usuarios entran con un nombre corto (camila); por dentro Supabase usa camila@<dominio>. */
 export const AUTH_EMAIL_DOMAIN = 'edgecredit.app';
 
-/** Librería oficial de Supabase (se descarga al iniciar sesión). */
-export const SUPABASE_JS_URL = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2';
+/**
+ * Librería oficial de Supabase. Va incluida en la app (queda guardada en el celular y abre sin
+ * señal); si esa copia no carga, se usa la del CDN.
+ */
+export const SUPABASE_JS_URL = 'dist/vendor/supabase-2.119.0.js';
+export const SUPABASE_JS_FALLBACK_URL = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.119.0';

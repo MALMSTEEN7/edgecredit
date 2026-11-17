@@ -22,8 +22,12 @@ const SUPABASE_ANON_KEY = '';
 /** Los usuarios entran con un nombre corto (camila); por dentro Supabase usa camila@<dominio>. */
 const AUTH_EMAIL_DOMAIN = 'edgecredit.app';
 
-/** Librería oficial de Supabase (se descarga al iniciar sesión). */
-const SUPABASE_JS_URL = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2';
+/**
+ * Librería oficial de Supabase. Va incluida en la app (queda guardada en el celular y abre sin
+ * señal); si esa copia no carga, se usa la del CDN.
+ */
+const SUPABASE_JS_URL = 'dist/vendor/supabase-2.119.0.js';
+const SUPABASE_JS_FALLBACK_URL = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.119.0';
 
 // ── js/core/backend.js
 /**
@@ -44,17 +48,22 @@ function backendEnabled() {
   return Boolean(BACKEND_URL && BACKEND_KEY);
 }
 
+function loadScript(src) {
+  return new Promise((resolve, reject) => {
+    const script = document.createElement('script');
+    script.src = src;
+    script.async = true;
+    script.onload = () => (window.supabase?.createClient ? resolve(window.supabase) : reject(new Error('No se pudo iniciar la conexión con el servidor.')));
+    script.onerror = () => { script.remove(); reject(new Error('Sin conexión con el servidor. Revisa tu internet e inténtalo de nuevo.')); };
+    document.head.append(script);
+  });
+}
+
 function loadLibrary() {
   if (window.supabase?.createClient) return Promise.resolve(window.supabase);
   if (loading) return loading;
-  loading = new Promise((resolve, reject) => {
-    const script = document.createElement('script');
-    script.src = SUPABASE_JS_URL;
-    script.async = true;
-    script.onload = () => (window.supabase?.createClient ? resolve(window.supabase) : reject(new Error('No se pudo iniciar la conexión con el servidor.')));
-    script.onerror = () => { loading = null; reject(new Error('Sin conexión con el servidor. Revisa tu internet e inténtalo de nuevo.')); };
-    document.head.append(script);
-  });
+  // Primero la copia incluida en la app (funciona sin señal); si falla, la del CDN.
+  loading = loadScript(SUPABASE_JS_URL).catch(() => loadScript(SUPABASE_JS_FALLBACK_URL)).catch(error => { loading = null; throw error; });
   return loading;
 }
 
@@ -228,6 +237,89 @@ function normalize(value) {
  * Si se deja vacía, el mapa usa las teselas estándar de OpenStreetMap.
  */
 const CARTO_API_KEY = 'cb1_46nk_1_245cd44315c027f9a302c302';
+
+// ── js/core/offline-store.js
+/**
+ * core/offline-store · Copia local de los datos del servidor en el celular (IndexedDB).
+ *
+ * Con servidor, cada usuario guarda aquí su propia copia (la ruta del trabajador, o todo en el
+ * caso del admin) junto con lo que se sabe del servidor. Así la app abre y trabaja sin señal,
+ * y al volver la conexión solo descarga lo que cambió.
+ *
+ * - Cerrar sesión NO borra la copia (los cambios sin enviar no se pierden).
+ * - Se borra cuando el administrador desactiva el acceso de esa persona (wipeOfflineUser).
+ * - localStorage tiene un tope de ~5 MB; IndexedDB permite mucho más.
+ */
+
+const OFFLINE_DB_NAME = 'edgecredit-offline';
+const OFFLINE_DB_VERSION = 1;
+const OFFLINE_STORE = 'kv';
+
+let offlineDbPromise = null;
+
+function openOfflineDb() {
+  if (offlineDbPromise) return offlineDbPromise;
+  offlineDbPromise = new Promise((resolve, reject) => {
+    if (!globalThis.indexedDB) { reject(new Error('IndexedDB no disponible')); return; }
+    const request = indexedDB.open(OFFLINE_DB_NAME, OFFLINE_DB_VERSION);
+    request.onupgradeneeded = () => { if (!request.result.objectStoreNames.contains(OFFLINE_STORE)) request.result.createObjectStore(OFFLINE_STORE); };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error || new Error('No se pudo abrir la copia local'));
+    request.onblocked = () => reject(new Error('La copia local está bloqueada por otra pestaña'));
+  }).catch(error => { offlineDbPromise = null; throw error; });
+  return offlineDbPromise;
+}
+
+function offlineRun(mode, action) {
+  return openOfflineDb().then(db => new Promise((resolve, reject) => {
+    const tx = db.transaction(OFFLINE_STORE, mode);
+    const request = action(tx.objectStore(OFFLINE_STORE));
+    tx.oncomplete = () => resolve(request?.result);
+    tx.onerror = () => reject(tx.error || request?.error);
+    tx.onabort = () => reject(tx.error || new Error('Escritura cancelada (¿sin espacio?)'));
+  }));
+}
+
+async function offlineGet(key) {
+  try { return (await offlineRun('readonly', store => store.get(key))) ?? null; } catch { return null; }
+}
+
+/** Escrituras en cola por clave: si llega otra mientras se escribe, solo se escribe la última. */
+const offlineQueued = new Map();
+const offlineWriting = new Set();
+const offlineWaiters = [];
+
+async function offlineFlush(key) {
+  offlineWriting.add(key);
+  while (offlineQueued.has(key)) {
+    const value = offlineQueued.get(key);
+    offlineQueued.delete(key);
+    try { await offlineRun('readwrite', store => store.put(value, key)); } catch (error) { console.warn('Copia local sin guardar', error); }
+  }
+  offlineWriting.delete(key);
+  if (!offlineWriting.size) offlineWaiters.splice(0).forEach(resolve => resolve());
+}
+
+function offlinePut(key, value) {
+  offlineQueued.set(key, value);
+  if (!offlineWriting.has(key)) offlineFlush(key);
+}
+
+/** Espera a que terminen las escrituras pendientes. */
+function offlineSaved() {
+  return offlineWriting.size || offlineQueued.size ? new Promise(resolve => offlineWaiters.push(resolve)) : Promise.resolve();
+}
+
+async function offlineDelete(key) {
+  offlineQueued.delete(key);
+  await offlineSaved();
+  try { await offlineRun('readwrite', store => store.delete(key)); } catch { /* sin IndexedDB */ }
+}
+
+/** Pide al navegador que no borre la copia por falta de espacio. */
+function requestPersistentOfflineStorage() {
+  try { navigator.storage?.persist?.().catch(() => {}); } catch { /* opcional */ }
+}
 
 // ── js/core/security-config.js
 /**
@@ -493,7 +585,11 @@ function hydrateBusinessData() {
  * - Nunca se pisa un registro con cambios locales sin enviar: se conserva el local y se envía.
  * - Sin internet, los cambios quedan en una cola (también guardada en el navegador) que se
  *   escribe al instante, así no se pierden si cierran la app; se envían al volver la conexión.
+ * - Copia local por usuario (core/offline-store): los datos y lo que se sabe del servidor se
+ *   guardan en el celular. Al abrir la app se usa esa copia al instante (también sin señal) y,
+ *   con conexión, se trae solo lo que cambió desde la última vez. Cerrar sesión no la borra.
  */
+
 
 
 
@@ -533,11 +629,26 @@ let reconnectTimer = null;
 let renderHook = () => {};
 let accessHook = () => {};
 let lastErrorToast = 0;
+let online = false;          // ¿conectado y verificado con el servidor en esta sesión?
+let connecting = null;       // promesa de la conexión en curso
+let authMissing = false;     // con señal pero sin sesión del servidor (ingresó sin señal)
+let authHook = async () => true;
+let snapshotTimer = null;
+
+const SNAPSHOT_VERSION = 1;
+const INCREMENTAL_MAX_AGE_MS = 3 * 24 * 60 * 60 * 1000; // copia más vieja: descarga completa
 
 /** La app registra aquí cómo repintar tras cambios remotos (app.js). */
 function setRenderHook(fn) { renderHook = fn; }
 /** Se llama cuando cambia el perfil propio (p. ej. el admin desactivó el acceso). */
 function setAccessHook(fn) { accessHook = fn; }
+/**
+ * Antes de conectarse con el servidor (sobre todo tras entrar sin señal) la sesión revisa que
+ * haya una sesión válida del servidor. Devuelve true si la hay; lanza error si no hay red.
+ */
+function setAuthHook(fn) { authHook = fn; }
+/** ¿Ya está conectado con el servidor (o trabajando con la copia local)? */
+function syncOnline() { return online; }
 function syncActive() { return Boolean(syncSession); }
 /** Rol de la sesión sincronizada ('admin' | 'worker'), o null sin servidor. */
 function syncRole() { return syncSession?.role || null; }
@@ -654,8 +765,17 @@ function readOutbox() {
   try { return JSON.parse(localStorage.getItem(outboxKey()) || '[]'); } catch { return []; }
 }
 
+/** Hora de la última escritura de la cola (para saber si es más nueva que la copia local). */
+function readOutboxAt() {
+  try { return Number(localStorage.getItem(`${outboxKey()}-at`)) || 0; } catch { return 0; }
+}
+
 function writeOutbox(items) {
-  try { localStorage.setItem(outboxKey(), JSON.stringify(items)); } catch { /* opcional */ }
+  try {
+    localStorage.setItem(outboxKey(), JSON.stringify(items));
+    localStorage.setItem(`${outboxKey()}-at`, String(Date.now()));
+  } catch { /* opcional */ }
+  saveSnapshotSoon();
 }
 
 /** Cambios locales pendientes (lo que difiere de la última versión enviada/recibida). */
@@ -703,7 +823,8 @@ function flush() {
   // Paso síncrono: la cola queda guardada aunque la app se cierre en este instante.
   const pending = pendingItems();
   writeOutbox(pending);
-  if (!pending.length || !navigator.onLine) { updateSyncBadge(); return Promise.resolve(); }
+  // Sin conexión con el servidor: queda en la cola (y en la copia local) hasta conectarse.
+  if (!pending.length || !navigator.onLine || !online) { updateSyncBadge(); return Promise.resolve(); }
   flushing = sendPending(pending).finally(() => { flushing = null; updateSyncBadge(); });
   return flushing;
 }
@@ -829,19 +950,26 @@ function reportError(error) {
 
 function updateSyncBadge() {
   const pending = syncSession ? readOutbox().length : 0;
-  const offline = !navigator.onLine;
+  const offline = !navigator.onLine || (syncSession && !online && !authMissing);
   const reconnecting = !offline && realtime === 'down';
-  const status = offline ? 'offline' : pending ? 'pending' : reconnecting ? 'reconnecting' : 'ok';
+  const status = authMissing && !online ? 'offline' : offline ? 'offline' : pending ? 'pending' : reconnecting ? 'reconnecting' : 'ok';
+  const changes = `${pending} cambio${pending === 1 ? '' : 's'}`;
   const titles = {
-    offline: 'Sin conexión: los cambios se enviarán al volver internet',
-    pending: `${pending} cambio(s) por enviar al servidor`,
+    offline: authMissing && !online
+      ? `Vuelve a ingresar tu contraseña para enviar ${pending ? `${changes} pendientes` : 'y recibir cambios'} (toca aquí)`
+      : `Sin señal: trabajas con la copia guardada en este celular${pending ? `. ${changes} por subir al volver la señal` : ''}`,
+    pending: `${changes} por enviar al servidor`,
     reconnecting: 'Tiempo real desconectado: reconectando. Mientras tanto los datos se actualizan cada minuto',
     ok: realtime === 'live' ? 'Datos sincronizados con el servidor (tiempo real activo)' : 'Datos sincronizados con el servidor',
   };
-  const labels = { offline: 'Sin conexión', pending: 'Enviando…', reconnecting: 'Reconectando…', ok: 'Sincronizado' };
+  const labels = {
+    offline: authMissing && !online ? 'Ingresa para enviar' : pending ? `Sin señal · ${pending} por subir` : 'Sin señal',
+    pending: 'Enviando…', reconnecting: 'Reconectando…', ok: 'Sincronizado',
+  };
   document.querySelectorAll('.sync-status').forEach(badge => {
     badge.hidden = !syncSession;
     badge.dataset.state = status;
+    badge.dataset.needsAuth = authMissing && !online ? 'true' : 'false';
     badge.title = titles[status];
     badge.querySelector('span').textContent = labels[status];
   });
@@ -1066,6 +1194,7 @@ let pendingChanges = { full: false, clients: new Set() };
 /** Repinta lo que cambió. `full`: repintar todo (descarga completa). */
 function queueRender({ full = false } = {}) {
   if (full) pendingChanges.full = true;
+  saveSnapshotSoon();
   window.clearTimeout(renderTimer);
   renderTimer = window.setTimeout(() => {
     const changes = pendingChanges;
@@ -1167,6 +1296,7 @@ async function downloadAll() {
   cursor = stamp;
   lastFullSync = Date.now();
   loaded = true;
+  saveSnapshotSoon();
 }
 
 /**
@@ -1207,7 +1337,7 @@ function restorePending(pending, previousWorkers = [], previousSynced = new Map(
  * 30 minutos). Primero envía lo pendiente; los errores se reintentan en el siguiente ciclo.
  */
 async function fullSync() {
-  if (!syncSession || syncing || !navigator.onLine) return;
+  if (!syncSession || syncing || !online || !navigator.onLine) return;
   if (Date.now() - lastFullSync < FULL_SYNC_DEBOUNCE_MS) return;
   syncing = true;
   try {
@@ -1221,9 +1351,17 @@ async function fullSync() {
 
 /** Refresco incremental: filas cambiadas desde el cursor (con margen) y borrados. */
 async function pullChanges() {
-  if (!syncSession || syncing || !loaded || !cursor || !navigator.onLine) return;
+  if (!syncSession || syncing || !online || !loaded || !cursor || !navigator.onLine) return;
   syncing = true;
   try {
+    await pullSince();
+  } catch { /* se reintenta en el siguiente ciclo */ }
+  finally { syncing = false; updateSyncBadge(); }
+}
+
+/** Trae lo cambiado desde el cursor y lo aplica. Lanza error si falla la descarga. */
+async function pullSince() {
+  {
     const db = await backend();
     const since = new Date(Date.parse(cursor) - OVERLAP_MS).toISOString();
     // La hora del servidor se toma al empezar: lo que se confirme mientras se descarga
@@ -1249,8 +1387,8 @@ async function pullChanges() {
     results.forEach(result => (result.data || []).forEach(row => { changed = receiveRow(result.table, row) || changed; }));
     cursor = stamp;
     if (changed) queueRender();
-  } catch { /* se reintenta en el siguiente ciclo */ }
-  finally { syncing = false; updateSyncBadge(); }
+    saveSnapshotSoon();
+  }
 }
 
 function schedulePoll() {
@@ -1261,7 +1399,8 @@ function schedulePoll() {
 
 async function pollTick() {
   if (syncSession && !document.hidden && navigator.onLine) {
-    if (Date.now() - lastFullSync >= FULL_SYNC_EVERY_MS) await fullSync();
+    if (!online) await connectOnline();
+    else if (Date.now() - lastFullSync >= FULL_SYNC_EVERY_MS) await fullSync();
     else await pullChanges();
   }
   schedulePoll();
@@ -1331,15 +1470,207 @@ function setRealtime(status) {
 
 // ── Ciclo de vida ──
 
-/** Inicia la sincronización tras un inicio de sesión exitoso (o una sesión restaurada). */
+// ── Copia local (core/offline-store) ──
+
+const snapshotKey = userId => `snapshot:${userId}`;
+
+/** Foto de los datos y de lo que se sabe del servidor (todo en un mismo instante). */
+function buildSnapshot() {
+  return {
+    v: SNAPSHOT_VERSION,
+    savedAt: Date.now(),
+    outboxAt: readOutboxAt(),
+    session: { ...syncSession },
+    cursor,
+    lastFullSync,
+    synced: JSON.stringify([...lastSynced]),
+    versions: JSON.stringify([...versions]),
+    data: JSON.stringify({
+      clients, routeSettlements, personnel, pendingRequests, routeDirectory, shared,
+      dailyRouteOrder: state.dailyRouteOrder, dailyRouteDates: state.dailyRouteDates, clientLibraryOrder: state.clientLibraryOrder,
+      collectedRouteClients: state.collectedRouteClients, routeVisitOutcomes: state.routeVisitOutcomes,
+      workerAccess: security.workerAccess, session: security.session,
+    }),
+  };
+}
+
+/** Guarda la copia ya (al ocultar o cerrar la app, al cerrar sesión). */
+function saveSnapshot() {
+  window.clearTimeout(snapshotTimer);
+  snapshotTimer = null;
+  if (!syncSession || !loaded) return;
+  try { offlinePut(snapshotKey(syncSession.userId), buildSnapshot()); } catch (error) { console.warn('Copia local sin guardar', error); }
+}
+
+/** Guarda la copia en unos segundos (agrupa muchos cambios seguidos en una sola escritura). */
+function saveSnapshotSoon() {
+  if (!syncSession || !loaded || snapshotTimer) return;
+  snapshotTimer = window.setTimeout(saveSnapshot, syncSession.role === 'admin' ? 4000 : 1500);
+}
+
+function usableSnapshot(snap, { userId, role, routeId }) {
+  if (!snap || snap.v !== SNAPSHOT_VERSION || snap.session?.userId !== userId || snap.session?.role !== role) return false;
+  return role === 'admin' || snap.session.routeId === routeId;
+}
+
+/** ¿Hay copia local de este usuario? (para entrar sin señal) */
+async function hasOfflineCopy({ userId, role, routeId }) {
+  return usableSnapshot(await offlineGet(snapshotKey(userId)), { userId, role, routeId });
+}
+
+function replaceList(target, items) {
+  target.splice(0, target.length, ...(Array.isArray(items) ? items : []));
+}
+
+/** Carga la copia local en la app (en lugar de descargar todo). */
+function applySnapshot(snap) {
+  const data = JSON.parse(snap.data);
+  replaceObject(clients, data.clients || {});
+  Object.keys(routeSettlements).forEach(key => delete routeSettlements[key]);
+  Object.entries(data.routeSettlements || {}).forEach(([key, route]) => { routeSettlements[key] = { ...emptyRoute(route?.name || key), ...route }; });
+  // El trabajador ya trae su perfil (del servidor o de su último ingreso).
+  if (syncSession.role === 'admin' || !personnel.length) replaceList(personnel, data.personnel);
+  replaceList(pendingRequests, data.pendingRequests);
+  replaceList(routeDirectory, data.routeDirectory);
+  replaceObject(shared.workBases, data.shared?.workBases || {});
+  replaceObject(shared.workerLocations, data.shared?.workerLocations || {});
+  replaceObject(state.dailyRouteOrder, data.dailyRouteOrder || {});
+  replaceObject(state.dailyRouteDates, data.dailyRouteDates || {});
+  replaceObject(state.clientLibraryOrder, data.clientLibraryOrder || {});
+  replaceObject(state.collectedRouteClients, data.collectedRouteClients || {});
+  replaceObject(state.routeVisitOutcomes, data.routeVisitOutcomes || {});
+  if (data.workerAccess) Object.assign(security.workerAccess, data.workerAccess);
+  if (data.session) Object.assign(security.session, data.session);
+  lastSynced = new Map(JSON.parse(snap.synced || '[]'));
+  versions = new Map(JSON.parse(snap.versions || '[]'));
+  cursor = snap.cursor || null;
+  lastFullSync = snap.lastFullSync || 0;
+  loaded = true;
+}
+
+/**
+ * La cola de salida se escribe al instante; la copia local, unos segundos después. Si la app se
+ * cerró entre las dos, la cola es más nueva: sus registros se aplican (gana lo de aquí) con la
+ * versión del servidor que conocían, y al conectarse se combinan con lo del servidor.
+ */
+function applyNewerOutbox(snap) {
+  const items = readOutbox();
+  if (!items.length || readOutboxAt() <= (snap.outboxAt || 0)) return;
+  items.forEach(item => {
+    if (!TABLE_KEYS[item.table]) return;
+    if (item.op === 'delete') {
+      applyRow(item.table, { [TABLE_KEYS[item.table]]: item.key }, true);
+      lastSynced.set(item.id, PENDING_DELETE);
+      return;
+    }
+    if (item.table === 'profiles') {
+      const index = personnel.findIndex(worker => worker.id === item.row.user_id);
+      if (index < 0) return;
+      replaceObject(personnel[index], { ...personnel[index], ...item.row.data, id: item.row.user_id, accessEnabled: item.row.access_enabled !== false });
+    } else applyRow(item.table, item.row);
+    if (item.base) lastSynced.set(item.id, item.base); else lastSynced.delete(item.id);
+  });
+}
+
+/** Borra la copia local y la cola de un usuario (acceso desactivado por el administrador). */
+async function wipeOfflineUser(userId) {
+  if (!userId) return;
+  await offlineDelete(snapshotKey(userId));
+  try {
+    localStorage.removeItem(`edgecredit-outbox-${userId}`);
+    localStorage.removeItem(`edgecredit-outbox-${userId}-at`);
+  } catch { /* opcional */ }
+}
+
+// ── Conexión con el servidor ──
+
+/**
+ * Conecta la sesión (que ya trabaja con la copia local) con el servidor: revisa la sesión y el
+ * acceso, trae lo que cambió y envía lo pendiente. Sin señal no hace nada: se reintenta al
+ * volver internet y en cada ciclo de revisión.
+ */
+function connectOnline() {
+  if (!syncSession || online) return Promise.resolve();
+  if (connecting) return connecting;
+  if (!navigator.onLine) { updateSyncBadge(); return Promise.resolve(); }
+  const session = syncSession;
+  connecting = (async () => {
+    try {
+      const authorized = await authHook(session);
+      if (syncSession !== session) return;
+      authMissing = !authorized;
+      if (!authorized) return;
+      const db = await backend();
+      if (!(await workerMayDownload(db))) return;
+      if (syncSession !== session || syncing) return;
+      syncing = true;
+      try {
+        await flushing;
+        const recent = cursor && Date.now() - Date.parse(cursor) < INCREMENTAL_MAX_AGE_MS;
+        if (recent) {
+          await pullSince();
+          lastFullSync = Date.now();
+        } else {
+          await downloadAll();
+          queueRender({ full: true });
+        }
+      } finally { syncing = false; }
+      if (syncSession !== session) return;
+      online = true;
+      saveSnapshotSoon();
+      subscribeRealtime();
+      scheduleFlush(50);
+    } catch { /* sin red o error del servidor: se reintenta en el siguiente ciclo */ }
+    finally { connecting = null; updateSyncBadge(); }
+  })();
+  return connecting;
+}
+
+/** Tras volver a ingresar la contraseña (sesión del servidor nueva): conectar ya. */
+function retryConnection() {
+  authMissing = false;
+  updateSyncBadge();
+  return connectOnline();
+}
+
+// ── Ciclo de vida ──
+
+/**
+ * Inicia la sincronización tras un inicio de sesión exitoso (o una sesión restaurada).
+ * Con copia local en este celular entra al instante con ella (también sin señal) y se conecta
+ * en segundo plano. Sin copia descarga todo (necesita internet). Devuelve { offline } si entró
+ * con la copia sin estar conectado todavía.
+ */
 async function startSync({ userId, role, routeId, routeName }) {
   syncSession = { userId, role, routeId, routeName };
+  const session = syncSession;
   loaded = false;
+  online = false;
+  authMissing = false;
   cursor = null;
   lastFullSync = 0;
   lastSynced = new Map();
+  versions = new Map();
   realtimeFailed = false;
   reconnectAttempt = 0;
+  requestPersistentOfflineStorage();
+  const snap = await offlineGet(snapshotKey(userId));
+  if (syncSession !== session) throw new Error('Sesión cerrada.');
+  if (usableSnapshot(snap, session)) {
+    try {
+      applySnapshot(snap);
+      applyNewerOutbox(snap);
+      schedulePoll();
+      updateSyncBadge();
+      connectOnline(); // en segundo plano: la app ya puede mostrarse con la copia local
+      return { offline: true };
+    } catch (error) {
+      console.warn('Copia local dañada: se descarga todo', error);
+      loaded = false;
+      lastSynced = new Map();
+      versions = new Map();
+    }
+  }
   syncing = true;
   try {
     await downloadAll();
@@ -1349,11 +1680,14 @@ async function startSync({ userId, role, routeId, routeName }) {
   } finally {
     syncing = false;
   }
+  online = true;
+  saveSnapshot();
   subscribeRealtime();
   schedulePoll();
   // Cambios que quedaron sin enviar en una sesión anterior en este dispositivo.
   scheduleFlush(readOutbox().length ? 50 : 300);
   updateSyncBadge();
+  return { offline: false };
 }
 
 async function stopSync() {
@@ -1362,17 +1696,25 @@ async function stopSync() {
     window.clearTimeout(flushTimer);
     await flush().catch(() => {});
     await flushing;
+    // La copia local queda guardada (cerrar sesión no borra los datos del celular).
+    saveSnapshot();
+    await offlineSaved();
   }
   window.clearTimeout(flushTimer);
   window.clearTimeout(pollTimer);
   window.clearTimeout(reconnectTimer);
+  window.clearTimeout(snapshotTimer);
+  snapshotTimer = null;
   channelGen += 1;
   if (channel) removeChannel(await backend().catch(() => null));
   syncSession = null;
   loaded = false;
+  online = false;
+  authMissing = false;
   cursor = null;
   realtime = 'off';
   lastSynced = new Map();
+  versions = new Map();
   updateSyncBadge();
 }
 
@@ -1381,6 +1723,7 @@ function __mount_syncModule() {
   window.addEventListener('online', () => {
     updateSyncBadge();
     if (!syncSession) return;
+    if (!online) { connectOnline(); return; }
     scheduleFlush(100);
     if (realtimeFailed) { reconnectAttempt = 0; subscribeRealtime(); }
     lastFullSync = 0;
@@ -1389,15 +1732,16 @@ function __mount_syncModule() {
   window.addEventListener('offline', updateSyncBadge);
   document.addEventListener('visibilitychange', () => {
     if (!syncSession) return;
-    if (document.hidden) { hiddenSince = Date.now(); flushNow(); return; }
+    if (document.hidden) { hiddenSince = Date.now(); flushNow(); saveSnapshot(); return; }
     const away = hiddenSince ? Date.now() - hiddenSince : 0;
     hiddenSince = 0;
+    if (!online) { connectOnline(); schedulePoll(); return; }
     if (away > HIDDEN_FULL_SYNC_MS) { lastFullSync = 0; fullSync(); }
     else if (away > 0) pullChanges();
     schedulePoll();
   });
   // Al cerrar la app o cambiar de página: la cola queda guardada y se intenta enviar.
-  window.addEventListener('pagehide', flushNow);
+  window.addEventListener('pagehide', () => { flushNow(); saveSnapshot(); });
 }
 
 // ── js/core/tracks.js
@@ -7552,7 +7896,14 @@ function __mount_deviceTrustModule() {
  * app se restaura sin pedir nada si es válida, ya pasó la verificación en dos pasos (aal2, o
  * un dispositivo recordado) y el perfil sigue activo (acceso y horario). Se cierra sola tras
  * `security.session.idleHours` horas sin usar la app, y «Cerrar sesión» la cierra de verdad.
+ *
+ * Sin señal: si en este celular ya se ingresó antes con internet, se puede abrir la app (sesión
+ * guardada) o ingresar con usuario y contraseña (se comprueban contra una huella PBKDF2 de la
+ * contraseña guardada en el último ingreso con internet). Se trabaja con la copia local
+ * (core/sync.js) y, al volver la señal, se envía todo. Si el administrador desactiva el acceso
+ * de la persona, al conectarse se borran los datos guardados en ese celular.
  */
+
 
 
 
@@ -7650,8 +8001,9 @@ function setPasswordVisible(visible) {
   toggle.setAttribute('aria-label', visible ? 'Ocultar contraseña' : 'Mostrar contraseña');
 }
 
+let sessionEnding = Promise.resolve();
 function logout() {
-  if (backendEnabled()) endServerSession();
+  if (backendEnabled()) sessionEnding = endServerSession();
   forgetActivity();
   cancelSecondFactor();
   document.querySelector('#login-form').reset();
@@ -7722,6 +8074,194 @@ function checkWorkerSchedule() {
   }
 }
 
+// ── Ingreso sin señal ──
+const OFFLINE_ACCOUNTS_KEY = 'edgecredit-offline-accounts';
+const OFFLINE_SESSION_KEY = 'edgecredit-offline-session';
+const VERIFIER_ITERATIONS = 150000;
+let offlineCredentials = null; // { userId, email, password }: solo en memoria, para reconectar
+let currentServerUser = null;  // { userId, email } de la sesión abierta
+let passwordPromptShown = false;
+let revoking = false;
+
+/** Señal débil: una petición que no responde se trata como «sin señal» tras `ms`. */
+function networkTimeout(promise, ms) {
+  return Promise.race([promise, new Promise((_, reject) => window.setTimeout(() => reject(new Error('network timeout')), ms))]);
+}
+
+const isNetworkError = error => /fetch|network|Failed to|timeout|offline/i.test(String(error?.message || error || ''));
+
+function readOfflineAccounts() {
+  try { return JSON.parse(localStorage.getItem(OFFLINE_ACCOUNTS_KEY) || '{}') || {}; } catch { return {}; }
+}
+
+function writeOfflineAccounts(accounts) {
+  try { localStorage.setItem(OFFLINE_ACCOUNTS_KEY, JSON.stringify(accounts)); } catch { /* opcional */ }
+}
+
+const offlineAccountById = userId => Object.values(readOfflineAccounts()).find(record => record?.userId === userId) || null;
+
+const bytesToBase64 = bytes => btoa(String.fromCharCode(...bytes));
+const base64ToBytes = text => Uint8Array.from(atob(text), char => char.charCodeAt(0));
+
+async function derivePasswordHash(password, salt, iterations) {
+  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(password), 'PBKDF2', false, ['deriveBits']);
+  const bits = await crypto.subtle.deriveBits({ name: 'PBKDF2', hash: 'SHA-256', salt: base64ToBytes(salt), iterations }, key, 256);
+  return bytesToBase64(new Uint8Array(bits));
+}
+
+/**
+ * Tras un ingreso con internet: guarda lo necesario para volver a entrar sin señal en este
+ * celular (perfil, horario y una huella de la contraseña; nunca la contraseña).
+ */
+async function rememberOfflineAccount(account, isAdmin, password) {
+  const email = account.email;
+  if (!email || !account.trustKey) return;
+  const accounts = readOfflineAccounts();
+  const previous = accounts[email]?.userId === account.trustKey ? accounts[email] : null;
+  const record = {
+    userId: account.trustKey, email, login: account.label, isAdmin,
+    worker: isAdmin ? null : { ...account.worker }, workerAccess: { ...security.workerAccess }, savedAt: Date.now(),
+    salt: previous?.salt || null, hash: previous?.hash || null, iterations: previous?.iterations || VERIFIER_ITERATIONS,
+  };
+  if (password) {
+    try {
+      record.salt = bytesToBase64(crypto.getRandomValues(new Uint8Array(16)));
+      record.iterations = VERIFIER_ITERATIONS;
+      record.hash = await derivePasswordHash(password, record.salt, record.iterations);
+    } catch { /* navegador sin crypto.subtle: solo funcionará la sesión guardada */ }
+  }
+  Object.keys(accounts).filter(key => key !== email && accounts[key]?.userId === account.trustKey).forEach(key => delete accounts[key]);
+  accounts[email] = record;
+  writeOfflineAccounts(accounts);
+}
+
+/** Acceso desactivado (o cuenta eliminada): se borra todo lo guardado de esa persona en este celular. */
+async function wipeDevice(userId) {
+  if (!userId) return;
+  await wipeOfflineUser(userId);
+  const accounts = readOfflineAccounts();
+  Object.keys(accounts).filter(key => accounts[key]?.userId === userId).forEach(key => delete accounts[key]);
+  writeOfflineAccounts(accounts);
+  try { if (localStorage.getItem(OFFLINE_SESSION_KEY) === userId) localStorage.removeItem(OFFLINE_SESSION_KEY); } catch { /* opcional */ }
+}
+
+/** El servidor dice que el acceso de quien usa la app fue desactivado: cerrar y borrar. */
+async function revokeThisDevice(userId) {
+  if (revoking) return;
+  revoking = true;
+  try {
+    if (insideApp()) logout(); else sessionEnding = endServerSession();
+    await sessionEnding;
+    await wipeDevice(userId);
+    loginError.textContent = 'Tu sesión se cerró: el administrador desactivó tu acceso. Se borraron los datos guardados en este celular.';
+  } finally { revoking = false; }
+}
+
+/** Ingreso con usuario y contraseña sin señal (solo si ya se ingresó antes en este celular). */
+async function authenticateOffline(loginName, password) {
+  const record = readOfflineAccounts()[usernameToEmail(loginName)];
+  if (!record?.hash) {
+    loginError.textContent = 'Sin señal. La primera vez en este celular necesitas internet para ingresar.';
+    return null;
+  }
+  let hash = '';
+  try { hash = await derivePasswordHash(password, record.salt, record.iterations || VERIFIER_ITERATIONS); }
+  catch { loginError.textContent = 'Sin señal y este navegador no permite comprobar la contraseña sin internet.'; return null; }
+  if (hash !== record.hash) { failLogin('Usuario o contraseña incorrectos.'); return null; }
+  const isAdmin = Boolean(record.isAdmin);
+  if (record.workerAccess) Object.assign(security.workerAccess, record.workerAccess);
+  const worker = isAdmin ? null : { ...record.worker };
+  if (!isAdmin && !workerMayEnter(worker)) return null;
+  if (!(await hasOfflineCopy({ userId: record.userId, role: isAdmin ? 'admin' : 'worker', routeId: routeKey(worker?.route || '') }))) {
+    loginError.textContent = 'Sin señal y sin datos guardados en este celular: conéctate a internet para ingresar.';
+    return null;
+  }
+  offlineCredentials = { userId: record.userId, email: record.email, password };
+  return { isAdmin, account: { label: record.login, trustKey: record.userId, email: record.email, record: {}, worker, offline: true, onFailure: failSecondFactor } };
+}
+
+/**
+ * Al abrir la app sin poder restaurar la sesión del servidor (sin señal, o se ingresó sin señal):
+ * entra con la copia local si la sesión de este celular sigue abierta. true si se encargó.
+ */
+async function restoreOfflineSession() {
+  let userId = null;
+  try { userId = localStorage.getItem(OFFLINE_SESSION_KEY); } catch { /* opcional */ }
+  const record = userId && offlineAccountById(userId);
+  if (!record) return false;
+  if (idleExpired()) {
+    try { localStorage.removeItem(OFFLINE_SESSION_KEY); } catch { /* opcional */ }
+    forgetActivity();
+    loginError.textContent = idleMessage();
+    return true;
+  }
+  const isAdmin = Boolean(record.isAdmin);
+  if (record.workerAccess) Object.assign(security.workerAccess, record.workerAccess);
+  const worker = isAdmin ? null : { ...record.worker };
+  if (!isAdmin && !workerMayEnter(worker)) return true;
+  if (!(await hasOfflineCopy({ userId, role: isAdmin ? 'admin' : 'worker', routeId: routeKey(worker?.route || '') }))) return false;
+  setRestoring(true, 'Abriendo tus datos guardados…');
+  const account = { label: record.login, trustKey: userId, email: record.email, record: {}, worker, offline: true };
+  if (!(await enterWithServer(account, isAdmin))) { setRestoring(false, loginError.textContent); return true; }
+  setRestoring(false);
+  enterApp(account, isAdmin);
+  restoreLastScreen(isAdmin);
+  return true;
+}
+
+/**
+ * Antes de conectarse con el servidor (core/sync): ¿hay una sesión válida del servidor para este
+ * usuario? Si se ingresó sin señal, se abre con la contraseña que quedó en memoria; si no la hay
+ * (se recargó la app), se pide la contraseña. Lanza error si no hay red.
+ */
+async function ensureServerAuth(session) {
+  const db = await backend();
+  const { data, error } = await db.auth.getSession();
+  if (data?.session) {
+    const { data: userData, error: userError } = await db.auth.getUser();
+    if (userData?.user) return userData.user.id === session.userId;
+    if (isNetworkError(userError)) throw userError;
+  } else if (isNetworkError(error)) throw error;
+  if (offlineCredentials?.userId === session.userId) {
+    const { data: signed, error: signError } = await db.auth.signInWithPassword({ email: offlineCredentials.email, password: offlineCredentials.password });
+    if (signed?.user) { offlineCredentials = null; return signed.user.id === session.userId; }
+    if (isNetworkError(signError)) throw signError;
+    offlineCredentials = null; // la contraseña cambió: se pide de nuevo
+  }
+  askPasswordForSync();
+  return false;
+}
+
+/** Volvió la señal pero no hay sesión del servidor: pedir la contraseña sin salir de la app. */
+function askPasswordForSync(force = false) {
+  if (!currentServerUser || !insideApp()) return;
+  if (!force && (passwordPromptShown || !customModal.hidden)) {
+    if (!passwordPromptShown) showToast('Volvió la señal: toca «Ingresa para enviar» arriba para enviar tus cambios.');
+    passwordPromptShown = true;
+    return;
+  }
+  passwordPromptShown = true;
+  openCustomModal({
+    title: 'Vuelve a ingresar tu contraseña',
+    description: 'Volvió la señal. Para enviar lo que registraste sin señal y recibir los cambios, escribe tu contraseña.',
+    submitLabel: 'Enviar cambios',
+    cancelLabel: 'Ahora no',
+    fields: [{ name: 'password', label: 'Contraseña', type: 'password', required: true }],
+    onSubmit: async values => {
+      const db = await backend().catch(() => null);
+      if (!db) { document.querySelector('#custom-modal-error').textContent = 'Sin conexión. Inténtalo cuando tengas señal.'; return false; }
+      const { data, error } = await db.auth.signInWithPassword({ email: currentServerUser.email, password: values.password });
+      if (!data?.user) {
+        document.querySelector('#custom-modal-error').textContent = isNetworkError(error) ? 'Sin conexión. Inténtalo cuando tengas señal.' : 'Contraseña incorrecta.';
+        return false;
+      }
+      showToast('Listo: enviando tus cambios.');
+      retryConnection();
+      return true;
+    },
+  });
+}
+
 // ── Autenticación ──
 
 /** Modo local (sin servidor): credenciales guardadas en este navegador. */
@@ -7760,13 +8300,19 @@ function workerMayEnter(worker) {
 /** Modo servidor: Supabase Auth (contraseña) + MFA nativo de Supabase. */
 async function authenticateWithServer() {
   const loginName = document.querySelector('#login-user').value.trim();
+  const password = document.querySelector('#login-password').value;
   let db;
+  // Sin señal: se entra con la copia de este celular si ya se ingresó antes aquí.
   try { db = await backend(); }
-  catch (error) { loginError.textContent = backendErrorMessage(error); return null; }
-  const { data, error } = await db.auth.signInWithPassword({ email: usernameToEmail(loginName), password: document.querySelector('#login-password').value });
+  catch { return authenticateOffline(loginName, password); }
+  if (!navigator.onLine) return authenticateOffline(loginName, password);
+  let data = null;
+  let error = null;
+  try { ({ data, error } = await networkTimeout(db.auth.signInWithPassword({ email: usernameToEmail(loginName), password }), 15000)); }
+  catch (problem) { error = problem; }
   if (error || !data?.user) {
-    if (/fetch|network/i.test(String(error?.message))) loginError.textContent = backendErrorMessage(error);
-    else failLogin('Usuario o contraseña incorrectos.');
+    if (isNetworkError(error)) return authenticateOffline(loginName, password);
+    failLogin('Usuario o contraseña incorrectos.');
     return null;
   }
   const user = data.user;
@@ -7777,7 +8323,13 @@ async function authenticateWithServer() {
   const { data: settings } = await db.from('app_settings').select('*').eq('key', 'worker_access').maybeSingle();
   if (settings?.data) Object.assign(security.workerAccess, settings.data);
   const worker = isAdmin ? null : serverWorker(profile);
-  if (!isAdmin && !workerMayEnter(worker)) { await endServerSession(); return null; }
+  if (!isAdmin && !workerMayEnter(worker)) {
+    const message = loginError.textContent;
+    await endServerSession();
+    if (worker.accessEnabled === false) await wipeDevice(user.id);
+    loginError.textContent = message;
+    return null;
+  }
   // Verificación en dos pasos con el MFA de Supabase.
   const factors = await db.auth.mfa.listFactors();
   let factorId = factors.data?.totp?.find(factor => factor.status === 'verified')?.id || null;
@@ -7796,7 +8348,7 @@ async function authenticateWithServer() {
       return !verifyError;
     },
   };
-  return { isAdmin, account: { label: profile.username, trustKey: user.id, record: {}, remote, worker, onFailure: failSecondFactor } };
+  return { isAdmin, account: { label: profile.username, trustKey: user.id, email: user.email || usernameToEmail(loginName), password, record: {}, remote, worker, onFailure: failSecondFactor } };
 }
 
 /**
@@ -7804,6 +8356,10 @@ async function authenticateWithServer() {
  * de este dispositivo (scope 'local'): el admin no pierde la sesión de sus otros equipos.
  */
 async function endServerSession() {
+  offlineCredentials = null;
+  currentServerUser = null;
+  passwordPromptShown = false;
+  try { localStorage.removeItem(OFFLINE_SESSION_KEY); } catch { /* opcional */ }
   await stopSync();
   let signedOut = false;
   try { const db = await backend(); const { error } = await db.auth.signOut({ scope: 'local' }); signedOut = !error; } catch { /* sin conexión */ }
@@ -7898,11 +8454,13 @@ async function restoreSavedSession() {
   restoreRetryPending = false;
   try { Object.assign(security.session, JSON.parse(localStorage.getItem(SESSION_SETTINGS_KEY) || 'null') || {}); } catch { /* opcional */ }
   let db;
-  try { db = await backend(); } catch { restoreRetryPending = true; return; }
+  try { db = await backend(); } catch { if (await restoreOfflineSession()) return; restoreRetryPending = true; return; }
   const { data: sessionData, error: sessionError } = await db.auth.getSession();
   const session = sessionData?.session;
   if (!session) {
-    if (sessionError && /fetch|network/i.test(String(sessionError.message))) restoreRetryPending = true;
+    // Se ingresó sin señal (no hay sesión del servidor) o la sesión venció sin señal.
+    if (await restoreOfflineSession()) return;
+    if (sessionError && isNetworkError(sessionError)) restoreRetryPending = true;
     return;
   }
   if (idleExpired()) {
@@ -7915,9 +8473,14 @@ async function restoreSavedSession() {
   try {
     const userId = session.user.id;
     if (!(await secondFactorDone(db, userId))) { await endServerSession(); setRestoring(false); return; }
-    const { data: profile, error: profileError } = await db.from('profiles').select('*').eq('user_id', userId).maybeSingle();
+    const { data: profile, error: profileError } = await networkTimeout(db.from('profiles').select('*').eq('user_id', userId).maybeSingle(), 10000);
     if (profileError) throw profileError;
-    if (!profile || profile.role === 'pending') { await endServerSession(); setRestoring(false); return; }
+    if (!profile || profile.role === 'pending') {
+      await endServerSession();
+      if (!profile) await wipeDevice(userId); // la cuenta ya no existe
+      setRestoring(false);
+      return;
+    }
     const isAdmin = profile.role === 'admin';
     const { data: settings } = await db.from('app_settings').select('*').in('key', ['worker_access', 'session']);
     (settings || []).forEach(row => {
@@ -7925,17 +8488,27 @@ async function restoreSavedSession() {
       if (row.key === 'session' && row.data) { Object.assign(security.session, row.data); try { localStorage.setItem(SESSION_SETTINGS_KEY, JSON.stringify(security.session)); } catch { /* opcional */ } }
     });
     const worker = isAdmin ? null : serverWorker(profile);
-    if (!isAdmin && !workerMayEnter(worker)) { const message = loginError.textContent; await endServerSession(); setRestoring(false, message); return; }
-    const account = { label: profile.username, trustKey: userId, record: {}, worker };
+    if (!isAdmin && !workerMayEnter(worker)) {
+      const message = loginError.textContent;
+      await endServerSession();
+      if (worker.accessEnabled === false) await wipeDevice(userId);
+      setRestoring(false, message);
+      return;
+    }
+    const account = { label: profile.username, trustKey: userId, email: session.user.email, record: {}, worker };
     if (!(await enterWithServer(account, isAdmin))) { setRestoring(false, loginError.textContent); return; }
+    rememberOfflineAccount(account, isAdmin, null);
     setRestoring(false);
     enterApp(account, isAdmin);
     restoreLastScreen(isAdmin);
   } catch (error) {
     // Sin conexión: la sesión se conserva y se reintenta al volver internet.
-    const offline = /fetch|network/i.test(String(error?.message || error));
-    if (offline) restoreRetryPending = true;
-    else await endServerSession();
+    const offline = isNetworkError(error);
+    if (offline) {
+      setRestoring(false);
+      if (await restoreOfflineSession()) return;
+      restoreRetryPending = true;
+    } else await endServerSession();
     setRestoring(false, offline ? 'Sin conexión: tu sesión se restaurará al volver internet.' : `No se pudo restaurar la sesión: ${backendErrorMessage(error)}`);
   }
 }
@@ -7946,10 +8519,12 @@ function serverWorker(profile) {
 
 /** Carga los datos del servidor de una sesión ya verificada. false si no se pudo. */
 async function enterWithServer(account, isAdmin) {
-  loginError.textContent = 'Cargando datos del servidor…';
+  loginError.textContent = account.offline ? 'Abriendo tus datos guardados…' : 'Cargando datos del servidor…';
   try {
     if (!isAdmin) personnel.splice(0, personnel.length, account.worker);
+    currentServerUser = { userId: account.trustKey, email: account.email };
     await startSync({ userId: account.trustKey, role: isAdmin ? 'admin' : 'worker', routeId: routeKey(account.worker?.route || ''), routeName: account.worker?.route });
+    try { localStorage.setItem(OFFLINE_SESSION_KEY, account.trustKey); } catch { /* opcional */ }
     afterServerLoad();
   } catch (error) {
     loginError.textContent = `No se pudieron cargar los datos: ${backendErrorMessage(error)}`;
@@ -8034,9 +8609,10 @@ function __mount_sessionModule() {
       const { account, isAdmin } = result;
       // Segundo paso: código de la app de autenticación (o configuración en el primer ingreso).
       // En un dispositivo recordado (ya verificado y vigente) no se vuelve a pedir.
-      const trusted = account.remote
+      // Sin señal: este celular ya pasó la verificación en dos pasos en su último ingreso con internet.
+      const trusted = account.offline || (account.remote
         ? !account.remote.needsEnroll && isAccountTrusted(account.trustKey, 0)
-        : Boolean(account.record.totpSecret) && isAccountTrusted(account.label, account.record.trustVersion);
+        : Boolean(account.record.totpSecret) && isAccountTrusted(account.label, account.record.trustVersion));
       if (TWO_FACTOR_REQUIRED && !trusted) {
         const verified = await requestSecondFactor(account);
         if (!verified) {
@@ -8060,8 +8636,12 @@ function __mount_sessionModule() {
         if (account.remote) await endServerSession();
         return;
       }
-      if (account.remote && !(await enterWithServer(account, isAdmin))) return;
+      const password = account.password;
+      delete account.password;
+      if ((account.remote || account.offline) && !(await enterWithServer(account, isAdmin))) return;
+      if (account.remote) rememberOfflineAccount(account, isAdmin, password);
       enterApp(account, isAdmin);
+      if (account.offline) showToast('Sin señal: trabajas con los datos guardados en este celular. Se enviarán al volver la señal.');
     } finally {
       submit.disabled = false;
     }
@@ -8070,12 +8650,16 @@ function __mount_sessionModule() {
   // Modo servidor: si el admin cambia el acceso del trabajador, se aplica al instante.
   // Sin perfil (cambió el horario): solo se vuelve a revisar el horario.
   setAccessHook(profile => {
+    // Acceso desactivado según el servidor: se cierra y se borran los datos de este celular.
+    if (profile && profile.access_enabled === false && profile.user_id && profile.user_id === currentServerUser?.userId) { revokeThisDevice(profile.user_id); return; }
     if (state.userRole !== 'worker' || !state.activeWorker) return;
     if (profile) state.activeWorker.accessEnabled = profile.access_enabled !== false;
     checkWorkerSchedule();
   });
   // Sin servidor no hay usuarios iniciales que mostrar en otro dispositivo.
   if (backendEnabled()) document.querySelector('.login-demo-hint').hidden = true;
+  setAuthHook(ensureServerAuth);
+  document.querySelectorAll('.sync-status').forEach(badge => badge.addEventListener('click', () => { if (badge.dataset.needsAuth === 'true') askPasswordForSync(true); }));
   if (lockRemainingSeconds() > 0) showLockCountdown();
   window.setInterval(checkWorkerSchedule, 30000);
   // Si el admin bloquea al trabajador desde otra pestaña del mismo navegador, se aplica al instante.

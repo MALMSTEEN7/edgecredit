@@ -34,12 +34,12 @@
   <link rel="icon" href="icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="icon-192.png">
   <meta name="apple-mobile-web-app-capable" content="yes">
-  <link rel="stylesheet" id="app-styles" href="dist/styles.bundle.css?v=05cba8619a">
+  <link rel="stylesheet" id="app-styles" href="dist/styles.bundle.css?v=8c4b394bf0">
   <script>
     // Si hay una sesión guardada, al recargar se muestra «Cargando tu sesión…» en vez del
     // formulario de ingreso mientras la app la restaura (features/auth/session.js).
     try {
-      if (Object.keys(localStorage).some(key => key.startsWith('edgecredit-auth') || key.startsWith('mock-session-edgecredit-auth'))) document.documentElement.classList.add('session-restoring');
+      if (Object.keys(localStorage).some(key => key.startsWith('edgecredit-auth') || key === 'edgecredit-offline-session' || key.startsWith('mock-session-edgecredit-auth'))) document.documentElement.classList.add('session-restoring');
     } catch (error) { /* almacenamiento no disponible: se muestra el ingreso */ }
   </script>
 </head>
@@ -532,7 +532,7 @@
     // al cambiar el sello, el navegador descarga el JS/CSS nuevo en vez de usar su caché.
     // Para desarrollar con los módulos sueltos, abre index.html?dev desde un servidor local.
     (() => {
-      const APP_VERSION = '05cba8619a';
+      const APP_VERSION = '8c4b394bf0';
       const dev = new URLSearchParams(location.search).has('dev') && location.protocol !== 'file:';
       if (dev) {
         document.getElementById('app-styles').href = 'styles.css';
@@ -545,6 +545,15 @@
       const bundle = document.createElement('script');
       bundle.src = `dist/app.bundle.js?v=${APP_VERSION}`;
       document.body.append(bundle);
+    })();
+    // App instalada (sw.js): abre aunque no haya señal. `?nosw` la quita de este navegador.
+    (() => {
+      if (!('serviceWorker' in navigator) || location.protocol === 'file:') return;
+      if (new URLSearchParams(location.search).has('nosw')) {
+        navigator.serviceWorker.getRegistrations().then(list => list.forEach(item => item.unregister())).catch(() => {});
+        return;
+      }
+      window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
     })();
   </script>
 </body>

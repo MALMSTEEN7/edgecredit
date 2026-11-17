@@ -3,7 +3,7 @@
  * Si no hay URL/clave configuradas, `backendEnabled()` es false y la app usa el modo local.
  */
 
-import { AUTH_EMAIL_DOMAIN, SUPABASE_ANON_KEY, SUPABASE_JS_URL, SUPABASE_URL } from './backend-config.js';
+import { AUTH_EMAIL_DOMAIN, SUPABASE_ANON_KEY, SUPABASE_JS_FALLBACK_URL, SUPABASE_JS_URL, SUPABASE_URL } from './backend-config.js';
 
 // Permite inyectar otra conexión sin tocar el código (pruebas automáticas).
 const override = globalThis.EDGECREDIT_BACKEND || {};
@@ -17,17 +17,22 @@ export function backendEnabled() {
   return Boolean(BACKEND_URL && BACKEND_KEY);
 }
 
+function loadScript(src) {
+  return new Promise((resolve, reject) => {
+    const script = document.createElement('script');
+    script.src = src;
+    script.async = true;
+    script.onload = () => (window.supabase?.createClient ? resolve(window.supabase) : reject(new Error('No se pudo iniciar la conexión con el servidor.')));
+    script.onerror = () => { script.remove(); reject(new Error('Sin conexión con el servidor. Revisa tu internet e inténtalo de nuevo.')); };
+    document.head.append(script);
+  });
+}
+
 function loadLibrary() {
   if (window.supabase?.createClient) return Promise.resolve(window.supabase);
   if (loading) return loading;
-  loading = new Promise((resolve, reject) => {
-    const script = document.createElement('script');
-    script.src = SUPABASE_JS_URL;
-    script.async = true;
-    script.onload = () => (window.supabase?.createClient ? resolve(window.supabase) : reject(new Error('No se pudo iniciar la conexión con el servidor.')));
-    script.onerror = () => { loading = null; reject(new Error('Sin conexión con el servidor. Revisa tu internet e inténtalo de nuevo.')); };
-    document.head.append(script);
-  });
+  // Primero la copia incluida en la app (funciona sin señal); si falla, la del CDN.
+  loading = loadScript(SUPABASE_JS_URL).catch(() => loadScript(SUPABASE_JS_FALLBACK_URL)).catch(error => { loading = null; throw error; });
   return loading;
 }
 

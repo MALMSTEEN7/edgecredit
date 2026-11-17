@@ -8,6 +8,12 @@
  * app se restaura sin pedir nada si es válida, ya pasó la verificación en dos pasos (aal2, o
  * un dispositivo recordado) y el perfil sigue activo (acceso y horario). Se cierra sola tras
  * `security.session.idleHours` horas sin usar la app, y «Cerrar sesión» la cierra de verdad.
+ *
+ * Sin señal: si en este celular ya se ingresó antes con internet, se puede abrir la app (sesión
+ * guardada) o ingresar con usuario y contraseña (se comprueban contra una huella PBKDF2 de la
+ * contraseña guardada en el último ingreso con internet). Se trabaja con la copia local
+ * (core/sync.js) y, al volver la señal, se envía todo. Si el administrador desactiva el acceso
+ * de la persona, al conectarse se borran los datos guardados en ese celular.
  */
 
 import { localAdminPasswordHash } from '../admin/account-settings.js';
@@ -15,7 +21,8 @@ import { adminView, customModal, interestModal, loginError, loginGateway, newCli
 import { state } from '../../core/state.js';
 import { clients, pendingRequests, persistBusinessData, personnel, routeSettlements, security } from '../../core/store.js';
 import { backend, backendEnabled, backendErrorMessage, usernameToEmail } from '../../core/backend.js';
-import { setAccessHook, startSync, stopSync } from '../../core/sync.js';
+import { hasOfflineCopy, retryConnection, setAccessHook, setAuthHook, startSync, stopSync, wipeOfflineUser } from '../../core/sync.js';
+import { openCustomModal } from '../../ui/custom-modal.js';
 import { LOCKOUT_SECONDS, MAX_LOGIN_ATTEMPTS, TWO_FACTOR_REQUIRED } from '../../core/security-config.js';
 import { isAccountTrusted, refreshTrustedState, trustAccount } from './device-trust.js';
 import { describeSchedule, isWithinSchedule, minutesUntilClose } from '../../domain/access-schedule.js';
@@ -107,8 +114,9 @@ function setPasswordVisible(visible) {
   toggle.setAttribute('aria-label', visible ? 'Ocultar contraseña' : 'Mostrar contraseña');
 }
 
+let sessionEnding = Promise.resolve();
 function logout() {
-  if (backendEnabled()) endServerSession();
+  if (backendEnabled()) sessionEnding = endServerSession();
   forgetActivity();
   cancelSecondFactor();
   document.querySelector('#login-form').reset();
@@ -179,6 +187,194 @@ function checkWorkerSchedule() {
   }
 }
 
+// ── Ingreso sin señal ──
+const OFFLINE_ACCOUNTS_KEY = 'edgecredit-offline-accounts';
+const OFFLINE_SESSION_KEY = 'edgecredit-offline-session';
+const VERIFIER_ITERATIONS = 150000;
+let offlineCredentials = null; // { userId, email, password }: solo en memoria, para reconectar
+let currentServerUser = null;  // { userId, email } de la sesión abierta
+let passwordPromptShown = false;
+let revoking = false;
+
+/** Señal débil: una petición que no responde se trata como «sin señal» tras `ms`. */
+function networkTimeout(promise, ms) {
+  return Promise.race([promise, new Promise((_, reject) => window.setTimeout(() => reject(new Error('network timeout')), ms))]);
+}
+
+const isNetworkError = error => /fetch|network|Failed to|timeout|offline/i.test(String(error?.message || error || ''));
+
+function readOfflineAccounts() {
+  try { return JSON.parse(localStorage.getItem(OFFLINE_ACCOUNTS_KEY) || '{}') || {}; } catch { return {}; }
+}
+
+function writeOfflineAccounts(accounts) {
+  try { localStorage.setItem(OFFLINE_ACCOUNTS_KEY, JSON.stringify(accounts)); } catch { /* opcional */ }
+}
+
+const offlineAccountById = userId => Object.values(readOfflineAccounts()).find(record => record?.userId === userId) || null;
+
+const bytesToBase64 = bytes => btoa(String.fromCharCode(...bytes));
+const base64ToBytes = text => Uint8Array.from(atob(text), char => char.charCodeAt(0));
+
+async function derivePasswordHash(password, salt, iterations) {
+  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(password), 'PBKDF2', false, ['deriveBits']);
+  const bits = await crypto.subtle.deriveBits({ name: 'PBKDF2', hash: 'SHA-256', salt: base64ToBytes(salt), iterations }, key, 256);
+  return bytesToBase64(new Uint8Array(bits));
+}
+
+/**
+ * Tras un ingreso con internet: guarda lo necesario para volver a entrar sin señal en este
+ * celular (perfil, horario y una huella de la contraseña; nunca la contraseña).
+ */
+async function rememberOfflineAccount(account, isAdmin, password) {
+  const email = account.email;
+  if (!email || !account.trustKey) return;
+  const accounts = readOfflineAccounts();
+  const previous = accounts[email]?.userId === account.trustKey ? accounts[email] : null;
+  const record = {
+    userId: account.trustKey, email, login: account.label, isAdmin,
+    worker: isAdmin ? null : { ...account.worker }, workerAccess: { ...security.workerAccess }, savedAt: Date.now(),
+    salt: previous?.salt || null, hash: previous?.hash || null, iterations: previous?.iterations || VERIFIER_ITERATIONS,
+  };
+  if (password) {
+    try {
+      record.salt = bytesToBase64(crypto.getRandomValues(new Uint8Array(16)));
+      record.iterations = VERIFIER_ITERATIONS;
+      record.hash = await derivePasswordHash(password, record.salt, record.iterations);
+    } catch { /* navegador sin crypto.subtle: solo funcionará la sesión guardada */ }
+  }
+  Object.keys(accounts).filter(key => key !== email && accounts[key]?.userId === account.trustKey).forEach(key => delete accounts[key]);
+  accounts[email] = record;
+  writeOfflineAccounts(accounts);
+}
+
+/** Acceso desactivado (o cuenta eliminada): se borra todo lo guardado de esa persona en este celular. */
+async function wipeDevice(userId) {
+  if (!userId) return;
+  await wipeOfflineUser(userId);
+  const accounts = readOfflineAccounts();
+  Object.keys(accounts).filter(key => accounts[key]?.userId === userId).forEach(key => delete accounts[key]);
+  writeOfflineAccounts(accounts);
+  try { if (localStorage.getItem(OFFLINE_SESSION_KEY) === userId) localStorage.removeItem(OFFLINE_SESSION_KEY); } catch { /* opcional */ }
+}
+
+/** El servidor dice que el acceso de quien usa la app fue desactivado: cerrar y borrar. */
+async function revokeThisDevice(userId) {
+  if (revoking) return;
+  revoking = true;
+  try {
+    if (insideApp()) logout(); else sessionEnding = endServerSession();
+    await sessionEnding;
+    await wipeDevice(userId);
+    loginError.textContent = 'Tu sesión se cerró: el administrador desactivó tu acceso. Se borraron los datos guardados en este celular.';
+  } finally { revoking = false; }
+}
+
+/** Ingreso con usuario y contraseña sin señal (solo si ya se ingresó antes en este celular). */
+async function authenticateOffline(loginName, password) {
+  const record = readOfflineAccounts()[usernameToEmail(loginName)];
+  if (!record?.hash) {
+    loginError.textContent = 'Sin señal. La primera vez en este celular necesitas internet para ingresar.';
+    return null;
+  }
+  let hash = '';
+  try { hash = await derivePasswordHash(password, record.salt, record.iterations || VERIFIER_ITERATIONS); }
+  catch { loginError.textContent = 'Sin señal y este navegador no permite comprobar la contraseña sin internet.'; return null; }
+  if (hash !== record.hash) { failLogin('Usuario o contraseña incorrectos.'); return null; }
+  const isAdmin = Boolean(record.isAdmin);
+  if (record.workerAccess) Object.assign(security.workerAccess, record.workerAccess);
+  const worker = isAdmin ? null : { ...record.worker };
+  if (!isAdmin && !workerMayEnter(worker)) return null;
+  if (!(await hasOfflineCopy({ userId: record.userId, role: isAdmin ? 'admin' : 'worker', routeId: routeKey(worker?.route || '') }))) {
+    loginError.textContent = 'Sin señal y sin datos guardados en este celular: conéctate a internet para ingresar.';
+    return null;
+  }
+  offlineCredentials = { userId: record.userId, email: record.email, password };
+  return { isAdmin, account: { label: record.login, trustKey: record.userId, email: record.email, record: {}, worker, offline: true, onFailure: failSecondFactor } };
+}
+
+/**
+ * Al abrir la app sin poder restaurar la sesión del servidor (sin señal, o se ingresó sin señal):
+ * entra con la copia local si la sesión de este celular sigue abierta. true si se encargó.
+ */
+async function restoreOfflineSession() {
+  let userId = null;
+  try { userId = localStorage.getItem(OFFLINE_SESSION_KEY); } catch { /* opcional */ }
+  const record = userId && offlineAccountById(userId);
+  if (!record) return false;
+  if (idleExpired()) {
+    try { localStorage.removeItem(OFFLINE_SESSION_KEY); } catch { /* opcional */ }
+    forgetActivity();
+    loginError.textContent = idleMessage();
+    return true;
+  }
+  const isAdmin = Boolean(record.isAdmin);
+  if (record.workerAccess) Object.assign(security.workerAccess, record.workerAccess);
+  const worker = isAdmin ? null : { ...record.worker };
+  if (!isAdmin && !workerMayEnter(worker)) return true;
+  if (!(await hasOfflineCopy({ userId, role: isAdmin ? 'admin' : 'worker', routeId: routeKey(worker?.route || '') }))) return false;
+  setRestoring(true, 'Abriendo tus datos guardados…');
+  const account = { label: record.login, trustKey: userId, email: record.email, record: {}, worker, offline: true };
+  if (!(await enterWithServer(account, isAdmin))) { setRestoring(false, loginError.textContent); return true; }
+  setRestoring(false);
+  enterApp(account, isAdmin);
+  restoreLastScreen(isAdmin);
+  return true;
+}
+
+/**
+ * Antes de conectarse con el servidor (core/sync): ¿hay una sesión válida del servidor para este
+ * usuario? Si se ingresó sin señal, se abre con la contraseña que quedó en memoria; si no la hay
+ * (se recargó la app), se pide la contraseña. Lanza error si no hay red.
+ */
+async function ensureServerAuth(session) {
+  const db = await backend();
+  const { data, error } = await db.auth.getSession();
+  if (data?.session) {
+    const { data: userData, error: userError } = await db.auth.getUser();
+    if (userData?.user) return userData.user.id === session.userId;
+    if (isNetworkError(userError)) throw userError;
+  } else if (isNetworkError(error)) throw error;
+  if (offlineCredentials?.userId === session.userId) {
+    const { data: signed, error: signError } = await db.auth.signInWithPassword({ email: offlineCredentials.email, password: offlineCredentials.password });
+    if (signed?.user) { offlineCredentials = null; return signed.user.id === session.userId; }
+    if (isNetworkError(signError)) throw signError;
+    offlineCredentials = null; // la contraseña cambió: se pide de nuevo
+  }
+  askPasswordForSync();
+  return false;
+}
+
+/** Volvió la señal pero no hay sesión del servidor: pedir la contraseña sin salir de la app. */
+function askPasswordForSync(force = false) {
+  if (!currentServerUser || !insideApp()) return;
+  if (!force && (passwordPromptShown || !customModal.hidden)) {
+    if (!passwordPromptShown) showToast('Volvió la señal: toca «Ingresa para enviar» arriba para enviar tus cambios.');
+    passwordPromptShown = true;
+    return;
+  }
+  passwordPromptShown = true;
+  openCustomModal({
+    title: 'Vuelve a ingresar tu contraseña',
+    description: 'Volvió la señal. Para enviar lo que registraste sin señal y recibir los cambios, escribe tu contraseña.',
+    submitLabel: 'Enviar cambios',
+    cancelLabel: 'Ahora no',
+    fields: [{ name: 'password', label: 'Contraseña', type: 'password', required: true }],
+    onSubmit: async values => {
+      const db = await backend().catch(() => null);
+      if (!db) { document.querySelector('#custom-modal-error').textContent = 'Sin conexión. Inténtalo cuando tengas señal.'; return false; }
+      const { data, error } = await db.auth.signInWithPassword({ email: currentServerUser.email, password: values.password });
+      if (!data?.user) {
+        document.querySelector('#custom-modal-error').textContent = isNetworkError(error) ? 'Sin conexión. Inténtalo cuando tengas señal.' : 'Contraseña incorrecta.';
+        return false;
+      }
+      showToast('Listo: enviando tus cambios.');
+      retryConnection();
+      return true;
+    },
+  });
+}
+
 // ── Autenticación ──
 
 /** Modo local (sin servidor): credenciales guardadas en este navegador. */
@@ -217,13 +413,19 @@ function workerMayEnter(worker) {
 /** Modo servidor: Supabase Auth (contraseña) + MFA nativo de Supabase. */
 async function authenticateWithServer() {
   const loginName = document.querySelector('#login-user').value.trim();
+  const password = document.querySelector('#login-password').value;
   let db;
+  // Sin señal: se entra con la copia de este celular si ya se ingresó antes aquí.
   try { db = await backend(); }
-  catch (error) { loginError.textContent = backendErrorMessage(error); return null; }
-  const { data, error } = await db.auth.signInWithPassword({ email: usernameToEmail(loginName), password: document.querySelector('#login-password').value });
+  catch { return authenticateOffline(loginName, password); }
+  if (!navigator.onLine) return authenticateOffline(loginName, password);
+  let data = null;
+  let error = null;
+  try { ({ data, error } = await networkTimeout(db.auth.signInWithPassword({ email: usernameToEmail(loginName), password }), 15000)); }
+  catch (problem) { error = problem; }
   if (error || !data?.user) {
-    if (/fetch|network/i.test(String(error?.message))) loginError.textContent = backendErrorMessage(error);
-    else failLogin('Usuario o contraseña incorrectos.');
+    if (isNetworkError(error)) return authenticateOffline(loginName, password);
+    failLogin('Usuario o contraseña incorrectos.');
     return null;
   }
   const user = data.user;
@@ -234,7 +436,13 @@ async function authenticateWithServer() {
   const { data: settings } = await db.from('app_settings').select('*').eq('key', 'worker_access').maybeSingle();
   if (settings?.data) Object.assign(security.workerAccess, settings.data);
   const worker = isAdmin ? null : serverWorker(profile);
-  if (!isAdmin && !workerMayEnter(worker)) { await endServerSession(); return null; }
+  if (!isAdmin && !workerMayEnter(worker)) {
+    const message = loginError.textContent;
+    await endServerSession();
+    if (worker.accessEnabled === false) await wipeDevice(user.id);
+    loginError.textContent = message;
+    return null;
+  }
   // Verificación en dos pasos con el MFA de Supabase.
   const factors = await db.auth.mfa.listFactors();
   let factorId = factors.data?.totp?.find(factor => factor.status === 'verified')?.id || null;
@@ -253,7 +461,7 @@ async function authenticateWithServer() {
       return !verifyError;
     },
   };
-  return { isAdmin, account: { label: profile.username, trustKey: user.id, record: {}, remote, worker, onFailure: failSecondFactor } };
+  return { isAdmin, account: { label: profile.username, trustKey: user.id, email: user.email || usernameToEmail(loginName), password, record: {}, remote, worker, onFailure: failSecondFactor } };
 }
 
 /**
@@ -261,6 +469,10 @@ async function authenticateWithServer() {
  * de este dispositivo (scope 'local'): el admin no pierde la sesión de sus otros equipos.
  */
 async function endServerSession() {
+  offlineCredentials = null;
+  currentServerUser = null;
+  passwordPromptShown = false;
+  try { localStorage.removeItem(OFFLINE_SESSION_KEY); } catch { /* opcional */ }
   await stopSync();
   let signedOut = false;
   try { const db = await backend(); const { error } = await db.auth.signOut({ scope: 'local' }); signedOut = !error; } catch { /* sin conexión */ }
@@ -355,11 +567,13 @@ async function restoreSavedSession() {
   restoreRetryPending = false;
   try { Object.assign(security.session, JSON.parse(localStorage.getItem(SESSION_SETTINGS_KEY) || 'null') || {}); } catch { /* opcional */ }
   let db;
-  try { db = await backend(); } catch { restoreRetryPending = true; return; }
+  try { db = await backend(); } catch { if (await restoreOfflineSession()) return; restoreRetryPending = true; return; }
   const { data: sessionData, error: sessionError } = await db.auth.getSession();
   const session = sessionData?.session;
   if (!session) {
-    if (sessionError && /fetch|network/i.test(String(sessionError.message))) restoreRetryPending = true;
+    // Se ingresó sin señal (no hay sesión del servidor) o la sesión venció sin señal.
+    if (await restoreOfflineSession()) return;
+    if (sessionError && isNetworkError(sessionError)) restoreRetryPending = true;
     return;
   }
   if (idleExpired()) {
@@ -372,9 +586,14 @@ async function restoreSavedSession() {
   try {
     const userId = session.user.id;
     if (!(await secondFactorDone(db, userId))) { await endServerSession(); setRestoring(false); return; }
-    const { data: profile, error: profileError } = await db.from('profiles').select('*').eq('user_id', userId).maybeSingle();
+    const { data: profile, error: profileError } = await networkTimeout(db.from('profiles').select('*').eq('user_id', userId).maybeSingle(), 10000);
     if (profileError) throw profileError;
-    if (!profile || profile.role === 'pending') { await endServerSession(); setRestoring(false); return; }
+    if (!profile || profile.role === 'pending') {
+      await endServerSession();
+      if (!profile) await wipeDevice(userId); // la cuenta ya no existe
+      setRestoring(false);
+      return;
+    }
     const isAdmin = profile.role === 'admin';
     const { data: settings } = await db.from('app_settings').select('*').in('key', ['worker_access', 'session']);
     (settings || []).forEach(row => {
@@ -382,17 +601,27 @@ async function restoreSavedSession() {
       if (row.key === 'session' && row.data) { Object.assign(security.session, row.data); try { localStorage.setItem(SESSION_SETTINGS_KEY, JSON.stringify(security.session)); } catch { /* opcional */ } }
     });
     const worker = isAdmin ? null : serverWorker(profile);
-    if (!isAdmin && !workerMayEnter(worker)) { const message = loginError.textContent; await endServerSession(); setRestoring(false, message); return; }
-    const account = { label: profile.username, trustKey: userId, record: {}, worker };
+    if (!isAdmin && !workerMayEnter(worker)) {
+      const message = loginError.textContent;
+      await endServerSession();
+      if (worker.accessEnabled === false) await wipeDevice(userId);
+      setRestoring(false, message);
+      return;
+    }
+    const account = { label: profile.username, trustKey: userId, email: session.user.email, record: {}, worker };
     if (!(await enterWithServer(account, isAdmin))) { setRestoring(false, loginError.textContent); return; }
+    rememberOfflineAccount(account, isAdmin, null);
     setRestoring(false);
     enterApp(account, isAdmin);
     restoreLastScreen(isAdmin);
   } catch (error) {
     // Sin conexión: la sesión se conserva y se reintenta al volver internet.
-    const offline = /fetch|network/i.test(String(error?.message || error));
-    if (offline) restoreRetryPending = true;
-    else await endServerSession();
+    const offline = isNetworkError(error);
+    if (offline) {
+      setRestoring(false);
+      if (await restoreOfflineSession()) return;
+      restoreRetryPending = true;
+    } else await endServerSession();
     setRestoring(false, offline ? 'Sin conexión: tu sesión se restaurará al volver internet.' : `No se pudo restaurar la sesión: ${backendErrorMessage(error)}`);
   }
 }
@@ -403,10 +632,12 @@ function serverWorker(profile) {
 
 /** Carga los datos del servidor de una sesión ya verificada. false si no se pudo. */
 async function enterWithServer(account, isAdmin) {
-  loginError.textContent = 'Cargando datos del servidor…';
+  loginError.textContent = account.offline ? 'Abriendo tus datos guardados…' : 'Cargando datos del servidor…';
   try {
     if (!isAdmin) personnel.splice(0, personnel.length, account.worker);
+    currentServerUser = { userId: account.trustKey, email: account.email };
     await startSync({ userId: account.trustKey, role: isAdmin ? 'admin' : 'worker', routeId: routeKey(account.worker?.route || ''), routeName: account.worker?.route });
+    try { localStorage.setItem(OFFLINE_SESSION_KEY, account.trustKey); } catch { /* opcional */ }
     afterServerLoad();
   } catch (error) {
     loginError.textContent = `No se pudieron cargar los datos: ${backendErrorMessage(error)}`;
@@ -491,9 +722,10 @@ export function mount() {
       const { account, isAdmin } = result;
       // Segundo paso: código de la app de autenticación (o configuración en el primer ingreso).
       // En un dispositivo recordado (ya verificado y vigente) no se vuelve a pedir.
-      const trusted = account.remote
+      // Sin señal: este celular ya pasó la verificación en dos pasos en su último ingreso con internet.
+      const trusted = account.offline || (account.remote
         ? !account.remote.needsEnroll && isAccountTrusted(account.trustKey, 0)
-        : Boolean(account.record.totpSecret) && isAccountTrusted(account.label, account.record.trustVersion);
+        : Boolean(account.record.totpSecret) && isAccountTrusted(account.label, account.record.trustVersion));
       if (TWO_FACTOR_REQUIRED && !trusted) {
         const verified = await requestSecondFactor(account);
         if (!verified) {
@@ -517,8 +749,12 @@ export function mount() {
         if (account.remote) await endServerSession();
         return;
       }
-      if (account.remote && !(await enterWithServer(account, isAdmin))) return;
+      const password = account.password;
+      delete account.password;
+      if ((account.remote || account.offline) && !(await enterWithServer(account, isAdmin))) return;
+      if (account.remote) rememberOfflineAccount(account, isAdmin, password);
       enterApp(account, isAdmin);
+      if (account.offline) showToast('Sin señal: trabajas con los datos guardados en este celular. Se enviarán al volver la señal.');
     } finally {
       submit.disabled = false;
     }
@@ -527,12 +763,16 @@ export function mount() {
   // Modo servidor: si el admin cambia el acceso del trabajador, se aplica al instante.
   // Sin perfil (cambió el horario): solo se vuelve a revisar el horario.
   setAccessHook(profile => {
+    // Acceso desactivado según el servidor: se cierra y se borran los datos de este celular.
+    if (profile && profile.access_enabled === false && profile.user_id && profile.user_id === currentServerUser?.userId) { revokeThisDevice(profile.user_id); return; }
     if (state.userRole !== 'worker' || !state.activeWorker) return;
     if (profile) state.activeWorker.accessEnabled = profile.access_enabled !== false;
     checkWorkerSchedule();
   });
   // Sin servidor no hay usuarios iniciales que mostrar en otro dispositivo.
   if (backendEnabled()) document.querySelector('.login-demo-hint').hidden = true;
+  setAuthHook(ensureServerAuth);
+  document.querySelectorAll('.sync-status').forEach(badge => badge.addEventListener('click', () => { if (badge.dataset.needsAuth === 'true') askPasswordForSync(true); }));
   if (lockRemainingSeconds() > 0) showLockCountdown();
   window.setInterval(checkWorkerSchedule, 30000);
   // Si el admin bloquea al trabajador desde otra pestaña del mismo navegador, se aplica al instante.
