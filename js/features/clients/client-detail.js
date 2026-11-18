@@ -14,7 +14,7 @@ import { filterClientCards, removeClient, renderClientRows, setClientAvatar } fr
 import { localDateISO } from '../../shared/dates.js';
 import { formatDate, formatMoney, routeKey } from '../../shared/format.js';
 import { formatPhone, phoneLink } from '../../shared/phone.js';
-import { clientPendingPayments, syncRouteCollections } from '../../domain/ledger.js';
+import { adjustClosedTransfers, clientPendingPayments, syncRouteCollections } from '../../domain/ledger.js';
 import { openCustomModal } from '../../ui/custom-modal.js';
 import { showView } from '../../ui/navigation.js';
 import { showToast } from '../../ui/toast.js';
@@ -451,6 +451,13 @@ async function captureClientLocation() {
   showToast(isApproximateLocation(client.location)
     ? `Ubicación de ${client.name} guardada, pero es aproximada (± ${client.location.accuracy} m).`
     : `Ubicación de ${client.name} guardada (± ${client.location.accuracy} m).`);
+}
+
+/** Aviso al admin cuando corregir un abono ya cerrado cambió las transferencias (y la base). */
+function notifyClosedTransfers(adjustments) {
+  if (!adjustments.length) return;
+  const text = adjustments.map(({ date, delta }) => `${delta > 0 ? '+' : '−'}${formatMoney(Math.abs(delta))} en transferencias del cierre del ${formatDate(date)}`).join(' · ');
+  showToast(`${text}.${adjustments.some(item => item.base) ? ' La base de hoy se corrigió.' : ''}`);
 }
 
 export function openClient(clientId) {
@@ -1038,7 +1045,7 @@ export function mount() {
     if (button.dataset.paymentAction === 'delete') {
       openCustomModal({
         title: 'Eliminar abono', description: `Se eliminará el abono de ${formatDate(client.payments[index].date)}.`, submitLabel: 'Eliminar',
-        onSubmit: () => { const amount = Number(client.payments[index].amount) || 0; client.balance += amount; client.payments.splice(index, 1); if (routeSettlements[client.route]) syncRouteCollections(clients, { [client.route]: routeSettlements[client.route] }); updatePaidAmountTotal(client); client.settledAt = Number(client.balance) <= 0 ? client.settledAt || localDateISO() : null; syncCancelledCard(client, state.activeClient); persistBusinessData(); renderClientRows(state.activeClient); openClient(state.activeClient); }
+        onSubmit: () => { const amount = Number(client.payments[index].amount) || 0; const removed = { ...client.payments[index] }; client.balance += amount; client.payments.splice(index, 1); notifyClosedTransfers(adjustClosedTransfers(routeSettlements[client.route], removed, null)); if (routeSettlements[client.route]) syncRouteCollections(clients, { [client.route]: routeSettlements[client.route] }); updatePaidAmountTotal(client); client.settledAt = Number(client.balance) <= 0 ? client.settledAt || localDateISO() : null; syncCancelledCard(client, state.activeClient); persistBusinessData(); renderClientRows(state.activeClient); openClient(state.activeClient); }
       });
     } else {
       const payment = client.payments[index];
@@ -1064,6 +1071,7 @@ export function mount() {
           if (amount > oldAmount + Number(client.balance)) { customModalError.textContent = 'El monto corregido supera el saldo disponible.'; return false; }
           const date = String(values.date || '');
           if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || date > today) { customModalError.textContent = 'Elige una fecha válida (no puede ser posterior a hoy).'; return false; }
+          const before = { ...payment };
           client.balance = Math.max(0, Number(client.balance) + oldAmount - amount);
           payment.amount = amount;
           payment.method = values.method === 'transfer' ? 'transfer' : 'cash';
@@ -1076,6 +1084,8 @@ export function mount() {
             sortPaymentsByDate(client);
             reassignPaymentCycles(client);
           }
+          // Si el abono ya entró a un cierre, sus transferencias y la base que salió de él se corrigen.
+          notifyClosedTransfers(adjustClosedTransfers(routeSettlements[client.route], before, { ...payment }));
           if (routeSettlements[client.route]) syncRouteCollections(clients, { [client.route]: routeSettlements[client.route] });
           client.settledAt = client.balance <= 0 ? client.settledAt || localDateISO() : null;
           updatePaidAmountTotal(client); syncCancelledCard(client, state.activeClient); persistBusinessData(); renderClientRows(state.activeClient); openClient(state.activeClient);
