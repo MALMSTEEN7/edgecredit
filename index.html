@@ -34,12 +34,12 @@
   <link rel="icon" href="icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="icon-192.png">
   <meta name="apple-mobile-web-app-capable" content="yes">
-  <link rel="stylesheet" id="app-styles" href="dist/styles.bundle.css?v=b9ea0985fe">
+  <link rel="stylesheet" id="app-styles" href="dist/styles.bundle.css?v=a9ff197f8f">
   <script>
     // Si hay una sesión guardada, al recargar se muestra «Cargando tu sesión…» en vez del
     // formulario de ingreso mientras la app la restaura (features/auth/session.js).
     try {
-      if (Object.keys(localStorage).some(key => key.startsWith('edgecredit-auth') || key.startsWith('mock-session-edgecredit-auth'))) document.documentElement.classList.add('session-restoring');
+      if (Object.keys(localStorage).some(key => key.startsWith('edgecredit-auth') || key === 'edgecredit-offline-session' || key.startsWith('mock-session-edgecredit-auth'))) document.documentElement.classList.add('session-restoring');
     } catch (error) { /* almacenamiento no disponible: se muestra el ingreso */ }
   </script>
 </head>
@@ -237,6 +237,7 @@
       <button class="admin-menu-item" type="button" data-admin-section="receipts"><span aria-hidden="true">▧</span> Comprobantes</button>
       <button class="admin-menu-item" type="button" data-admin-section="reports"><span aria-hidden="true">◷</span> Reportes Financieros</button>
       <button class="admin-menu-item" type="button" data-admin-section="personnel"><span aria-hidden="true">♙</span> Gestión de Personal</button>
+      <button class="admin-menu-item" type="button" data-admin-section="audit" hidden><span aria-hidden="true">☰</span> Movimientos</button>
       <button class="admin-menu-item" type="button" data-admin-section="settings"><span aria-hidden="true">⚙</span> Configuración</button>
       <div class="admin-user"><span class="admin-avatar">A</span><span><strong>Administrador</strong><small>Control de cartera</small></span></div>
     </aside>
@@ -400,6 +401,20 @@
         </form>
         <div class="personnel-list" id="personnel-list"></div>
       </section>
+      <section class="admin-content admin-section-panel" data-admin-panel="audit" hidden>
+        <div class="admin-section-intro"><div><p class="eyebrow">SOLO ADMINISTRADOR</p><h2>Movimientos</h2><p>Cada cambio hecho en cada cobro: quién, cuándo y qué. Lo marcado en rojo conviene revisarlo (algo se quitó o dos equipos chocaron).</p></div></div>
+        <form class="audit-filters" id="audit-filters">
+          <label>Cobro<select id="audit-route"></select></label>
+          <label>Persona<select id="audit-actor"></select></label>
+          <label>Desde<input id="audit-since" type="date"></label>
+          <label>Cliente<input id="audit-search" type="search" placeholder="Nombre o cédula" autocomplete="off"></label>
+          <label class="audit-alerts-toggle"><input id="audit-alerts" type="checkbox"> Solo para revisar</label>
+          <button class="primary-button" type="submit">Buscar</button>
+        </form>
+        <p class="audit-status" id="audit-status" aria-live="polite"></p>
+        <div class="audit-list" id="audit-list"></div>
+        <button class="secondary-button audit-more" id="audit-more" type="button" hidden>Cargar más</button>
+      </section>
       <section class="admin-content admin-section-panel" data-admin-panel="settings" hidden>
         <div class="admin-section-intro"><div><p class="eyebrow">CUENTA Y PREFERENCIAS</p><h2>Configuración</h2><p>Apariencia del sistema y seguridad de la cuenta del administrador.</p></div></div>
         <div class="settings-list admin-settings-list">
@@ -532,7 +547,7 @@
     // al cambiar el sello, el navegador descarga el JS/CSS nuevo en vez de usar su caché.
     // Para desarrollar con los módulos sueltos, abre index.html?dev desde un servidor local.
     (() => {
-      const APP_VERSION = 'b9ea0985fe';
+      const APP_VERSION = 'a9ff197f8f';
       const dev = new URLSearchParams(location.search).has('dev') && location.protocol !== 'file:';
       if (dev) {
         document.getElementById('app-styles').href = 'styles.css';
@@ -545,6 +560,15 @@
       const bundle = document.createElement('script');
       bundle.src = `dist/app.bundle.js?v=${APP_VERSION}`;
       document.body.append(bundle);
+    })();
+    // App instalada (sw.js): abre aunque no haya señal. `?nosw` la quita de este navegador.
+    (() => {
+      if (!('serviceWorker' in navigator) || location.protocol === 'file:') return;
+      if (new URLSearchParams(location.search).has('nosw')) {
+        navigator.serviceWorker.getRegistrations().then(list => list.forEach(item => item.unregister())).catch(() => {});
+        return;
+      }
+      window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
     })();
   </script>
 </body>

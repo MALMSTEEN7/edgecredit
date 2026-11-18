@@ -47,6 +47,20 @@
     return String(bin % 1e6).padStart(6, '0');
   }
 
+  const AUDITED = ['clients', 'routes', 'pending_requests', 'profiles', 'app_settings'];
+  const canon = v => (Array.isArray(v) ? `[${v.map(canon).join(',')}]` : v && typeof v === 'object' ? `{${Object.keys(v).sort().map(k => `${JSON.stringify(k)}:${canon(v[k])}`).join(',')}}` : JSON.stringify(v ?? null));
+  function exceptAll(a, b) {
+    const left = b.map(canon);
+    return a.filter(item => { const i = left.indexOf(canon(item)); if (i >= 0) { left.splice(i, 1); return false; } return true; });
+  }
+  function auditDiff(a, b, path, depth) {
+    if (canon(a) === canon(b)) return [];
+    const isObj = v => v && typeof v === 'object' && !Array.isArray(v);
+    if (depth > 0 && isObj(a) && isObj(b)) return [...new Set([...Object.keys(a), ...Object.keys(b)])].flatMap(k => (canon(a[k]) === canon(b[k]) ? [] : auditDiff(a[k] ?? null, b[k] ?? null, [...path, k], depth - 1)));
+    if (Array.isArray(a) && Array.isArray(b)) return [{ p: path, added: exceptAll(b, a), removed: exceptAll(a, b) }];
+    return [{ p: path, old: a ?? null, new: b ?? null }];
+  }
+
   function createClient(url, anonKey, options = {}) {
     let currentUser = null;
     let currentAal = 'aal1';
@@ -66,6 +80,7 @@
       if (table === 'profiles') return row.user_id === currentUser.id || isAdmin(db);
       if (table === 'app_settings') return true;
       if (table === 'deleted_rows') return isAdmin(db) || canRoute(db, row.route_id);
+      if (table === 'audit_log') return isAdmin(db);
       const route = table === 'routes' ? row.id : row.route_id;
       return canRoute(db, route);
     };
@@ -83,6 +98,8 @@
         select() { if (action !== 'select') returning = true; return builder; },
         eq(col, val) { filters.push(r => r[col] === val); return builder; },
         gt(col, val) { filters.push(r => String(r[col] || '') > String(val)); return builder; },
+        gte(col, val) { filters.push(r => String(r[col] || '') >= String(val)); return builder; },
+        lt(col, val) { filters.push(r => (typeof val === 'number' ? Number(r[col]) < val : String(r[col] || '') < String(val))); return builder; },
         order(col, o) { orderCol = col; orderAsc = o?.ascending !== false; return builder; },
         limit(n) { rangeTo = rangeFrom + n - 1; return builder; },
         range(from, to) { rangeFrom = from; rangeTo = to; return builder; },
@@ -98,12 +115,23 @@
         if (control.offline) return offlineError();
         if (!currentUser) return { data: null, error: { message: 'permission denied for table ' + table } };
         const db = load();
+        db.tables.audit_log = db.tables.audit_log || [];
+        if (table === 'audit_log' && action !== 'select') return { data: null, error: { message: 'permission denied for table audit_log' } };
         const rows = db.tables[table];
         const key = TABLE_KEYS[table];
+        // Igual que el trigger de supabase/consola.sql (historial de movimientos).
+        const audit = (op, before, after) => {
+          if (!AUDITED.includes(table)) return;
+          const shape = r => (!r ? {} : table === 'profiles' ? { access_enabled: r.access_enabled, route_id: r.route_id, role: r.role, username: r.username, data: r.data } : (r.data || {}));
+          const changes = JSON.parse(JSON.stringify(auditDiff(shape(before), shape(after), [], 2)).replace(/"data:[a-zA-Z]+\/[^"]*"/g, '"[foto]"'));
+          if (op === 'update' && !changes.length) return;
+          const r = after || before;
+          db.tables.audit_log.push({ id: db.tables.audit_log.length + 1, at: serverNow(), table_name: table, row_key: String(r.id ?? r.user_id ?? r.key ?? r.route_id), route_id: table === 'routes' ? r.id : table === 'app_settings' ? null : (r.route_id ?? null), action: op, actor: currentUser.id, actor_name: profileOf(db)?.username || null, changes });
+        };
         const match = r => filters.every(f => f(r));
         if (action === 'select') {
           let data = rows.filter(r => visible(db, table, r) && match(r)).map(r => structuredClone(r));
-          if (orderCol) data.sort((a, b) => (String(a[orderCol]) < String(b[orderCol]) ? -1 : String(a[orderCol]) > String(b[orderCol]) ? 1 : 0) * (orderAsc ? 1 : -1));
+          if (orderCol) data.sort((a, b) => { const x = a[orderCol]; const y = b[orderCol]; const cmp = typeof x === 'number' && typeof y === 'number' ? x - y : (String(x) < String(y) ? -1 : String(x) > String(y) ? 1 : 0); return Math.sign(cmp) * (orderAsc ? 1 : -1); });
           // Igual que PostgREST: como máximo `maxRows` filas por consulta (1.000 por defecto).
           data = data.slice(rangeFrom, Math.min(rangeTo + 1, rangeFrom + (control.maxRows || 1000)));
           control.stats.selects += 1; control.stats.rows += data.length;
@@ -124,6 +152,7 @@
             if (index >= 0 && opts.ignoreDuplicates) return; // ON CONFLICT DO NOTHING
             if (index >= 0 && !writable(db, table, rows[index])) return;
             const row = { ...(index >= 0 ? rows[index] : {}), ...structuredClone(r), updated_at: serverNow() };
+            audit(index >= 0 ? 'update' : 'insert', index >= 0 ? structuredClone(rows[index]) : null, row);
             if (index >= 0) rows[index] = row; else rows.push(row);
             written.push(structuredClone(row));
             emit({ table, eventType: index >= 0 ? 'UPDATE' : 'INSERT', new: row });
@@ -134,7 +163,9 @@
           const written = [];
           rows.filter(r => match(r) && visible(db, table, r)).forEach(r => {
             if (!writable(db, table, r)) return;
+            const before = structuredClone(r);
             Object.assign(r, structuredClone(payload), { updated_at: serverNow() });
+            audit('update', before, r);
             written.push(structuredClone(r));
             emit({ table, eventType: 'UPDATE', new: r });
           });
@@ -143,6 +174,7 @@
         if (action === 'delete') {
           const removed = rows.filter(r => match(r) && writable(db, table, r) && (isAdmin(db)));
           db.tables[table] = rows.filter(r => !removed.includes(r));
+          removed.forEach(r => audit('delete', r, null));
           if (LOGGED_DELETES.includes(table)) removed.forEach(r => db.tables.deleted_rows.push({ id: db.tables.deleted_rows.length + 1, table_name: table, row_key: String(r.id ?? r.route_id), route_id: table === 'routes' ? r.id : r.route_id, deleted_at: serverNow() }));
           removed.forEach(r => emit({ table, eventType: 'DELETE', old: { [key]: r[key] } }));
           save(db); return { data: null, error: null };
@@ -154,6 +186,7 @@
 
     const auth = {
       async signInWithPassword({ email, password }) {
+        if (control.offline) return { data: {}, error: { message: 'TypeError: Failed to fetch' } };
         const db = load();
         const user = db.users.find(u => u.email === email && u.password === password);
         if (!user) return { data: {}, error: { message: 'Invalid login credentials' } };
@@ -170,7 +203,7 @@
         return { data: { user: { id: user.id, email, identities: [{}] } }, error: null };
       },
       async signOut() { setUser(null); return { error: null }; },
-      async getUser() { return { data: { user: currentUser }, error: null }; },
+      async getUser() { return control.offline ? { data: { user: null }, error: { message: 'TypeError: Failed to fetch' } } : { data: { user: currentUser }, error: null }; },
       async getSession() {
         return { data: { session: currentUser ? { user: currentUser, access_token: `mock-${currentUser.id}`, expires_at: Math.floor(Date.now() / 1000) + 3600 } : null }, error: null };
       },
@@ -227,6 +260,15 @@
         const raw = Array.from(crypto.getRandomValues(new Uint8Array(15)), b => b.toString(16).padStart(2, '0')).join('').toUpperCase();
         me.recoveryKey = raw; me.recoveryAt = new Date().toISOString(); save(db);
         return { data: raw.match(/.{6}/g).join('-'), error: null };
+      }
+      if (name === 'log_sync_merge') {
+        if (!currentUser) return { data: null, error: null };
+        const route = profileOf(db)?.route_id;
+        if (!isAdmin(db) && params.p_route !== route) return { data: null, error: null };
+        db.tables.audit_log = db.tables.audit_log || [];
+        db.tables.audit_log.push({ id: db.tables.audit_log.length + 1, at: serverNow(), table_name: params.p_table, row_key: params.p_key, route_id: params.p_route, action: 'merge', actor: currentUser.id, actor_name: profileOf(db)?.username || null, changes: params.p_changes || [] });
+        save(db);
+        return { data: null, error: null };
       }
       if (!isAdmin(db)) return { error: { message: 'Solo el administrador' } };
       if (name === 'admin_create_user') {

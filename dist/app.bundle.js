@@ -22,8 +22,12 @@ const SUPABASE_ANON_KEY = '';
 /** Los usuarios entran con un nombre corto (camila); por dentro Supabase usa camila@<dominio>. */
 const AUTH_EMAIL_DOMAIN = 'edgecredit.app';
 
-/** Librería oficial de Supabase (se descarga al iniciar sesión). */
-const SUPABASE_JS_URL = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2';
+/**
+ * Librería oficial de Supabase. Va incluida en la app (queda guardada en el celular y abre sin
+ * señal); si esa copia no carga, se usa la del CDN.
+ */
+const SUPABASE_JS_URL = 'dist/vendor/supabase-2.119.0.js';
+const SUPABASE_JS_FALLBACK_URL = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.119.0';
 
 // ── js/core/backend.js
 /**
@@ -44,17 +48,22 @@ function backendEnabled() {
   return Boolean(BACKEND_URL && BACKEND_KEY);
 }
 
+function loadScript(src) {
+  return new Promise((resolve, reject) => {
+    const script = document.createElement('script');
+    script.src = src;
+    script.async = true;
+    script.onload = () => (window.supabase?.createClient ? resolve(window.supabase) : reject(new Error('No se pudo iniciar la conexión con el servidor.')));
+    script.onerror = () => { script.remove(); reject(new Error('Sin conexión con el servidor. Revisa tu internet e inténtalo de nuevo.')); };
+    document.head.append(script);
+  });
+}
+
 function loadLibrary() {
   if (window.supabase?.createClient) return Promise.resolve(window.supabase);
   if (loading) return loading;
-  loading = new Promise((resolve, reject) => {
-    const script = document.createElement('script');
-    script.src = SUPABASE_JS_URL;
-    script.async = true;
-    script.onload = () => (window.supabase?.createClient ? resolve(window.supabase) : reject(new Error('No se pudo iniciar la conexión con el servidor.')));
-    script.onerror = () => { loading = null; reject(new Error('Sin conexión con el servidor. Revisa tu internet e inténtalo de nuevo.')); };
-    document.head.append(script);
-  });
+  // Primero la copia incluida en la app (funciona sin señal); si falla, la del CDN.
+  loading = loadScript(SUPABASE_JS_URL).catch(() => loadScript(SUPABASE_JS_FALLBACK_URL)).catch(error => { loading = null; throw error; });
   return loading;
 }
 
@@ -228,6 +237,89 @@ function normalize(value) {
  * Si se deja vacía, el mapa usa las teselas estándar de OpenStreetMap.
  */
 const CARTO_API_KEY = 'cb1_46nk_1_245cd44315c027f9a302c302';
+
+// ── js/core/offline-store.js
+/**
+ * core/offline-store · Copia local de los datos del servidor en el celular (IndexedDB).
+ *
+ * Con servidor, cada usuario guarda aquí su propia copia (la ruta del trabajador, o todo en el
+ * caso del admin) junto con lo que se sabe del servidor. Así la app abre y trabaja sin señal,
+ * y al volver la conexión solo descarga lo que cambió.
+ *
+ * - Cerrar sesión NO borra la copia (los cambios sin enviar no se pierden).
+ * - Se borra cuando el administrador desactiva el acceso de esa persona (wipeOfflineUser).
+ * - localStorage tiene un tope de ~5 MB; IndexedDB permite mucho más.
+ */
+
+const OFFLINE_DB_NAME = 'edgecredit-offline';
+const OFFLINE_DB_VERSION = 1;
+const OFFLINE_STORE = 'kv';
+
+let offlineDbPromise = null;
+
+function openOfflineDb() {
+  if (offlineDbPromise) return offlineDbPromise;
+  offlineDbPromise = new Promise((resolve, reject) => {
+    if (!globalThis.indexedDB) { reject(new Error('IndexedDB no disponible')); return; }
+    const request = indexedDB.open(OFFLINE_DB_NAME, OFFLINE_DB_VERSION);
+    request.onupgradeneeded = () => { if (!request.result.objectStoreNames.contains(OFFLINE_STORE)) request.result.createObjectStore(OFFLINE_STORE); };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error || new Error('No se pudo abrir la copia local'));
+    request.onblocked = () => reject(new Error('La copia local está bloqueada por otra pestaña'));
+  }).catch(error => { offlineDbPromise = null; throw error; });
+  return offlineDbPromise;
+}
+
+function offlineRun(mode, action) {
+  return openOfflineDb().then(db => new Promise((resolve, reject) => {
+    const tx = db.transaction(OFFLINE_STORE, mode);
+    const request = action(tx.objectStore(OFFLINE_STORE));
+    tx.oncomplete = () => resolve(request?.result);
+    tx.onerror = () => reject(tx.error || request?.error);
+    tx.onabort = () => reject(tx.error || new Error('Escritura cancelada (¿sin espacio?)'));
+  }));
+}
+
+async function offlineGet(key) {
+  try { return (await offlineRun('readonly', store => store.get(key))) ?? null; } catch { return null; }
+}
+
+/** Escrituras en cola por clave: si llega otra mientras se escribe, solo se escribe la última. */
+const offlineQueued = new Map();
+const offlineWriting = new Set();
+const offlineWaiters = [];
+
+async function offlineFlush(key) {
+  offlineWriting.add(key);
+  while (offlineQueued.has(key)) {
+    const value = offlineQueued.get(key);
+    offlineQueued.delete(key);
+    try { await offlineRun('readwrite', store => store.put(value, key)); } catch (error) { console.warn('Copia local sin guardar', error); }
+  }
+  offlineWriting.delete(key);
+  if (!offlineWriting.size) offlineWaiters.splice(0).forEach(resolve => resolve());
+}
+
+function offlinePut(key, value) {
+  offlineQueued.set(key, value);
+  if (!offlineWriting.has(key)) offlineFlush(key);
+}
+
+/** Espera a que terminen las escrituras pendientes. */
+function offlineSaved() {
+  return offlineWriting.size || offlineQueued.size ? new Promise(resolve => offlineWaiters.push(resolve)) : Promise.resolve();
+}
+
+async function offlineDelete(key) {
+  offlineQueued.delete(key);
+  await offlineSaved();
+  try { await offlineRun('readwrite', store => store.delete(key)); } catch { /* sin IndexedDB */ }
+}
+
+/** Pide al navegador que no borre la copia por falta de espacio. */
+function requestPersistentOfflineStorage() {
+  try { navigator.storage?.persist?.().catch(() => {}); } catch { /* opcional */ }
+}
 
 // ── js/core/security-config.js
 /**
@@ -493,7 +585,11 @@ function hydrateBusinessData() {
  * - Nunca se pisa un registro con cambios locales sin enviar: se conserva el local y se envía.
  * - Sin internet, los cambios quedan en una cola (también guardada en el navegador) que se
  *   escribe al instante, así no se pierden si cierran la app; se envían al volver la conexión.
+ * - Copia local por usuario (core/offline-store): los datos y lo que se sabe del servidor se
+ *   guardan en el celular. Al abrir la app se usa esa copia al instante (también sin señal) y,
+ *   con conexión, se trae solo lo que cambió desde la última vez. Cerrar sesión no la borra.
  */
+
 
 
 
@@ -533,11 +629,26 @@ let reconnectTimer = null;
 let renderHook = () => {};
 let accessHook = () => {};
 let lastErrorToast = 0;
+let online = false;          // ¿conectado y verificado con el servidor en esta sesión?
+let connecting = null;       // promesa de la conexión en curso
+let authMissing = false;     // con señal pero sin sesión del servidor (ingresó sin señal)
+let authHook = async () => true;
+let snapshotTimer = null;
+
+const SNAPSHOT_VERSION = 1;
+const INCREMENTAL_MAX_AGE_MS = 3 * 24 * 60 * 60 * 1000; // copia más vieja: descarga completa
 
 /** La app registra aquí cómo repintar tras cambios remotos (app.js). */
 function setRenderHook(fn) { renderHook = fn; }
 /** Se llama cuando cambia el perfil propio (p. ej. el admin desactivó el acceso). */
 function setAccessHook(fn) { accessHook = fn; }
+/**
+ * Antes de conectarse con el servidor (sobre todo tras entrar sin señal) la sesión revisa que
+ * haya una sesión válida del servidor. Devuelve true si la hay; lanza error si no hay red.
+ */
+function setAuthHook(fn) { authHook = fn; }
+/** ¿Ya está conectado con el servidor (o trabajando con la copia local)? */
+function syncOnline() { return online; }
 function syncActive() { return Boolean(syncSession); }
 /** Rol de la sesión sincronizada ('admin' | 'worker'), o null sin servidor. */
 function syncRole() { return syncSession?.role || null; }
@@ -654,8 +765,17 @@ function readOutbox() {
   try { return JSON.parse(localStorage.getItem(outboxKey()) || '[]'); } catch { return []; }
 }
 
+/** Hora de la última escritura de la cola (para saber si es más nueva que la copia local). */
+function readOutboxAt() {
+  try { return Number(localStorage.getItem(`${outboxKey()}-at`)) || 0; } catch { return 0; }
+}
+
 function writeOutbox(items) {
-  try { localStorage.setItem(outboxKey(), JSON.stringify(items)); } catch { /* opcional */ }
+  try {
+    localStorage.setItem(outboxKey(), JSON.stringify(items));
+    localStorage.setItem(`${outboxKey()}-at`, String(Date.now()));
+  } catch { /* opcional */ }
+  saveSnapshotSoon();
 }
 
 /** Cambios locales pendientes (lo que difiere de la última versión enviada/recibida). */
@@ -703,7 +823,8 @@ function flush() {
   // Paso síncrono: la cola queda guardada aunque la app se cierre en este instante.
   const pending = pendingItems();
   writeOutbox(pending);
-  if (!pending.length || !navigator.onLine) { updateSyncBadge(); return Promise.resolve(); }
+  // Sin conexión con el servidor: queda en la cola (y en la copia local) hasta conectarse.
+  if (!pending.length || !navigator.onLine || !online) { updateSyncBadge(); return Promise.resolve(); }
   flushing = sendPending(pending).finally(() => { flushing = null; updateSyncBadge(); });
   return flushing;
 }
@@ -829,19 +950,26 @@ function reportError(error) {
 
 function updateSyncBadge() {
   const pending = syncSession ? readOutbox().length : 0;
-  const offline = !navigator.onLine;
+  const offline = !navigator.onLine || (syncSession && !online && !authMissing);
   const reconnecting = !offline && realtime === 'down';
-  const status = offline ? 'offline' : pending ? 'pending' : reconnecting ? 'reconnecting' : 'ok';
+  const status = authMissing && !online ? 'offline' : offline ? 'offline' : pending ? 'pending' : reconnecting ? 'reconnecting' : 'ok';
+  const changes = `${pending} cambio${pending === 1 ? '' : 's'}`;
   const titles = {
-    offline: 'Sin conexión: los cambios se enviarán al volver internet',
-    pending: `${pending} cambio(s) por enviar al servidor`,
+    offline: authMissing && !online
+      ? `Vuelve a ingresar tu contraseña para enviar ${pending ? `${changes} pendientes` : 'y recibir cambios'} (toca aquí)`
+      : `Sin señal: trabajas con la copia guardada en este celular${pending ? `. ${changes} por subir al volver la señal` : ''}`,
+    pending: `${changes} por enviar al servidor`,
     reconnecting: 'Tiempo real desconectado: reconectando. Mientras tanto los datos se actualizan cada minuto',
     ok: realtime === 'live' ? 'Datos sincronizados con el servidor (tiempo real activo)' : 'Datos sincronizados con el servidor',
   };
-  const labels = { offline: 'Sin conexión', pending: 'Enviando…', reconnecting: 'Reconectando…', ok: 'Sincronizado' };
+  const labels = {
+    offline: authMissing && !online ? 'Ingresa para enviar' : pending ? `Sin señal · ${pending} por subir` : 'Sin señal',
+    pending: 'Enviando…', reconnecting: 'Reconectando…', ok: 'Sincronizado',
+  };
   document.querySelectorAll('.sync-status').forEach(badge => {
     badge.hidden = !syncSession;
     badge.dataset.state = status;
+    badge.dataset.needsAuth = authMissing && !online ? 'true' : 'false';
     badge.title = titles[status];
     badge.querySelector('span').textContent = labels[status];
   });
@@ -1008,6 +1136,28 @@ function mergeThreeWay(base, local, remote, depth) {
 
 const MERGEABLE = ['routes', 'clients', 'route_state'];
 
+/** Resumen corto de un valor para el historial (las listas, solo cuántos elementos tienen). */
+function mergeSummary(value) {
+  if (Array.isArray(value)) return `lista de ${value.length}`;
+  if (isPlainObject(value)) return `${Object.keys(value).length} datos`;
+  return value ?? null;
+}
+
+/**
+ * Choque real: el mismo campo cambió aquí y en otro equipo. Se anota en el historial del
+ * servidor (consola del administrador) sin esperar respuesta; si falla no pasa nada.
+ */
+function logMerge(table, key, routeId, base, mine, theirs) {
+  if (table === 'route_state' || !navigator.onLine || !isPlainObject(mine) || !isPlainObject(theirs)) return;
+  const fields = [...new Set([...Object.keys(mine), ...Object.keys(theirs)])]
+    .filter(field => stable(mine[field]) !== stable(base?.[field]) && stable(theirs[field]) !== stable(base?.[field]) && stable(mine[field]) !== stable(theirs[field]));
+  if (!fields.length) return;
+  const changes = fields.slice(0, 20).map(field => ({ p: [field], base: mergeSummary(base?.[field]), mine: mergeSummary(mine[field]), theirs: mergeSummary(theirs[field]) }));
+  backend().then(db => db.rpc('log_sync_merge', { p_table: table, p_key: String(key), p_route: routeId || null, p_changes: changes }))
+    .then(result => { if (result?.error) console.warn('Historial: choque sin anotar', result.error); })
+    .catch(() => {});
+}
+
 /**
  * Llega un cambio de un registro que aquí también tiene cambios sin enviar. Antes se descartaba
  * lo recibido y se subía la copia de aquí completa, borrando lo del otro equipo (p. ej. la base
@@ -1023,6 +1173,7 @@ function mergeIntoLocal(table, key, row) {
   if (!local || !isPlainObject(row.data)) return false;
   if (!isPlainObject(base)) base = {}; // sin versión común: se junta todo y en lo distinto gana lo de aquí
   const merged = mergeThreeWay(base, local.data, row.data, 2);
+  logMerge(table, key, row.route_id ?? (table === 'routes' ? key : null), base, local.data, row.data);
   applyRow(table, { ...row, data: merged });
   // Lo conocido pasa a ser la versión del servidor: lo que la combinación conserva de aquí
   // queda pendiente y se envía.
@@ -1066,6 +1217,7 @@ let pendingChanges = { full: false, clients: new Set() };
 /** Repinta lo que cambió. `full`: repintar todo (descarga completa). */
 function queueRender({ full = false } = {}) {
   if (full) pendingChanges.full = true;
+  saveSnapshotSoon();
   window.clearTimeout(renderTimer);
   renderTimer = window.setTimeout(() => {
     const changes = pendingChanges;
@@ -1167,6 +1319,7 @@ async function downloadAll() {
   cursor = stamp;
   lastFullSync = Date.now();
   loaded = true;
+  saveSnapshotSoon();
 }
 
 /**
@@ -1194,6 +1347,7 @@ function restorePending(pending, previousWorkers = [], previousSynced = new Map(
       let base = item.base ?? previousSynced.get(item.id) ?? null;
       try { base = base ? JSON.parse(base)?.data : null; } catch { base = null; }
       const merged = mergeThreeWay(isPlainObject(base) ? base : {}, item.row.data, downloaded.data, 2);
+      logMerge(item.table, item.row[TABLE_KEYS[item.table]], item.row.route_id ?? (item.table === 'routes' ? item.row.id : null), isPlainObject(base) ? base : {}, item.row.data, downloaded.data);
       applyRow(item.table, { ...item.row, data: merged });
       lastSynced.set(item.id, stable(downloaded));
       return;
@@ -1207,7 +1361,7 @@ function restorePending(pending, previousWorkers = [], previousSynced = new Map(
  * 30 minutos). Primero envía lo pendiente; los errores se reintentan en el siguiente ciclo.
  */
 async function fullSync() {
-  if (!syncSession || syncing || !navigator.onLine) return;
+  if (!syncSession || syncing || !online || !navigator.onLine) return;
   if (Date.now() - lastFullSync < FULL_SYNC_DEBOUNCE_MS) return;
   syncing = true;
   try {
@@ -1221,9 +1375,17 @@ async function fullSync() {
 
 /** Refresco incremental: filas cambiadas desde el cursor (con margen) y borrados. */
 async function pullChanges() {
-  if (!syncSession || syncing || !loaded || !cursor || !navigator.onLine) return;
+  if (!syncSession || syncing || !online || !loaded || !cursor || !navigator.onLine) return;
   syncing = true;
   try {
+    await pullSince();
+  } catch { /* se reintenta en el siguiente ciclo */ }
+  finally { syncing = false; updateSyncBadge(); }
+}
+
+/** Trae lo cambiado desde el cursor y lo aplica. Lanza error si falla la descarga. */
+async function pullSince() {
+  {
     const db = await backend();
     const since = new Date(Date.parse(cursor) - OVERLAP_MS).toISOString();
     // La hora del servidor se toma al empezar: lo que se confirme mientras se descarga
@@ -1249,8 +1411,8 @@ async function pullChanges() {
     results.forEach(result => (result.data || []).forEach(row => { changed = receiveRow(result.table, row) || changed; }));
     cursor = stamp;
     if (changed) queueRender();
-  } catch { /* se reintenta en el siguiente ciclo */ }
-  finally { syncing = false; updateSyncBadge(); }
+    saveSnapshotSoon();
+  }
 }
 
 function schedulePoll() {
@@ -1261,7 +1423,8 @@ function schedulePoll() {
 
 async function pollTick() {
   if (syncSession && !document.hidden && navigator.onLine) {
-    if (Date.now() - lastFullSync >= FULL_SYNC_EVERY_MS) await fullSync();
+    if (!online) await connectOnline();
+    else if (Date.now() - lastFullSync >= FULL_SYNC_EVERY_MS) await fullSync();
     else await pullChanges();
   }
   schedulePoll();
@@ -1331,15 +1494,207 @@ function setRealtime(status) {
 
 // ── Ciclo de vida ──
 
-/** Inicia la sincronización tras un inicio de sesión exitoso (o una sesión restaurada). */
+// ── Copia local (core/offline-store) ──
+
+const snapshotKey = userId => `snapshot:${userId}`;
+
+/** Foto de los datos y de lo que se sabe del servidor (todo en un mismo instante). */
+function buildSnapshot() {
+  return {
+    v: SNAPSHOT_VERSION,
+    savedAt: Date.now(),
+    outboxAt: readOutboxAt(),
+    session: { ...syncSession },
+    cursor,
+    lastFullSync,
+    synced: JSON.stringify([...lastSynced]),
+    versions: JSON.stringify([...versions]),
+    data: JSON.stringify({
+      clients, routeSettlements, personnel, pendingRequests, routeDirectory, shared,
+      dailyRouteOrder: state.dailyRouteOrder, dailyRouteDates: state.dailyRouteDates, clientLibraryOrder: state.clientLibraryOrder,
+      collectedRouteClients: state.collectedRouteClients, routeVisitOutcomes: state.routeVisitOutcomes,
+      workerAccess: security.workerAccess, session: security.session,
+    }),
+  };
+}
+
+/** Guarda la copia ya (al ocultar o cerrar la app, al cerrar sesión). */
+function saveSnapshot() {
+  window.clearTimeout(snapshotTimer);
+  snapshotTimer = null;
+  if (!syncSession || !loaded) return;
+  try { offlinePut(snapshotKey(syncSession.userId), buildSnapshot()); } catch (error) { console.warn('Copia local sin guardar', error); }
+}
+
+/** Guarda la copia en unos segundos (agrupa muchos cambios seguidos en una sola escritura). */
+function saveSnapshotSoon() {
+  if (!syncSession || !loaded || snapshotTimer) return;
+  snapshotTimer = window.setTimeout(saveSnapshot, syncSession.role === 'admin' ? 4000 : 1500);
+}
+
+function usableSnapshot(snap, { userId, role, routeId }) {
+  if (!snap || snap.v !== SNAPSHOT_VERSION || snap.session?.userId !== userId || snap.session?.role !== role) return false;
+  return role === 'admin' || snap.session.routeId === routeId;
+}
+
+/** ¿Hay copia local de este usuario? (para entrar sin señal) */
+async function hasOfflineCopy({ userId, role, routeId }) {
+  return usableSnapshot(await offlineGet(snapshotKey(userId)), { userId, role, routeId });
+}
+
+function replaceList(target, items) {
+  target.splice(0, target.length, ...(Array.isArray(items) ? items : []));
+}
+
+/** Carga la copia local en la app (en lugar de descargar todo). */
+function applySnapshot(snap) {
+  const data = JSON.parse(snap.data);
+  replaceObject(clients, data.clients || {});
+  Object.keys(routeSettlements).forEach(key => delete routeSettlements[key]);
+  Object.entries(data.routeSettlements || {}).forEach(([key, route]) => { routeSettlements[key] = { ...emptyRoute(route?.name || key), ...route }; });
+  // El trabajador ya trae su perfil (del servidor o de su último ingreso).
+  if (syncSession.role === 'admin' || !personnel.length) replaceList(personnel, data.personnel);
+  replaceList(pendingRequests, data.pendingRequests);
+  replaceList(routeDirectory, data.routeDirectory);
+  replaceObject(shared.workBases, data.shared?.workBases || {});
+  replaceObject(shared.workerLocations, data.shared?.workerLocations || {});
+  replaceObject(state.dailyRouteOrder, data.dailyRouteOrder || {});
+  replaceObject(state.dailyRouteDates, data.dailyRouteDates || {});
+  replaceObject(state.clientLibraryOrder, data.clientLibraryOrder || {});
+  replaceObject(state.collectedRouteClients, data.collectedRouteClients || {});
+  replaceObject(state.routeVisitOutcomes, data.routeVisitOutcomes || {});
+  if (data.workerAccess) Object.assign(security.workerAccess, data.workerAccess);
+  if (data.session) Object.assign(security.session, data.session);
+  lastSynced = new Map(JSON.parse(snap.synced || '[]'));
+  versions = new Map(JSON.parse(snap.versions || '[]'));
+  cursor = snap.cursor || null;
+  lastFullSync = snap.lastFullSync || 0;
+  loaded = true;
+}
+
+/**
+ * La cola de salida se escribe al instante; la copia local, unos segundos después. Si la app se
+ * cerró entre las dos, la cola es más nueva: sus registros se aplican (gana lo de aquí) con la
+ * versión del servidor que conocían, y al conectarse se combinan con lo del servidor.
+ */
+function applyNewerOutbox(snap) {
+  const items = readOutbox();
+  if (!items.length || readOutboxAt() <= (snap.outboxAt || 0)) return;
+  items.forEach(item => {
+    if (!TABLE_KEYS[item.table]) return;
+    if (item.op === 'delete') {
+      applyRow(item.table, { [TABLE_KEYS[item.table]]: item.key }, true);
+      lastSynced.set(item.id, PENDING_DELETE);
+      return;
+    }
+    if (item.table === 'profiles') {
+      const index = personnel.findIndex(worker => worker.id === item.row.user_id);
+      if (index < 0) return;
+      replaceObject(personnel[index], { ...personnel[index], ...item.row.data, id: item.row.user_id, accessEnabled: item.row.access_enabled !== false });
+    } else applyRow(item.table, item.row);
+    if (item.base) lastSynced.set(item.id, item.base); else lastSynced.delete(item.id);
+  });
+}
+
+/** Borra la copia local y la cola de un usuario (acceso desactivado por el administrador). */
+async function wipeOfflineUser(userId) {
+  if (!userId) return;
+  await offlineDelete(snapshotKey(userId));
+  try {
+    localStorage.removeItem(`edgecredit-outbox-${userId}`);
+    localStorage.removeItem(`edgecredit-outbox-${userId}-at`);
+  } catch { /* opcional */ }
+}
+
+// ── Conexión con el servidor ──
+
+/**
+ * Conecta la sesión (que ya trabaja con la copia local) con el servidor: revisa la sesión y el
+ * acceso, trae lo que cambió y envía lo pendiente. Sin señal no hace nada: se reintenta al
+ * volver internet y en cada ciclo de revisión.
+ */
+function connectOnline() {
+  if (!syncSession || online) return Promise.resolve();
+  if (connecting) return connecting;
+  if (!navigator.onLine) { updateSyncBadge(); return Promise.resolve(); }
+  const session = syncSession;
+  connecting = (async () => {
+    try {
+      const authorized = await authHook(session);
+      if (syncSession !== session) return;
+      authMissing = !authorized;
+      if (!authorized) return;
+      const db = await backend();
+      if (!(await workerMayDownload(db))) return;
+      if (syncSession !== session || syncing) return;
+      syncing = true;
+      try {
+        await flushing;
+        const recent = cursor && Date.now() - Date.parse(cursor) < INCREMENTAL_MAX_AGE_MS;
+        if (recent) {
+          await pullSince();
+          lastFullSync = Date.now();
+        } else {
+          await downloadAll();
+          queueRender({ full: true });
+        }
+      } finally { syncing = false; }
+      if (syncSession !== session) return;
+      online = true;
+      saveSnapshotSoon();
+      subscribeRealtime();
+      scheduleFlush(50);
+    } catch { /* sin red o error del servidor: se reintenta en el siguiente ciclo */ }
+    finally { connecting = null; updateSyncBadge(); }
+  })();
+  return connecting;
+}
+
+/** Tras volver a ingresar la contraseña (sesión del servidor nueva): conectar ya. */
+function retryConnection() {
+  authMissing = false;
+  updateSyncBadge();
+  return connectOnline();
+}
+
+// ── Ciclo de vida ──
+
+/**
+ * Inicia la sincronización tras un inicio de sesión exitoso (o una sesión restaurada).
+ * Con copia local en este celular entra al instante con ella (también sin señal) y se conecta
+ * en segundo plano. Sin copia descarga todo (necesita internet). Devuelve { offline } si entró
+ * con la copia sin estar conectado todavía.
+ */
 async function startSync({ userId, role, routeId, routeName }) {
   syncSession = { userId, role, routeId, routeName };
+  const session = syncSession;
   loaded = false;
+  online = false;
+  authMissing = false;
   cursor = null;
   lastFullSync = 0;
   lastSynced = new Map();
+  versions = new Map();
   realtimeFailed = false;
   reconnectAttempt = 0;
+  requestPersistentOfflineStorage();
+  const snap = await offlineGet(snapshotKey(userId));
+  if (syncSession !== session) throw new Error('Sesión cerrada.');
+  if (usableSnapshot(snap, session)) {
+    try {
+      applySnapshot(snap);
+      applyNewerOutbox(snap);
+      schedulePoll();
+      updateSyncBadge();
+      connectOnline(); // en segundo plano: la app ya puede mostrarse con la copia local
+      return { offline: true };
+    } catch (error) {
+      console.warn('Copia local dañada: se descarga todo', error);
+      loaded = false;
+      lastSynced = new Map();
+      versions = new Map();
+    }
+  }
   syncing = true;
   try {
     await downloadAll();
@@ -1349,30 +1704,44 @@ async function startSync({ userId, role, routeId, routeName }) {
   } finally {
     syncing = false;
   }
+  online = true;
+  saveSnapshot();
   subscribeRealtime();
   schedulePoll();
   // Cambios que quedaron sin enviar en una sesión anterior en este dispositivo.
   scheduleFlush(readOutbox().length ? 50 : 300);
   updateSyncBadge();
+  return { offline: false };
 }
 
 async function stopSync() {
-  if (syncSession) {
+  const ending = syncSession;
+  if (ending) {
     // flush() guarda la cola en el acto (antes de cualquier espera) y envía lo que pueda.
     window.clearTimeout(flushTimer);
     await flush().catch(() => {});
     await flushing;
+    // La copia local queda guardada (cerrar sesión no borra los datos del celular).
+    if (syncSession === ending) saveSnapshot();
+    await offlineSaved();
+    // Mientras se cerraba ya empezó otra sesión (salir y entrar enseguida): no se toca.
+    if (syncSession !== ending) return;
   }
   window.clearTimeout(flushTimer);
   window.clearTimeout(pollTimer);
   window.clearTimeout(reconnectTimer);
+  window.clearTimeout(snapshotTimer);
+  snapshotTimer = null;
   channelGen += 1;
   if (channel) removeChannel(await backend().catch(() => null));
   syncSession = null;
   loaded = false;
+  online = false;
+  authMissing = false;
   cursor = null;
   realtime = 'off';
   lastSynced = new Map();
+  versions = new Map();
   updateSyncBadge();
 }
 
@@ -1381,6 +1750,7 @@ function __mount_syncModule() {
   window.addEventListener('online', () => {
     updateSyncBadge();
     if (!syncSession) return;
+    if (!online) { connectOnline(); return; }
     scheduleFlush(100);
     if (realtimeFailed) { reconnectAttempt = 0; subscribeRealtime(); }
     lastFullSync = 0;
@@ -1389,15 +1759,16 @@ function __mount_syncModule() {
   window.addEventListener('offline', updateSyncBadge);
   document.addEventListener('visibilitychange', () => {
     if (!syncSession) return;
-    if (document.hidden) { hiddenSince = Date.now(); flushNow(); return; }
+    if (document.hidden) { hiddenSince = Date.now(); flushNow(); saveSnapshot(); return; }
     const away = hiddenSince ? Date.now() - hiddenSince : 0;
     hiddenSince = 0;
+    if (!online) { connectOnline(); schedulePoll(); return; }
     if (away > HIDDEN_FULL_SYNC_MS) { lastFullSync = 0; fullSync(); }
     else if (away > 0) pullChanges();
     schedulePoll();
   });
   // Al cerrar la app o cambiar de página: la cola queda guardada y se intenta enviar.
-  window.addEventListener('pagehide', flushNow);
+  window.addEventListener('pagehide', () => { flushNow(); saveSnapshot(); });
 }
 
 // ── js/core/tracks.js
@@ -1708,6 +2079,136 @@ function normalizeCancelledCards() {
     });
   });
   Object.entries(clients).forEach(([clientId, client]) => { if (Number(client.balance) <= 0) addCancelledCard(client, clientId, client.settledAt || localDateISO()); });
+}
+
+// ── js/domain/audit-undo.js
+/**
+ * domain/audit-undo · Deshacer un movimiento del historial (consola del administrador).
+ *
+ * Un movimiento trae la lista de cambios que anotó el servidor (supabase/consola.sql):
+ *   { p: ['campo', 'subcampo'], old, new }      un valor cambió
+ *   { p: ['payments'], added: […], removed: […] } en una lista se agregaron/quitaron elementos
+ *
+ * Deshacer aplica lo contrario SOBRE LO ACTUAL, sin pisar lo que pasó después:
+ * - Listas: vuelve a poner lo quitado (si no está) y quita lo agregado (si sigue igual).
+ * - Montos: resta la diferencia (saldo 120.000 → 116.000 se deshace sumando 4.000 a lo que
+ *   haya hoy), así un abono posterior no se pierde.
+ * - Otros valores: vuelven al anterior solo si nadie los cambió después; si no, se avisa.
+ */
+
+/** JSON con las claves ordenadas (el servidor devuelve los objetos con otro orden). */
+function auditCanonical(value) {
+  if (Array.isArray(value)) return `[${value.map(item => auditCanonical(item === undefined ? null : item)).join(',')}]`;
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value).filter(key => value[key] !== undefined).sort().map(key => `${JSON.stringify(key)}:${auditCanonical(value[key])}`).join(',')}}`;
+  }
+  return JSON.stringify(value ?? null);
+}
+
+const sameValue = (a, b) => auditCanonical(a) === auditCanonical(b);
+const IDENTITY = ['id', 'clientId', 'at', 'ts'];
+
+/** Identidad de un elemento de lista (abono, préstamo, gasto…), o null. */
+function auditItemIdentity(item) {
+  if (!item || typeof item !== 'object') return null;
+  const key = IDENTITY.find(name => item[name] !== undefined && item[name] !== null && item[name] !== '');
+  return key ? `${key}:${item[key]}` : null;
+}
+
+/** Las fotos no se guardan en el historial: al volver a poner un elemento se quita la marca «[foto]». */
+function withoutPhotoMarks(value) {
+  if (Array.isArray(value)) return value.map(withoutPhotoMarks);
+  if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).filter(([, item]) => item !== '[foto]').map(([key, item]) => [key, withoutPhotoMarks(item)]));
+  return value;
+}
+
+/** Elementos quitados en un movimiento que no volvieron (no reaparecen entre los agregados). */
+function lostItems(change) {
+  if (!Array.isArray(change?.removed) || !change.removed.length) return [];
+  const added = new Set((change.added || []).map(auditItemIdentity).filter(Boolean));
+  return change.removed.filter(item => {
+    const identity = auditItemIdentity(item);
+    return !identity || !added.has(identity);
+  });
+}
+
+function parentFor(target, path, create) {
+  let node = target;
+  for (const key of path.slice(0, -1)) {
+    if (!node[key] || typeof node[key] !== 'object') {
+      if (!create) return null;
+      node[key] = {};
+    }
+    node = node[key];
+  }
+  return node;
+}
+
+/**
+ * Aplica sobre `target` (cliente o cobro actual) lo contrario de `changes`. Devuelve qué hizo:
+ * { applied: [texto], skipped: [texto] }. Con `dryRun` solo lo calcula.
+ */
+function undoAuditChanges(target, changes, { dryRun = false, label = path => path.join(' › '), format = value => String(value) } = {}) {
+  const applied = [];
+  const skipped = [];
+  const work = dryRun ? JSON.parse(JSON.stringify(target)) : target;
+  (changes || []).forEach(change => {
+    const path = Array.isArray(change?.p) ? change.p : [];
+    if (!path.length) return;
+    const name = label(path);
+    const key = path[path.length - 1];
+    if ('added' in change || 'removed' in change) {
+      const parent = parentFor(work, path, true);
+      if (!Array.isArray(parent[key])) parent[key] = [];
+      const list = parent[key];
+      let removedCount = 0;
+      (change.added || []).forEach(item => {
+        const index = list.findIndex(current => sameValue(current, item));
+        if (index >= 0) { list.splice(index, 1); removedCount += 1; }
+        else skipped.push(`${name}: un elemento agregado ya cambió después; se deja como está`);
+      });
+      let restoredCount = 0;
+      (change.removed || []).forEach(item => {
+        const identity = auditItemIdentity(item);
+        const present = list.some(current => (identity && auditItemIdentity(current) === identity) || sameValue(current, item));
+        if (present) return;
+        list.push(withoutPhotoMarks(item));
+        restoredCount += 1;
+      });
+      if (restoredCount) applied.push(`${name}: se vuelve${restoredCount === 1 ? '' : 'n'} a poner ${restoredCount} elemento${restoredCount === 1 ? '' : 's'}`);
+      if (removedCount) applied.push(`${name}: se quita${removedCount === 1 ? '' : 'n'} ${removedCount} elemento${removedCount === 1 ? '' : 's'} agregado${removedCount === 1 ? '' : 's'}`);
+      return;
+    }
+    const parent = parentFor(work, path, true);
+    const current = parent[key];
+    const before = change.old;
+    const after = change.new;
+    if (typeof before === 'number' && typeof after === 'number' && typeof current === 'number') {
+      if (before === after) return;
+      parent[key] = current + (before - after);
+      applied.push(`${name}: ${format(current, key)} → ${format(parent[key], key)}`);
+      return;
+    }
+    if (sameValue(current ?? null, after ?? null)) {
+      if (before === null || before === undefined) delete parent[key];
+      else parent[key] = withoutPhotoMarks(JSON.parse(JSON.stringify(before)));
+      applied.push(`${name}: vuelve al valor anterior`);
+      return;
+    }
+    if (sameValue(current ?? null, before ?? null)) return; // ya está como antes
+    skipped.push(`${name}: cambió otra vez después; se deja el valor actual`);
+  });
+  return { applied, skipped, result: work };
+}
+
+/** Datos de un registro borrado, reconstruidos desde su movimiento de borrado. */
+function rebuildDeleted(changes) {
+  const data = {};
+  (changes || []).forEach(change => {
+    if (!Array.isArray(change?.p) || change.p.length !== 1 || !('old' in change) || change.old === null) return;
+    data[change.p[0]] = withoutPhotoMarks(change.old);
+  });
+  return data;
 }
 
 // ── js/domain/base-transfer.js
@@ -4226,6 +4727,362 @@ function __mount_adminShellModule() {
   document.querySelectorAll('#admin-global-directory, [data-admin-section]').forEach(button => button.addEventListener('click', closeMenu));
   document.addEventListener('keydown', event => { if (event.key === 'Escape' && document.body.classList.contains('admin-menu-open')) closeMenu(); });
   window.matchMedia('(min-width:768px)').addEventListener('change', event => { if (event.matches) closeMenu(); });
+}
+
+// ── js/features/admin/audit-console.js
+/**
+ * features/admin/audit-console · Consola de movimientos (solo el administrador).
+ *
+ * Muestra el historial que anota el servidor (supabase/consola.sql): quién cambió qué, cuándo
+ * y en qué cobro. Marca lo que conviene revisar:
+ *   - «Se quitó»: un abono, préstamo, gasto… desapareció en ese cambio (posible pisada de un
+ *     equipo con datos viejos, o un borrado a propósito).
+ *   - «Choque resuelto»: dos equipos cambiaron lo mismo a la vez y la app los combinó.
+ * Desde aquí se puede deshacer un cambio (domain/audit-undo), recuperar un cliente borrado o
+ * abrir el cliente para corregirlo a mano. Los arreglos se guardan como cualquier cambio del
+ * administrador y también quedan en el historial.
+ */
+
+
+
+
+
+
+
+
+
+
+
+
+const AUDIT_PAGE = 200;
+
+const FIELD_LABELS = {
+  balance: 'Saldo', payments: 'Abonos', totalPaidAmount: 'Total abonado', paid: 'Pagado', principal: 'Préstamo', total: 'Total a pagar',
+  installment: 'Cuota', installments: 'Cuotas', totalDays: 'Días', frequency: 'Frecuencia', status: 'Estado', late: 'Atrasado',
+  name: 'Nombre', phone: 'Teléfono', address: 'Dirección', addressNotes: 'Indicaciones', interestPercent: 'Interés %', creditStartDate: 'Inicio del crédito',
+  notes: 'Notas', note: 'Nota', route: 'Cobro', location: 'Ubicación', settledAt: 'Pagada el', loanHistory: 'Historial de préstamos', visitHistory: 'Visitas',
+  base: 'Base', baseBank: 'Base en banco', loans: 'Préstamos', loansNew: 'Préstamos del día', loansEntered: 'Préstamos ingresados', collections: 'Cobro',
+  expenses: 'Gastos', otherExpenses: 'Otros gastos', otherExpenseEntries: 'Otros gastos (detalle)', cashDelivered: 'Efectivo entregado',
+  cardsCancelled: 'Cartulinas canceladas', monthlyInsurance: 'Seguros del mes', extraInsurance: 'Seguros adicionales', ledger: 'Libro de caja',
+  cashBox: 'Caja', insuranceCuts: 'Cortes de seguros', weeklyCollections: 'Cobro semanal', weeklyCardCount: 'Cartulinas de la semana',
+  access_enabled: 'Acceso', route_id: 'Cobro asignado', role: 'Rol', username: 'Usuario', data: 'Datos',
+};
+const TABLE_LABELS = { clients: 'Cliente', routes: 'Cobro', pending_requests: 'Solicitud', profiles: 'Trabajador', app_settings: 'Ajuste', route_state: 'Recorrido' };
+const ACTION_LABELS = { insert: 'Creó', update: 'Cambió', delete: 'Borró', merge: 'Choque resuelto' };
+const MONEY_FIELDS = new Set(['balance', 'totalPaidAmount', 'paid', 'principal', 'total', 'installment', 'base', 'baseBank', 'loans', 'collections', 'expenses',
+  'otherExpenses', 'cashDelivered', 'monthlyInsurance', 'weeklyCollections', 'amount', 'value', 'insurance', 'cash']);
+
+let auditRows = [];
+let auditDone = false;
+let auditLoading = false;
+
+const fieldLabel = path => path.map(key => FIELD_LABELS[key] || key).join(' › ');
+
+function shortValue(value, key) {
+  if (value === null || value === undefined || value === '') return '—';
+  if (typeof value === 'number') return MONEY_FIELDS.has(key) ? formatMoney(value) : String(value);
+  if (typeof value === 'boolean') return value ? 'sí' : 'no';
+  if (typeof value === 'string') return value.length > 60 ? `${value.slice(0, 57)}…` : value;
+  if (Array.isArray(value)) return `lista de ${value.length}`;
+  return itemSummary(value);
+}
+
+/** Un abono, préstamo, gasto… en pocas palabras. */
+function itemSummary(item) {
+  if (!item || typeof item !== 'object') return shortValue(item);
+  const amount = [item.amount, item.value, item.principal, item.cash].find(value => typeof value === 'number');
+  const parts = [];
+  if (item.name || item.clientName) parts.push(item.name || item.clientName);
+  if (typeof amount === 'number') parts.push(formatMoney(amount));
+  const when = item.date || item.at || (item.ts ? new Date(item.ts).toISOString() : '');
+  if (when) parts.push(formatWhen(when));
+  if (item.note) parts.push(`«${String(item.note).slice(0, 40)}»`);
+  return parts.join(' · ') || `${Object.keys(item).length} datos`;
+}
+
+function formatWhen(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(String(value))) return date.toLocaleDateString('es-CO', { timeZone: 'UTC', day: '2-digit', month: '2-digit' });
+  return date.toLocaleString('es-CO', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+}
+
+function actorName(row) {
+  if (row.actor_name) return row.actor_name;
+  const worker = personnel.find(item => item.id === row.actor);
+  return worker?.name || worker?.username || (row.actor ? 'Usuario' : 'Servidor');
+}
+
+function recordName(row) {
+  if (row.table_name === 'clients') {
+    const fromChanges = (row.changes || []).find(change => change.p?.[0] === 'name');
+    return clients[row.row_key]?.name || fromChanges?.new || fromChanges?.old || row.row_key;
+  }
+  if (row.table_name === 'routes') return routeSettlements[row.row_key]?.name || row.row_key;
+  if (row.table_name === 'profiles') return personnel.find(item => item.id === row.row_key)?.name || row.row_key;
+  return row.row_key;
+}
+
+const rowLost = row => (row.changes || []).flatMap(change => lostItems(change).map(item => ({ change, item })));
+const isAlert = row => row.action === 'merge' || row.action === 'delete' || rowLost(row).length > 0;
+
+// ── Datos ──
+
+function auditFilters() {
+  const panel = document.querySelector('[data-admin-panel="audit"]');
+  return {
+    route: panel.querySelector('#audit-route').value,
+    actor: panel.querySelector('#audit-actor').value,
+    since: panel.querySelector('#audit-since').value,
+    search: panel.querySelector('#audit-search').value.trim().toLocaleLowerCase('es'),
+    alertsOnly: panel.querySelector('#audit-alerts').checked,
+  };
+}
+
+function matchingClientIds(search) {
+  if (!search) return null;
+  return Object.entries(clients).filter(([id, client]) => id.toLocaleLowerCase('es').includes(search)
+    || String(client?.name || '').toLocaleLowerCase('es').includes(search) || String(client?.id || '').includes(search)).map(([id]) => id).slice(0, 80);
+}
+
+async function fetchAuditPage(before) {
+  const filters = auditFilters();
+  const db = await backend();
+  let query = db.from('audit_log').select('*');
+  if (filters.route) query = query.eq('route_id', filters.route);
+  if (filters.actor) query = query.eq('actor', filters.actor);
+  if (filters.since) query = query.gte('at', new Date(`${filters.since}T00:00:00`).toISOString());
+  const ids = matchingClientIds(filters.search);
+  if (ids) {
+    if (!ids.length) return [];
+    query = query.eq('table_name', 'clients').in('row_key', ids);
+  }
+  if (before) query = query.lt('id', before);
+  const { data, error } = await query.order('id', { ascending: false }).limit(AUDIT_PAGE);
+  if (error) throw error;
+  return data || [];
+}
+
+async function loadAudit({ more = false } = {}) {
+  if (auditLoading) return;
+  auditLoading = true;
+  const status = document.querySelector('#audit-status');
+  status.textContent = 'Cargando movimientos…';
+  try {
+    if (!more) { auditRows = []; auditDone = false; }
+    const before = auditRows.length ? auditRows[auditRows.length - 1].id : null;
+    const page = await fetchAuditPage(before);
+    auditRows.push(...page);
+    auditDone = page.length < AUDIT_PAGE;
+    renderAudit();
+  } catch (error) {
+    status.textContent = /audit_log|relation|does not exist|schema cache/i.test(String(error?.message))
+      ? 'Falta activar el historial en el servidor (supabase/consola.sql).'
+      : `No se pudieron cargar los movimientos: ${backendErrorMessage(error)}`;
+  } finally { auditLoading = false; }
+}
+
+// ── Pantalla ──
+
+function changeLine(change) {
+  const line = document.createElement('li');
+  const name = fieldLabel(change.p || []);
+  const key = (change.p || [])[(change.p || []).length - 1];
+  if ('added' in change || 'removed' in change) {
+    const lost = new Set(lostItems(change));
+    (change.added || []).forEach(item => {
+      const entry = document.createElement('div');
+      entry.className = 'audit-added';
+      entry.textContent = `+ ${name}: ${itemSummary(item)}`;
+      line.append(entry);
+    });
+    (change.removed || []).forEach(item => {
+      const entry = document.createElement('div');
+      entry.className = lost.has(item) ? 'audit-removed is-lost' : 'audit-removed';
+      entry.textContent = `${lost.has(item) ? '⚠ Se quitó' : '− Reemplazado'} · ${name}: ${itemSummary(item)}`;
+      line.append(entry);
+    });
+    return line;
+  }
+  if ('base' in change || 'mine' in change || 'theirs' in change) {
+    line.textContent = `${name}: antes ${shortValue(change.base, key)} · este equipo ${shortValue(change.mine, key)} · el otro ${shortValue(change.theirs, key)}`;
+    return line;
+  }
+  line.textContent = `${name}: ${shortValue(change.old, key)} → ${shortValue(change.new, key)}`;
+  return line;
+}
+
+function auditEntry(row) {
+  const item = document.createElement('article');
+  item.className = 'audit-entry';
+  item.dataset.auditId = row.id;
+  const lost = rowLost(row);
+  item.classList.toggle('is-alert', isAlert(row));
+  const head = document.createElement('header');
+  const title = document.createElement('div');
+  title.className = 'audit-title';
+  const strong = document.createElement('strong');
+  strong.textContent = `${ACTION_LABELS[row.action] || row.action} · ${TABLE_LABELS[row.table_name] || row.table_name} ${recordName(row)}`;
+  const meta = document.createElement('span');
+  const routeName = row.route_id ? (routeSettlements[row.route_id]?.name || row.route_id) : '';
+  meta.textContent = `${formatWhen(row.at)} · ${actorName(row)}${routeName ? ` · ${routeName}` : ''}`;
+  title.append(strong, meta);
+  head.append(title);
+  if (lost.length || row.action === 'merge' || row.action === 'delete') {
+    const tag = document.createElement('span');
+    tag.className = 'audit-tag';
+    tag.textContent = row.action === 'merge' ? 'Choque entre equipos' : row.action === 'delete' ? 'Borrado' : `Se quitó ${lost.length}`;
+    head.append(tag);
+  }
+  item.append(head);
+  const list = document.createElement('ul');
+  list.className = 'audit-changes';
+  const changes = row.changes || [];
+  const shown = row.action === 'insert' || row.action === 'delete' ? changes.filter(change => ['name', 'balance', 'principal', 'route', 'base', 'amount', 'access_enabled'].includes(change.p?.[0])) : changes;
+  shown.slice(0, 30).forEach(change => list.append(changeLine(change)));
+  if (changes.length > shown.length) {
+    const more = document.createElement('li');
+    more.className = 'audit-more';
+    more.textContent = `${changes.length - shown.length} dato(s) más`;
+    list.append(more);
+  }
+  item.append(list);
+  const actions = document.createElement('div');
+  actions.className = 'audit-actions';
+  const editable = ['clients', 'routes'].includes(row.table_name);
+  if (editable && row.action === 'update') actions.append(actionButton('Deshacer este cambio', () => confirmUndo(row)));
+  if (row.table_name === 'clients' && row.action === 'delete' && !clients[row.row_key]) actions.append(actionButton('Recuperar cliente', () => confirmRestoreClient(row)));
+  if (row.table_name === 'clients' && clients[row.row_key]) {
+    actions.append(actionButton('Abrir cliente', () => { enterAdminDirectory(); openClient(row.row_key); }));
+    actions.append(actionButton('Historial del cliente', () => showClientHistory(row.row_key)));
+  }
+  if (actions.childElementCount) item.append(actions);
+  return item;
+}
+
+function actionButton(text, onClick) {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'secondary-button';
+  button.textContent = text;
+  button.addEventListener('click', onClick);
+  return button;
+}
+
+function renderAudit() {
+  const list = document.querySelector('#audit-list');
+  const { alertsOnly } = auditFilters();
+  const rows = alertsOnly ? auditRows.filter(isAlert) : auditRows;
+  list.replaceChildren(...rows.map(auditEntry));
+  const alerts = auditRows.filter(isAlert).length;
+  document.querySelector('#audit-status').textContent = auditRows.length
+    ? `${auditRows.length} movimiento${auditRows.length === 1 ? '' : 's'}${alerts ? ` · ${alerts} para revisar` : ''}${alertsOnly ? ' (mostrando solo los de revisar)' : ''}`
+    : 'Sin movimientos con estos filtros.';
+  document.querySelector('#audit-more').hidden = auditDone || !auditRows.length;
+}
+
+function showClientHistory(clientId) {
+  const search = document.querySelector('#audit-search');
+  search.value = clients[clientId]?.name || clientId;
+  document.querySelector('#audit-route').value = '';
+  document.querySelector('#audit-actor').value = '';
+  document.querySelector('#audit-since').value = '';
+  loadAudit();
+}
+
+// ── Arreglos ──
+
+function targetFor(row) {
+  if (row.table_name === 'clients') return clients[row.row_key] || null;
+  if (row.table_name === 'routes') return routeSettlements[row.row_key] || null;
+  return null;
+}
+
+function afterFix(row) {
+  persistBusinessData();
+  if (row.table_name === 'clients') renderClientRows(row.row_key);
+  else renderClientsBulk(Object.keys(clients));
+  if (routeSettlements[routeSelect.value]) renderAdminRoute(routeSelect.value);
+}
+
+function confirmUndo(row) {
+  const target = targetFor(row);
+  if (!target) { showToast('Ese registro ya no existe en este equipo.'); return; }
+  const preview = undoAuditChanges(target, row.changes, { dryRun: true, label: fieldLabel, format: shortValue });
+  if (!preview.applied.length) {
+    showToast(preview.skipped.length ? 'No hay nada que deshacer: esos datos cambiaron después. Ábrelo y corrígelo a mano.' : 'Ese cambio ya está deshecho.');
+    return;
+  }
+  openCustomModal({
+    title: 'Deshacer este cambio',
+    description: `${TABLE_LABELS[row.table_name]} ${recordName(row)} · ${formatWhen(row.at)} · ${actorName(row)}. Se aplica sobre los datos de hoy, sin borrar lo que pasó después.`,
+    submitLabel: 'Deshacer',
+    fields: [
+      { type: 'note', label: 'Se hará', value: preview.applied.join(' · ') },
+      ...(preview.skipped.length ? [{ type: 'note', label: 'No se toca', value: preview.skipped.join(' · ') }] : []),
+    ],
+    onSubmit: () => {
+      const current = targetFor(row);
+      if (!current) return;
+      const done = undoAuditChanges(current, row.changes, { label: fieldLabel });
+      afterFix(row);
+      showToast(`Cambio deshecho (${done.applied.length} ajuste${done.applied.length === 1 ? '' : 's'}).`);
+      window.setTimeout(() => loadAudit(), 1500);
+    },
+  });
+}
+
+function confirmRestoreClient(row) {
+  const data = rebuildDeleted(row.changes);
+  if (!data.name) { showToast('No hay datos suficientes para recuperar este cliente.'); return; }
+  openCustomModal({
+    title: 'Recuperar cliente',
+    description: `${data.name} se borró el ${formatWhen(row.at)} (${actorName(row)}). Vuelve con sus datos y abonos de ese momento (las fotos de comprobantes no se recuperan).`,
+    submitLabel: 'Recuperar',
+    fields: [{ type: 'note', label: 'Saldo', value: shortValue(data.balance, 'balance') }],
+    onSubmit: () => {
+      if (clients[row.row_key]) { showToast('Ese cliente ya existe.'); return; }
+      clients[row.row_key] = data;
+      afterFix(row);
+      renderClientsBulk(Object.keys(clients));
+      showToast(`${data.name} recuperado.`);
+      window.setTimeout(() => loadAudit(), 1500);
+    },
+  });
+}
+
+// ── Filtros ──
+
+function fillAuditFilters() {
+  const routeFilter = document.querySelector('#audit-route');
+  const selectedRoute = routeFilter.value;
+  routeFilter.replaceChildren(new Option('Todos los cobros', ''), ...Object.entries(routeSettlements)
+    .sort(([, a], [, b]) => String(a?.name).localeCompare(String(b?.name), 'es')).map(([id, route]) => new Option(route?.name || id, id)));
+  routeFilter.value = selectedRoute && routeSettlements[selectedRoute] ? selectedRoute : '';
+  const actorFilter = document.querySelector('#audit-actor');
+  const selectedActor = actorFilter.value;
+  actorFilter.replaceChildren(new Option('Todas las personas', ''), ...personnel.filter(worker => worker.id && !String(worker.id).startsWith('worker-'))
+    .map(worker => new Option(worker.name || worker.username, worker.id)));
+  actorFilter.value = selectedActor;
+}
+
+/** Al abrir la sección: filtros al día y primera página (los últimos movimientos). */
+function renderAuditConsole() {
+  if (!backendEnabled() || state.userRole !== 'admin') return;
+  fillAuditFilters();
+  loadAudit();
+}
+
+/** Registra los listeners del módulo. Se invoca una sola vez desde app.js. */
+function __mount_auditConsoleModule() {
+  const menuItem = document.querySelector('[data-admin-section="audit"]');
+  if (!menuItem) return;
+  // La consola necesita el servidor (el historial vive allá).
+  menuItem.hidden = !backendEnabled();
+  menuItem.addEventListener('click', renderAuditConsole);
+  document.querySelector('#audit-filters').addEventListener('submit', event => { event.preventDefault(); loadAudit(); });
+  document.querySelector('#audit-alerts').addEventListener('change', renderAudit);
+  document.querySelector('#audit-more').addEventListener('click', () => loadAudit({ more: true }));
 }
 
 // ── js/features/admin/backup.js
@@ -7610,7 +8467,14 @@ function __mount_deviceTrustModule() {
  * app se restaura sin pedir nada si es válida, ya pasó la verificación en dos pasos (aal2, o
  * un dispositivo recordado) y el perfil sigue activo (acceso y horario). Se cierra sola tras
  * `security.session.idleHours` horas sin usar la app, y «Cerrar sesión» la cierra de verdad.
+ *
+ * Sin señal: si en este celular ya se ingresó antes con internet, se puede abrir la app (sesión
+ * guardada) o ingresar con usuario y contraseña (se comprueban contra una huella PBKDF2 de la
+ * contraseña guardada en el último ingreso con internet). Se trabaja con la copia local
+ * (core/sync.js) y, al volver la señal, se envía todo. Si el administrador desactiva el acceso
+ * de la persona, al conectarse se borran los datos guardados en ese celular.
  */
+
 
 
 
@@ -7708,8 +8572,9 @@ function setPasswordVisible(visible) {
   toggle.setAttribute('aria-label', visible ? 'Ocultar contraseña' : 'Mostrar contraseña');
 }
 
+let sessionEnding = Promise.resolve();
 function logout() {
-  if (backendEnabled()) endServerSession();
+  if (backendEnabled()) sessionEnding = endServerSession();
   forgetActivity();
   cancelSecondFactor();
   document.querySelector('#login-form').reset();
@@ -7780,6 +8645,194 @@ function checkWorkerSchedule() {
   }
 }
 
+// ── Ingreso sin señal ──
+const OFFLINE_ACCOUNTS_KEY = 'edgecredit-offline-accounts';
+const OFFLINE_SESSION_KEY = 'edgecredit-offline-session';
+const VERIFIER_ITERATIONS = 150000;
+let offlineCredentials = null; // { userId, email, password }: solo en memoria, para reconectar
+let currentServerUser = null;  // { userId, email } de la sesión abierta
+let passwordPromptShown = false;
+let revoking = false;
+
+/** Señal débil: una petición que no responde se trata como «sin señal» tras `ms`. */
+function networkTimeout(promise, ms) {
+  return Promise.race([promise, new Promise((_, reject) => window.setTimeout(() => reject(new Error('network timeout')), ms))]);
+}
+
+const isNetworkError = error => /fetch|network|Failed to|timeout|offline/i.test(String(error?.message || error || ''));
+
+function readOfflineAccounts() {
+  try { return JSON.parse(localStorage.getItem(OFFLINE_ACCOUNTS_KEY) || '{}') || {}; } catch { return {}; }
+}
+
+function writeOfflineAccounts(accounts) {
+  try { localStorage.setItem(OFFLINE_ACCOUNTS_KEY, JSON.stringify(accounts)); } catch { /* opcional */ }
+}
+
+const offlineAccountById = userId => Object.values(readOfflineAccounts()).find(record => record?.userId === userId) || null;
+
+const bytesToBase64 = bytes => btoa(String.fromCharCode(...bytes));
+const base64ToBytes = text => Uint8Array.from(atob(text), char => char.charCodeAt(0));
+
+async function derivePasswordHash(password, salt, iterations) {
+  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(password), 'PBKDF2', false, ['deriveBits']);
+  const bits = await crypto.subtle.deriveBits({ name: 'PBKDF2', hash: 'SHA-256', salt: base64ToBytes(salt), iterations }, key, 256);
+  return bytesToBase64(new Uint8Array(bits));
+}
+
+/**
+ * Tras un ingreso con internet: guarda lo necesario para volver a entrar sin señal en este
+ * celular (perfil, horario y una huella de la contraseña; nunca la contraseña).
+ */
+async function rememberOfflineAccount(account, isAdmin, password) {
+  const email = account.email;
+  if (!email || !account.trustKey) return;
+  const accounts = readOfflineAccounts();
+  const previous = accounts[email]?.userId === account.trustKey ? accounts[email] : null;
+  const record = {
+    userId: account.trustKey, email, login: account.label, isAdmin,
+    worker: isAdmin ? null : { ...account.worker }, workerAccess: { ...security.workerAccess }, savedAt: Date.now(),
+    salt: previous?.salt || null, hash: previous?.hash || null, iterations: previous?.iterations || VERIFIER_ITERATIONS,
+  };
+  if (password) {
+    try {
+      record.salt = bytesToBase64(crypto.getRandomValues(new Uint8Array(16)));
+      record.iterations = VERIFIER_ITERATIONS;
+      record.hash = await derivePasswordHash(password, record.salt, record.iterations);
+    } catch { /* navegador sin crypto.subtle: solo funcionará la sesión guardada */ }
+  }
+  Object.keys(accounts).filter(key => key !== email && accounts[key]?.userId === account.trustKey).forEach(key => delete accounts[key]);
+  accounts[email] = record;
+  writeOfflineAccounts(accounts);
+}
+
+/** Acceso desactivado (o cuenta eliminada): se borra todo lo guardado de esa persona en este celular. */
+async function wipeDevice(userId) {
+  if (!userId) return;
+  await wipeOfflineUser(userId);
+  const accounts = readOfflineAccounts();
+  Object.keys(accounts).filter(key => accounts[key]?.userId === userId).forEach(key => delete accounts[key]);
+  writeOfflineAccounts(accounts);
+  try { if (localStorage.getItem(OFFLINE_SESSION_KEY) === userId) localStorage.removeItem(OFFLINE_SESSION_KEY); } catch { /* opcional */ }
+}
+
+/** El servidor dice que el acceso de quien usa la app fue desactivado: cerrar y borrar. */
+async function revokeThisDevice(userId) {
+  if (revoking) return;
+  revoking = true;
+  try {
+    if (insideApp()) logout(); else sessionEnding = endServerSession();
+    await sessionEnding;
+    await wipeDevice(userId);
+    loginError.textContent = 'Tu sesión se cerró: el administrador desactivó tu acceso. Se borraron los datos guardados en este celular.';
+  } finally { revoking = false; }
+}
+
+/** Ingreso con usuario y contraseña sin señal (solo si ya se ingresó antes en este celular). */
+async function authenticateOffline(loginName, password) {
+  const record = readOfflineAccounts()[usernameToEmail(loginName)];
+  if (!record?.hash) {
+    loginError.textContent = 'Sin señal. La primera vez en este celular necesitas internet para ingresar.';
+    return null;
+  }
+  let hash = '';
+  try { hash = await derivePasswordHash(password, record.salt, record.iterations || VERIFIER_ITERATIONS); }
+  catch { loginError.textContent = 'Sin señal y este navegador no permite comprobar la contraseña sin internet.'; return null; }
+  if (hash !== record.hash) { failLogin('Usuario o contraseña incorrectos.'); return null; }
+  const isAdmin = Boolean(record.isAdmin);
+  if (record.workerAccess) Object.assign(security.workerAccess, record.workerAccess);
+  const worker = isAdmin ? null : { ...record.worker };
+  if (!isAdmin && !workerMayEnter(worker)) return null;
+  if (!(await hasOfflineCopy({ userId: record.userId, role: isAdmin ? 'admin' : 'worker', routeId: routeKey(worker?.route || '') }))) {
+    loginError.textContent = 'Sin señal y sin datos guardados en este celular: conéctate a internet para ingresar.';
+    return null;
+  }
+  offlineCredentials = { userId: record.userId, email: record.email, password };
+  return { isAdmin, account: { label: record.login, trustKey: record.userId, email: record.email, record: {}, worker, offline: true, onFailure: failSecondFactor } };
+}
+
+/**
+ * Al abrir la app sin poder restaurar la sesión del servidor (sin señal, o se ingresó sin señal):
+ * entra con la copia local si la sesión de este celular sigue abierta. true si se encargó.
+ */
+async function restoreOfflineSession() {
+  let userId = null;
+  try { userId = localStorage.getItem(OFFLINE_SESSION_KEY); } catch { /* opcional */ }
+  const record = userId && offlineAccountById(userId);
+  if (!record) return false;
+  if (idleExpired()) {
+    try { localStorage.removeItem(OFFLINE_SESSION_KEY); } catch { /* opcional */ }
+    forgetActivity();
+    loginError.textContent = idleMessage();
+    return true;
+  }
+  const isAdmin = Boolean(record.isAdmin);
+  if (record.workerAccess) Object.assign(security.workerAccess, record.workerAccess);
+  const worker = isAdmin ? null : { ...record.worker };
+  if (!isAdmin && !workerMayEnter(worker)) return true;
+  if (!(await hasOfflineCopy({ userId, role: isAdmin ? 'admin' : 'worker', routeId: routeKey(worker?.route || '') }))) return false;
+  setRestoring(true, 'Abriendo tus datos guardados…');
+  const account = { label: record.login, trustKey: userId, email: record.email, record: {}, worker, offline: true };
+  if (!(await enterWithServer(account, isAdmin))) { setRestoring(false, loginError.textContent); return true; }
+  setRestoring(false);
+  enterApp(account, isAdmin);
+  restoreLastScreen(isAdmin);
+  return true;
+}
+
+/**
+ * Antes de conectarse con el servidor (core/sync): ¿hay una sesión válida del servidor para este
+ * usuario? Si se ingresó sin señal, se abre con la contraseña que quedó en memoria; si no la hay
+ * (se recargó la app), se pide la contraseña. Lanza error si no hay red.
+ */
+async function ensureServerAuth(session) {
+  const db = await backend();
+  const { data, error } = await db.auth.getSession();
+  if (data?.session) {
+    const { data: userData, error: userError } = await db.auth.getUser();
+    if (userData?.user) return userData.user.id === session.userId;
+    if (isNetworkError(userError)) throw userError;
+  } else if (isNetworkError(error)) throw error;
+  if (offlineCredentials?.userId === session.userId) {
+    const { data: signed, error: signError } = await db.auth.signInWithPassword({ email: offlineCredentials.email, password: offlineCredentials.password });
+    if (signed?.user) { offlineCredentials = null; return signed.user.id === session.userId; }
+    if (isNetworkError(signError)) throw signError;
+    offlineCredentials = null; // la contraseña cambió: se pide de nuevo
+  }
+  askPasswordForSync();
+  return false;
+}
+
+/** Volvió la señal pero no hay sesión del servidor: pedir la contraseña sin salir de la app. */
+function askPasswordForSync(force = false) {
+  if (!currentServerUser || !insideApp()) return;
+  if (!force && (passwordPromptShown || !customModal.hidden)) {
+    if (!passwordPromptShown) showToast('Volvió la señal: toca «Ingresa para enviar» arriba para enviar tus cambios.');
+    passwordPromptShown = true;
+    return;
+  }
+  passwordPromptShown = true;
+  openCustomModal({
+    title: 'Vuelve a ingresar tu contraseña',
+    description: 'Volvió la señal. Para enviar lo que registraste sin señal y recibir los cambios, escribe tu contraseña.',
+    submitLabel: 'Enviar cambios',
+    cancelLabel: 'Ahora no',
+    fields: [{ name: 'password', label: 'Contraseña', type: 'password', required: true }],
+    onSubmit: async values => {
+      const db = await backend().catch(() => null);
+      if (!db) { document.querySelector('#custom-modal-error').textContent = 'Sin conexión. Inténtalo cuando tengas señal.'; return false; }
+      const { data, error } = await db.auth.signInWithPassword({ email: currentServerUser.email, password: values.password });
+      if (!data?.user) {
+        document.querySelector('#custom-modal-error').textContent = isNetworkError(error) ? 'Sin conexión. Inténtalo cuando tengas señal.' : 'Contraseña incorrecta.';
+        return false;
+      }
+      showToast('Listo: enviando tus cambios.');
+      retryConnection();
+      return true;
+    },
+  });
+}
+
 // ── Autenticación ──
 
 /** Modo local (sin servidor): credenciales guardadas en este navegador. */
@@ -7818,13 +8871,19 @@ function workerMayEnter(worker) {
 /** Modo servidor: Supabase Auth (contraseña) + MFA nativo de Supabase. */
 async function authenticateWithServer() {
   const loginName = document.querySelector('#login-user').value.trim();
+  const password = document.querySelector('#login-password').value;
   let db;
+  // Sin señal: se entra con la copia de este celular si ya se ingresó antes aquí.
   try { db = await backend(); }
-  catch (error) { loginError.textContent = backendErrorMessage(error); return null; }
-  const { data, error } = await db.auth.signInWithPassword({ email: usernameToEmail(loginName), password: document.querySelector('#login-password').value });
+  catch { return authenticateOffline(loginName, password); }
+  if (!navigator.onLine) return authenticateOffline(loginName, password);
+  let data = null;
+  let error = null;
+  try { ({ data, error } = await networkTimeout(db.auth.signInWithPassword({ email: usernameToEmail(loginName), password }), 15000)); }
+  catch (problem) { error = problem; }
   if (error || !data?.user) {
-    if (/fetch|network/i.test(String(error?.message))) loginError.textContent = backendErrorMessage(error);
-    else failLogin('Usuario o contraseña incorrectos.');
+    if (isNetworkError(error)) return authenticateOffline(loginName, password);
+    failLogin('Usuario o contraseña incorrectos.');
     return null;
   }
   const user = data.user;
@@ -7835,7 +8894,13 @@ async function authenticateWithServer() {
   const { data: settings } = await db.from('app_settings').select('*').eq('key', 'worker_access').maybeSingle();
   if (settings?.data) Object.assign(security.workerAccess, settings.data);
   const worker = isAdmin ? null : serverWorker(profile);
-  if (!isAdmin && !workerMayEnter(worker)) { await endServerSession(); return null; }
+  if (!isAdmin && !workerMayEnter(worker)) {
+    const message = loginError.textContent;
+    await endServerSession();
+    if (worker.accessEnabled === false) await wipeDevice(user.id);
+    loginError.textContent = message;
+    return null;
+  }
   // Verificación en dos pasos con el MFA de Supabase.
   const factors = await db.auth.mfa.listFactors();
   let factorId = factors.data?.totp?.find(factor => factor.status === 'verified')?.id || null;
@@ -7854,7 +8919,7 @@ async function authenticateWithServer() {
       return !verifyError;
     },
   };
-  return { isAdmin, account: { label: profile.username, trustKey: user.id, record: {}, remote, worker, onFailure: failSecondFactor } };
+  return { isAdmin, account: { label: profile.username, trustKey: user.id, email: user.email || usernameToEmail(loginName), password, record: {}, remote, worker, onFailure: failSecondFactor } };
 }
 
 /**
@@ -7862,6 +8927,10 @@ async function authenticateWithServer() {
  * de este dispositivo (scope 'local'): el admin no pierde la sesión de sus otros equipos.
  */
 async function endServerSession() {
+  offlineCredentials = null;
+  currentServerUser = null;
+  passwordPromptShown = false;
+  try { localStorage.removeItem(OFFLINE_SESSION_KEY); } catch { /* opcional */ }
   await stopSync();
   let signedOut = false;
   try { const db = await backend(); const { error } = await db.auth.signOut({ scope: 'local' }); signedOut = !error; } catch { /* sin conexión */ }
@@ -7956,11 +9025,13 @@ async function restoreSavedSession() {
   restoreRetryPending = false;
   try { Object.assign(security.session, JSON.parse(localStorage.getItem(SESSION_SETTINGS_KEY) || 'null') || {}); } catch { /* opcional */ }
   let db;
-  try { db = await backend(); } catch { restoreRetryPending = true; return; }
+  try { db = await backend(); } catch { if (await restoreOfflineSession()) return; restoreRetryPending = true; return; }
   const { data: sessionData, error: sessionError } = await db.auth.getSession();
   const session = sessionData?.session;
   if (!session) {
-    if (sessionError && /fetch|network/i.test(String(sessionError.message))) restoreRetryPending = true;
+    // Se ingresó sin señal (no hay sesión del servidor) o la sesión venció sin señal.
+    if (await restoreOfflineSession()) return;
+    if (sessionError && isNetworkError(sessionError)) restoreRetryPending = true;
     return;
   }
   if (idleExpired()) {
@@ -7973,9 +9044,14 @@ async function restoreSavedSession() {
   try {
     const userId = session.user.id;
     if (!(await secondFactorDone(db, userId))) { await endServerSession(); setRestoring(false); return; }
-    const { data: profile, error: profileError } = await db.from('profiles').select('*').eq('user_id', userId).maybeSingle();
+    const { data: profile, error: profileError } = await networkTimeout(db.from('profiles').select('*').eq('user_id', userId).maybeSingle(), 10000);
     if (profileError) throw profileError;
-    if (!profile || profile.role === 'pending') { await endServerSession(); setRestoring(false); return; }
+    if (!profile || profile.role === 'pending') {
+      await endServerSession();
+      if (!profile) await wipeDevice(userId); // la cuenta ya no existe
+      setRestoring(false);
+      return;
+    }
     const isAdmin = profile.role === 'admin';
     const { data: settings } = await db.from('app_settings').select('*').in('key', ['worker_access', 'session']);
     (settings || []).forEach(row => {
@@ -7983,17 +9059,27 @@ async function restoreSavedSession() {
       if (row.key === 'session' && row.data) { Object.assign(security.session, row.data); try { localStorage.setItem(SESSION_SETTINGS_KEY, JSON.stringify(security.session)); } catch { /* opcional */ } }
     });
     const worker = isAdmin ? null : serverWorker(profile);
-    if (!isAdmin && !workerMayEnter(worker)) { const message = loginError.textContent; await endServerSession(); setRestoring(false, message); return; }
-    const account = { label: profile.username, trustKey: userId, record: {}, worker };
+    if (!isAdmin && !workerMayEnter(worker)) {
+      const message = loginError.textContent;
+      await endServerSession();
+      if (worker.accessEnabled === false) await wipeDevice(userId);
+      setRestoring(false, message);
+      return;
+    }
+    const account = { label: profile.username, trustKey: userId, email: session.user.email, record: {}, worker };
     if (!(await enterWithServer(account, isAdmin))) { setRestoring(false, loginError.textContent); return; }
+    rememberOfflineAccount(account, isAdmin, null);
     setRestoring(false);
     enterApp(account, isAdmin);
     restoreLastScreen(isAdmin);
   } catch (error) {
     // Sin conexión: la sesión se conserva y se reintenta al volver internet.
-    const offline = /fetch|network/i.test(String(error?.message || error));
-    if (offline) restoreRetryPending = true;
-    else await endServerSession();
+    const offline = isNetworkError(error);
+    if (offline) {
+      setRestoring(false);
+      if (await restoreOfflineSession()) return;
+      restoreRetryPending = true;
+    } else await endServerSession();
     setRestoring(false, offline ? 'Sin conexión: tu sesión se restaurará al volver internet.' : `No se pudo restaurar la sesión: ${backendErrorMessage(error)}`);
   }
 }
@@ -8004,10 +9090,12 @@ function serverWorker(profile) {
 
 /** Carga los datos del servidor de una sesión ya verificada. false si no se pudo. */
 async function enterWithServer(account, isAdmin) {
-  loginError.textContent = 'Cargando datos del servidor…';
+  loginError.textContent = account.offline ? 'Abriendo tus datos guardados…' : 'Cargando datos del servidor…';
   try {
     if (!isAdmin) personnel.splice(0, personnel.length, account.worker);
+    currentServerUser = { userId: account.trustKey, email: account.email };
     await startSync({ userId: account.trustKey, role: isAdmin ? 'admin' : 'worker', routeId: routeKey(account.worker?.route || ''), routeName: account.worker?.route });
+    try { localStorage.setItem(OFFLINE_SESSION_KEY, account.trustKey); } catch { /* opcional */ }
     afterServerLoad();
   } catch (error) {
     loginError.textContent = `No se pudieron cargar los datos: ${backendErrorMessage(error)}`;
@@ -8087,14 +9175,17 @@ function __mount_sessionModule() {
     const submit = document.querySelector('#login-submit');
     submit.disabled = true;
     try {
+      // Si se acaba de cerrar sesión, se espera a que termine de cerrarse (y de guardar la copia).
+      await sessionEnding.catch(() => {});
       const result = backendEnabled() ? await authenticateWithServer() : await authenticateLocally();
       if (!result) return;
       const { account, isAdmin } = result;
       // Segundo paso: código de la app de autenticación (o configuración en el primer ingreso).
       // En un dispositivo recordado (ya verificado y vigente) no se vuelve a pedir.
-      const trusted = account.remote
+      // Sin señal: este celular ya pasó la verificación en dos pasos en su último ingreso con internet.
+      const trusted = account.offline || (account.remote
         ? !account.remote.needsEnroll && isAccountTrusted(account.trustKey, 0)
-        : Boolean(account.record.totpSecret) && isAccountTrusted(account.label, account.record.trustVersion);
+        : Boolean(account.record.totpSecret) && isAccountTrusted(account.label, account.record.trustVersion));
       if (TWO_FACTOR_REQUIRED && !trusted) {
         const verified = await requestSecondFactor(account);
         if (!verified) {
@@ -8118,8 +9209,12 @@ function __mount_sessionModule() {
         if (account.remote) await endServerSession();
         return;
       }
-      if (account.remote && !(await enterWithServer(account, isAdmin))) return;
+      const password = account.password;
+      delete account.password;
+      if ((account.remote || account.offline) && !(await enterWithServer(account, isAdmin))) return;
+      if (account.remote) rememberOfflineAccount(account, isAdmin, password);
       enterApp(account, isAdmin);
+      if (account.offline) showToast('Sin señal: trabajas con los datos guardados en este celular. Se enviarán al volver la señal.');
     } finally {
       submit.disabled = false;
     }
@@ -8128,12 +9223,16 @@ function __mount_sessionModule() {
   // Modo servidor: si el admin cambia el acceso del trabajador, se aplica al instante.
   // Sin perfil (cambió el horario): solo se vuelve a revisar el horario.
   setAccessHook(profile => {
+    // Acceso desactivado según el servidor: se cierra y se borran los datos de este celular.
+    if (profile && profile.access_enabled === false && profile.user_id && profile.user_id === currentServerUser?.userId) { revokeThisDevice(profile.user_id); return; }
     if (state.userRole !== 'worker' || !state.activeWorker) return;
     if (profile) state.activeWorker.accessEnabled = profile.access_enabled !== false;
     checkWorkerSchedule();
   });
   // Sin servidor no hay usuarios iniciales que mostrar en otro dispositivo.
   if (backendEnabled()) document.querySelector('.login-demo-hint').hidden = true;
+  setAuthHook(ensureServerAuth);
+  document.querySelectorAll('.sync-status').forEach(badge => badge.addEventListener('click', () => { if (badge.dataset.needsAuth === 'true') askPasswordForSync(true); }));
   if (lockRemainingSeconds() > 0) showLockCountdown();
   window.setInterval(checkWorkerSchedule, 30000);
   // Si el admin bloquea al trabajador desde otra pestaña del mismo navegador, se aplica al instante.
@@ -14850,11 +15949,13 @@ const clientMapModule = { mount: __mount_clientMapModule };
 const evidenceModule = { mount: __mount_evidenceModule };
 const operationsListModule = { mount: __mount_operationsListModule };
 const syncModule = { mount: __mount_syncModule };
+const auditConsoleModule = { mount: __mount_auditConsoleModule };
 /**
  * EdgeCredit · raíz de composición.
  * Monta cada módulo (contenedor) y ejecuta la secuencia de arranque.
  * No contiene lógica de negocio: solo orquesta.
  */
+
 
 
 
@@ -14958,6 +16059,7 @@ const MODULES = [
   clientMapModule,
   evidenceModule,
   operationsListModule,
+  auditConsoleModule,
 ];
 
 /** Secuencia de arranque: hidrata datos, normaliza y pinta el estado inicial. */

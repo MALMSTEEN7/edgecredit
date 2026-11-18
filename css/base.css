@@ -240,3 +240,4 @@ button {
   .sync-status i,
   .sync-indicator span { animation: none !important; }
 }
+.sync-status[data-needs-auth="true"] { cursor: pointer; }

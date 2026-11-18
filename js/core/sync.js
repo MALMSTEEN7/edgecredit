@@ -17,9 +17,13 @@
  * - Nunca se pisa un registro con cambios locales sin enviar: se conserva el local y se envía.
  * - Sin internet, los cambios quedan en una cola (también guardada en el navegador) que se
  *   escribe al instante, así no se pierden si cierran la app; se envían al volver la conexión.
+ * - Copia local por usuario (core/offline-store): los datos y lo que se sabe del servidor se
+ *   guardan en el celular. Al abrir la app se usa esa copia al instante (también sin señal) y,
+ *   con conexión, se trae solo lo que cambió desde la última vez. Cerrar sesión no la borra.
  */
 
 import { backend, backendErrorMessage } from './backend.js';
+import { offlineDelete, offlineGet, offlinePut, offlineSaved, requestPersistentOfflineStorage } from './offline-store.js';
 import { state } from './state.js';
 import { clients, emptyRoute, pendingRequests, personnel, routeDirectory, routeSettlements, security, shared, onPersist } from './store.js';
 import { isWithinSchedule } from '../domain/access-schedule.js';
@@ -58,11 +62,26 @@ let reconnectTimer = null;
 let renderHook = () => {};
 let accessHook = () => {};
 let lastErrorToast = 0;
+let online = false;          // ¿conectado y verificado con el servidor en esta sesión?
+let connecting = null;       // promesa de la conexión en curso
+let authMissing = false;     // con señal pero sin sesión del servidor (ingresó sin señal)
+let authHook = async () => true;
+let snapshotTimer = null;
+
+const SNAPSHOT_VERSION = 1;
+const INCREMENTAL_MAX_AGE_MS = 3 * 24 * 60 * 60 * 1000; // copia más vieja: descarga completa
 
 /** La app registra aquí cómo repintar tras cambios remotos (app.js). */
 export function setRenderHook(fn) { renderHook = fn; }
 /** Se llama cuando cambia el perfil propio (p. ej. el admin desactivó el acceso). */
 export function setAccessHook(fn) { accessHook = fn; }
+/**
+ * Antes de conectarse con el servidor (sobre todo tras entrar sin señal) la sesión revisa que
+ * haya una sesión válida del servidor. Devuelve true si la hay; lanza error si no hay red.
+ */
+export function setAuthHook(fn) { authHook = fn; }
+/** ¿Ya está conectado con el servidor (o trabajando con la copia local)? */
+export function syncOnline() { return online; }
 export function syncActive() { return Boolean(syncSession); }
 /** Rol de la sesión sincronizada ('admin' | 'worker'), o null sin servidor. */
 export function syncRole() { return syncSession?.role || null; }
@@ -179,8 +198,17 @@ function readOutbox() {
   try { return JSON.parse(localStorage.getItem(outboxKey()) || '[]'); } catch { return []; }
 }
 
+/** Hora de la última escritura de la cola (para saber si es más nueva que la copia local). */
+function readOutboxAt() {
+  try { return Number(localStorage.getItem(`${outboxKey()}-at`)) || 0; } catch { return 0; }
+}
+
 function writeOutbox(items) {
-  try { localStorage.setItem(outboxKey(), JSON.stringify(items)); } catch { /* opcional */ }
+  try {
+    localStorage.setItem(outboxKey(), JSON.stringify(items));
+    localStorage.setItem(`${outboxKey()}-at`, String(Date.now()));
+  } catch { /* opcional */ }
+  saveSnapshotSoon();
 }
 
 /** Cambios locales pendientes (lo que difiere de la última versión enviada/recibida). */
@@ -228,7 +256,8 @@ function flush() {
   // Paso síncrono: la cola queda guardada aunque la app se cierre en este instante.
   const pending = pendingItems();
   writeOutbox(pending);
-  if (!pending.length || !navigator.onLine) { updateSyncBadge(); return Promise.resolve(); }
+  // Sin conexión con el servidor: queda en la cola (y en la copia local) hasta conectarse.
+  if (!pending.length || !navigator.onLine || !online) { updateSyncBadge(); return Promise.resolve(); }
   flushing = sendPending(pending).finally(() => { flushing = null; updateSyncBadge(); });
   return flushing;
 }
@@ -354,19 +383,26 @@ function reportError(error) {
 
 function updateSyncBadge() {
   const pending = syncSession ? readOutbox().length : 0;
-  const offline = !navigator.onLine;
+  const offline = !navigator.onLine || (syncSession && !online && !authMissing);
   const reconnecting = !offline && realtime === 'down';
-  const status = offline ? 'offline' : pending ? 'pending' : reconnecting ? 'reconnecting' : 'ok';
+  const status = authMissing && !online ? 'offline' : offline ? 'offline' : pending ? 'pending' : reconnecting ? 'reconnecting' : 'ok';
+  const changes = `${pending} cambio${pending === 1 ? '' : 's'}`;
   const titles = {
-    offline: 'Sin conexión: los cambios se enviarán al volver internet',
-    pending: `${pending} cambio(s) por enviar al servidor`,
+    offline: authMissing && !online
+      ? `Vuelve a ingresar tu contraseña para enviar ${pending ? `${changes} pendientes` : 'y recibir cambios'} (toca aquí)`
+      : `Sin señal: trabajas con la copia guardada en este celular${pending ? `. ${changes} por subir al volver la señal` : ''}`,
+    pending: `${changes} por enviar al servidor`,
     reconnecting: 'Tiempo real desconectado: reconectando. Mientras tanto los datos se actualizan cada minuto',
     ok: realtime === 'live' ? 'Datos sincronizados con el servidor (tiempo real activo)' : 'Datos sincronizados con el servidor',
   };
-  const labels = { offline: 'Sin conexión', pending: 'Enviando…', reconnecting: 'Reconectando…', ok: 'Sincronizado' };
+  const labels = {
+    offline: authMissing && !online ? 'Ingresa para enviar' : pending ? `Sin señal · ${pending} por subir` : 'Sin señal',
+    pending: 'Enviando…', reconnecting: 'Reconectando…', ok: 'Sincronizado',
+  };
   document.querySelectorAll('.sync-status').forEach(badge => {
     badge.hidden = !syncSession;
     badge.dataset.state = status;
+    badge.dataset.needsAuth = authMissing && !online ? 'true' : 'false';
     badge.title = titles[status];
     badge.querySelector('span').textContent = labels[status];
   });
@@ -533,6 +569,28 @@ function mergeThreeWay(base, local, remote, depth) {
 
 const MERGEABLE = ['routes', 'clients', 'route_state'];
 
+/** Resumen corto de un valor para el historial (las listas, solo cuántos elementos tienen). */
+function mergeSummary(value) {
+  if (Array.isArray(value)) return `lista de ${value.length}`;
+  if (isPlainObject(value)) return `${Object.keys(value).length} datos`;
+  return value ?? null;
+}
+
+/**
+ * Choque real: el mismo campo cambió aquí y en otro equipo. Se anota en el historial del
+ * servidor (consola del administrador) sin esperar respuesta; si falla no pasa nada.
+ */
+function logMerge(table, key, routeId, base, mine, theirs) {
+  if (table === 'route_state' || !navigator.onLine || !isPlainObject(mine) || !isPlainObject(theirs)) return;
+  const fields = [...new Set([...Object.keys(mine), ...Object.keys(theirs)])]
+    .filter(field => stable(mine[field]) !== stable(base?.[field]) && stable(theirs[field]) !== stable(base?.[field]) && stable(mine[field]) !== stable(theirs[field]));
+  if (!fields.length) return;
+  const changes = fields.slice(0, 20).map(field => ({ p: [field], base: mergeSummary(base?.[field]), mine: mergeSummary(mine[field]), theirs: mergeSummary(theirs[field]) }));
+  backend().then(db => db.rpc('log_sync_merge', { p_table: table, p_key: String(key), p_route: routeId || null, p_changes: changes }))
+    .then(result => { if (result?.error) console.warn('Historial: choque sin anotar', result.error); })
+    .catch(() => {});
+}
+
 /**
  * Llega un cambio de un registro que aquí también tiene cambios sin enviar. Antes se descartaba
  * lo recibido y se subía la copia de aquí completa, borrando lo del otro equipo (p. ej. la base
@@ -548,6 +606,7 @@ function mergeIntoLocal(table, key, row) {
   if (!local || !isPlainObject(row.data)) return false;
   if (!isPlainObject(base)) base = {}; // sin versión común: se junta todo y en lo distinto gana lo de aquí
   const merged = mergeThreeWay(base, local.data, row.data, 2);
+  logMerge(table, key, row.route_id ?? (table === 'routes' ? key : null), base, local.data, row.data);
   applyRow(table, { ...row, data: merged });
   // Lo conocido pasa a ser la versión del servidor: lo que la combinación conserva de aquí
   // queda pendiente y se envía.
@@ -591,6 +650,7 @@ let pendingChanges = { full: false, clients: new Set() };
 /** Repinta lo que cambió. `full`: repintar todo (descarga completa). */
 function queueRender({ full = false } = {}) {
   if (full) pendingChanges.full = true;
+  saveSnapshotSoon();
   window.clearTimeout(renderTimer);
   renderTimer = window.setTimeout(() => {
     const changes = pendingChanges;
@@ -692,6 +752,7 @@ async function downloadAll() {
   cursor = stamp;
   lastFullSync = Date.now();
   loaded = true;
+  saveSnapshotSoon();
 }
 
 /**
@@ -719,6 +780,7 @@ function restorePending(pending, previousWorkers = [], previousSynced = new Map(
       let base = item.base ?? previousSynced.get(item.id) ?? null;
       try { base = base ? JSON.parse(base)?.data : null; } catch { base = null; }
       const merged = mergeThreeWay(isPlainObject(base) ? base : {}, item.row.data, downloaded.data, 2);
+      logMerge(item.table, item.row[TABLE_KEYS[item.table]], item.row.route_id ?? (item.table === 'routes' ? item.row.id : null), isPlainObject(base) ? base : {}, item.row.data, downloaded.data);
       applyRow(item.table, { ...item.row, data: merged });
       lastSynced.set(item.id, stable(downloaded));
       return;
@@ -732,7 +794,7 @@ function restorePending(pending, previousWorkers = [], previousSynced = new Map(
  * 30 minutos). Primero envía lo pendiente; los errores se reintentan en el siguiente ciclo.
  */
 async function fullSync() {
-  if (!syncSession || syncing || !navigator.onLine) return;
+  if (!syncSession || syncing || !online || !navigator.onLine) return;
   if (Date.now() - lastFullSync < FULL_SYNC_DEBOUNCE_MS) return;
   syncing = true;
   try {
@@ -746,9 +808,17 @@ async function fullSync() {
 
 /** Refresco incremental: filas cambiadas desde el cursor (con margen) y borrados. */
 async function pullChanges() {
-  if (!syncSession || syncing || !loaded || !cursor || !navigator.onLine) return;
+  if (!syncSession || syncing || !online || !loaded || !cursor || !navigator.onLine) return;
   syncing = true;
   try {
+    await pullSince();
+  } catch { /* se reintenta en el siguiente ciclo */ }
+  finally { syncing = false; updateSyncBadge(); }
+}
+
+/** Trae lo cambiado desde el cursor y lo aplica. Lanza error si falla la descarga. */
+async function pullSince() {
+  {
     const db = await backend();
     const since = new Date(Date.parse(cursor) - OVERLAP_MS).toISOString();
     // La hora del servidor se toma al empezar: lo que se confirme mientras se descarga
@@ -774,8 +844,8 @@ async function pullChanges() {
     results.forEach(result => (result.data || []).forEach(row => { changed = receiveRow(result.table, row) || changed; }));
     cursor = stamp;
     if (changed) queueRender();
-  } catch { /* se reintenta en el siguiente ciclo */ }
-  finally { syncing = false; updateSyncBadge(); }
+    saveSnapshotSoon();
+  }
 }
 
 function schedulePoll() {
@@ -786,7 +856,8 @@ function schedulePoll() {
 
 async function pollTick() {
   if (syncSession && !document.hidden && navigator.onLine) {
-    if (Date.now() - lastFullSync >= FULL_SYNC_EVERY_MS) await fullSync();
+    if (!online) await connectOnline();
+    else if (Date.now() - lastFullSync >= FULL_SYNC_EVERY_MS) await fullSync();
     else await pullChanges();
   }
   schedulePoll();
@@ -856,15 +927,207 @@ function setRealtime(status) {
 
 // ── Ciclo de vida ──
 
-/** Inicia la sincronización tras un inicio de sesión exitoso (o una sesión restaurada). */
+// ── Copia local (core/offline-store) ──
+
+const snapshotKey = userId => `snapshot:${userId}`;
+
+/** Foto de los datos y de lo que se sabe del servidor (todo en un mismo instante). */
+function buildSnapshot() {
+  return {
+    v: SNAPSHOT_VERSION,
+    savedAt: Date.now(),
+    outboxAt: readOutboxAt(),
+    session: { ...syncSession },
+    cursor,
+    lastFullSync,
+    synced: JSON.stringify([...lastSynced]),
+    versions: JSON.stringify([...versions]),
+    data: JSON.stringify({
+      clients, routeSettlements, personnel, pendingRequests, routeDirectory, shared,
+      dailyRouteOrder: state.dailyRouteOrder, dailyRouteDates: state.dailyRouteDates, clientLibraryOrder: state.clientLibraryOrder,
+      collectedRouteClients: state.collectedRouteClients, routeVisitOutcomes: state.routeVisitOutcomes,
+      workerAccess: security.workerAccess, session: security.session,
+    }),
+  };
+}
+
+/** Guarda la copia ya (al ocultar o cerrar la app, al cerrar sesión). */
+function saveSnapshot() {
+  window.clearTimeout(snapshotTimer);
+  snapshotTimer = null;
+  if (!syncSession || !loaded) return;
+  try { offlinePut(snapshotKey(syncSession.userId), buildSnapshot()); } catch (error) { console.warn('Copia local sin guardar', error); }
+}
+
+/** Guarda la copia en unos segundos (agrupa muchos cambios seguidos en una sola escritura). */
+function saveSnapshotSoon() {
+  if (!syncSession || !loaded || snapshotTimer) return;
+  snapshotTimer = window.setTimeout(saveSnapshot, syncSession.role === 'admin' ? 4000 : 1500);
+}
+
+function usableSnapshot(snap, { userId, role, routeId }) {
+  if (!snap || snap.v !== SNAPSHOT_VERSION || snap.session?.userId !== userId || snap.session?.role !== role) return false;
+  return role === 'admin' || snap.session.routeId === routeId;
+}
+
+/** ¿Hay copia local de este usuario? (para entrar sin señal) */
+export async function hasOfflineCopy({ userId, role, routeId }) {
+  return usableSnapshot(await offlineGet(snapshotKey(userId)), { userId, role, routeId });
+}
+
+function replaceList(target, items) {
+  target.splice(0, target.length, ...(Array.isArray(items) ? items : []));
+}
+
+/** Carga la copia local en la app (en lugar de descargar todo). */
+function applySnapshot(snap) {
+  const data = JSON.parse(snap.data);
+  replaceObject(clients, data.clients || {});
+  Object.keys(routeSettlements).forEach(key => delete routeSettlements[key]);
+  Object.entries(data.routeSettlements || {}).forEach(([key, route]) => { routeSettlements[key] = { ...emptyRoute(route?.name || key), ...route }; });
+  // El trabajador ya trae su perfil (del servidor o de su último ingreso).
+  if (syncSession.role === 'admin' || !personnel.length) replaceList(personnel, data.personnel);
+  replaceList(pendingRequests, data.pendingRequests);
+  replaceList(routeDirectory, data.routeDirectory);
+  replaceObject(shared.workBases, data.shared?.workBases || {});
+  replaceObject(shared.workerLocations, data.shared?.workerLocations || {});
+  replaceObject(state.dailyRouteOrder, data.dailyRouteOrder || {});
+  replaceObject(state.dailyRouteDates, data.dailyRouteDates || {});
+  replaceObject(state.clientLibraryOrder, data.clientLibraryOrder || {});
+  replaceObject(state.collectedRouteClients, data.collectedRouteClients || {});
+  replaceObject(state.routeVisitOutcomes, data.routeVisitOutcomes || {});
+  if (data.workerAccess) Object.assign(security.workerAccess, data.workerAccess);
+  if (data.session) Object.assign(security.session, data.session);
+  lastSynced = new Map(JSON.parse(snap.synced || '[]'));
+  versions = new Map(JSON.parse(snap.versions || '[]'));
+  cursor = snap.cursor || null;
+  lastFullSync = snap.lastFullSync || 0;
+  loaded = true;
+}
+
+/**
+ * La cola de salida se escribe al instante; la copia local, unos segundos después. Si la app se
+ * cerró entre las dos, la cola es más nueva: sus registros se aplican (gana lo de aquí) con la
+ * versión del servidor que conocían, y al conectarse se combinan con lo del servidor.
+ */
+function applyNewerOutbox(snap) {
+  const items = readOutbox();
+  if (!items.length || readOutboxAt() <= (snap.outboxAt || 0)) return;
+  items.forEach(item => {
+    if (!TABLE_KEYS[item.table]) return;
+    if (item.op === 'delete') {
+      applyRow(item.table, { [TABLE_KEYS[item.table]]: item.key }, true);
+      lastSynced.set(item.id, PENDING_DELETE);
+      return;
+    }
+    if (item.table === 'profiles') {
+      const index = personnel.findIndex(worker => worker.id === item.row.user_id);
+      if (index < 0) return;
+      replaceObject(personnel[index], { ...personnel[index], ...item.row.data, id: item.row.user_id, accessEnabled: item.row.access_enabled !== false });
+    } else applyRow(item.table, item.row);
+    if (item.base) lastSynced.set(item.id, item.base); else lastSynced.delete(item.id);
+  });
+}
+
+/** Borra la copia local y la cola de un usuario (acceso desactivado por el administrador). */
+export async function wipeOfflineUser(userId) {
+  if (!userId) return;
+  await offlineDelete(snapshotKey(userId));
+  try {
+    localStorage.removeItem(`edgecredit-outbox-${userId}`);
+    localStorage.removeItem(`edgecredit-outbox-${userId}-at`);
+  } catch { /* opcional */ }
+}
+
+// ── Conexión con el servidor ──
+
+/**
+ * Conecta la sesión (que ya trabaja con la copia local) con el servidor: revisa la sesión y el
+ * acceso, trae lo que cambió y envía lo pendiente. Sin señal no hace nada: se reintenta al
+ * volver internet y en cada ciclo de revisión.
+ */
+function connectOnline() {
+  if (!syncSession || online) return Promise.resolve();
+  if (connecting) return connecting;
+  if (!navigator.onLine) { updateSyncBadge(); return Promise.resolve(); }
+  const session = syncSession;
+  connecting = (async () => {
+    try {
+      const authorized = await authHook(session);
+      if (syncSession !== session) return;
+      authMissing = !authorized;
+      if (!authorized) return;
+      const db = await backend();
+      if (!(await workerMayDownload(db))) return;
+      if (syncSession !== session || syncing) return;
+      syncing = true;
+      try {
+        await flushing;
+        const recent = cursor && Date.now() - Date.parse(cursor) < INCREMENTAL_MAX_AGE_MS;
+        if (recent) {
+          await pullSince();
+          lastFullSync = Date.now();
+        } else {
+          await downloadAll();
+          queueRender({ full: true });
+        }
+      } finally { syncing = false; }
+      if (syncSession !== session) return;
+      online = true;
+      saveSnapshotSoon();
+      subscribeRealtime();
+      scheduleFlush(50);
+    } catch { /* sin red o error del servidor: se reintenta en el siguiente ciclo */ }
+    finally { connecting = null; updateSyncBadge(); }
+  })();
+  return connecting;
+}
+
+/** Tras volver a ingresar la contraseña (sesión del servidor nueva): conectar ya. */
+export function retryConnection() {
+  authMissing = false;
+  updateSyncBadge();
+  return connectOnline();
+}
+
+// ── Ciclo de vida ──
+
+/**
+ * Inicia la sincronización tras un inicio de sesión exitoso (o una sesión restaurada).
+ * Con copia local en este celular entra al instante con ella (también sin señal) y se conecta
+ * en segundo plano. Sin copia descarga todo (necesita internet). Devuelve { offline } si entró
+ * con la copia sin estar conectado todavía.
+ */
 export async function startSync({ userId, role, routeId, routeName }) {
   syncSession = { userId, role, routeId, routeName };
+  const session = syncSession;
   loaded = false;
+  online = false;
+  authMissing = false;
   cursor = null;
   lastFullSync = 0;
   lastSynced = new Map();
+  versions = new Map();
   realtimeFailed = false;
   reconnectAttempt = 0;
+  requestPersistentOfflineStorage();
+  const snap = await offlineGet(snapshotKey(userId));
+  if (syncSession !== session) throw new Error('Sesión cerrada.');
+  if (usableSnapshot(snap, session)) {
+    try {
+      applySnapshot(snap);
+      applyNewerOutbox(snap);
+      schedulePoll();
+      updateSyncBadge();
+      connectOnline(); // en segundo plano: la app ya puede mostrarse con la copia local
+      return { offline: true };
+    } catch (error) {
+      console.warn('Copia local dañada: se descarga todo', error);
+      loaded = false;
+      lastSynced = new Map();
+      versions = new Map();
+    }
+  }
   syncing = true;
   try {
     await downloadAll();
@@ -874,30 +1137,44 @@ export async function startSync({ userId, role, routeId, routeName }) {
   } finally {
     syncing = false;
   }
+  online = true;
+  saveSnapshot();
   subscribeRealtime();
   schedulePoll();
   // Cambios que quedaron sin enviar en una sesión anterior en este dispositivo.
   scheduleFlush(readOutbox().length ? 50 : 300);
   updateSyncBadge();
+  return { offline: false };
 }
 
 export async function stopSync() {
-  if (syncSession) {
+  const ending = syncSession;
+  if (ending) {
     // flush() guarda la cola en el acto (antes de cualquier espera) y envía lo que pueda.
     window.clearTimeout(flushTimer);
     await flush().catch(() => {});
     await flushing;
+    // La copia local queda guardada (cerrar sesión no borra los datos del celular).
+    if (syncSession === ending) saveSnapshot();
+    await offlineSaved();
+    // Mientras se cerraba ya empezó otra sesión (salir y entrar enseguida): no se toca.
+    if (syncSession !== ending) return;
   }
   window.clearTimeout(flushTimer);
   window.clearTimeout(pollTimer);
   window.clearTimeout(reconnectTimer);
+  window.clearTimeout(snapshotTimer);
+  snapshotTimer = null;
   channelGen += 1;
   if (channel) removeChannel(await backend().catch(() => null));
   syncSession = null;
   loaded = false;
+  online = false;
+  authMissing = false;
   cursor = null;
   realtime = 'off';
   lastSynced = new Map();
+  versions = new Map();
   updateSyncBadge();
 }
 
@@ -906,6 +1183,7 @@ export function mount() {
   window.addEventListener('online', () => {
     updateSyncBadge();
     if (!syncSession) return;
+    if (!online) { connectOnline(); return; }
     scheduleFlush(100);
     if (realtimeFailed) { reconnectAttempt = 0; subscribeRealtime(); }
     lastFullSync = 0;
@@ -914,13 +1192,14 @@ export function mount() {
   window.addEventListener('offline', updateSyncBadge);
   document.addEventListener('visibilitychange', () => {
     if (!syncSession) return;
-    if (document.hidden) { hiddenSince = Date.now(); flushNow(); return; }
+    if (document.hidden) { hiddenSince = Date.now(); flushNow(); saveSnapshot(); return; }
     const away = hiddenSince ? Date.now() - hiddenSince : 0;
     hiddenSince = 0;
+    if (!online) { connectOnline(); schedulePoll(); return; }
     if (away > HIDDEN_FULL_SYNC_MS) { lastFullSync = 0; fullSync(); }
     else if (away > 0) pullChanges();
     schedulePoll();
   });
   // Al cerrar la app o cambiar de página: la cola queda guardada y se intenta enviar.
-  window.addEventListener('pagehide', flushNow);
+  window.addEventListener('pagehide', () => { flushNow(); saveSnapshot(); });
 }
