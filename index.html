@@ -34,7 +34,7 @@
   <link rel="icon" href="icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="icon-192.png">
   <meta name="apple-mobile-web-app-capable" content="yes">
-  <link rel="stylesheet" id="app-styles" href="dist/styles.bundle.css?v=a9ff197f8f">
+  <link rel="stylesheet" id="app-styles" href="dist/styles.bundle.css?v=ea6df94c75">
   <script>
     // Si hay una sesión guardada, al recargar se muestra «Cargando tu sesión…» en vez del
     // formulario de ingreso mientras la app la restaura (features/auth/session.js).
@@ -402,18 +402,22 @@
         <div class="personnel-list" id="personnel-list"></div>
       </section>
       <section class="admin-content admin-section-panel" data-admin-panel="audit" hidden>
-        <div class="admin-section-intro"><div><p class="eyebrow">SOLO ADMINISTRADOR</p><h2>Movimientos</h2><p>Cada cambio hecho en cada cobro: quién, cuándo y qué. Lo marcado en rojo conviene revisarlo (algo se quitó o dos equipos chocaron).</p></div></div>
-        <form class="audit-filters" id="audit-filters">
-          <label>Cobro<select id="audit-route"></select></label>
-          <label>Persona<select id="audit-actor"></select></label>
-          <label>Desde<input id="audit-since" type="date"></label>
-          <label>Cliente<input id="audit-search" type="search" placeholder="Nombre o cédula" autocomplete="off"></label>
-          <label class="audit-alerts-toggle"><input id="audit-alerts" type="checkbox"> Solo para revisar</label>
-          <button class="primary-button" type="submit">Buscar</button>
-        </form>
-        <p class="audit-status" id="audit-status" aria-live="polite"></p>
-        <div class="audit-list" id="audit-list"></div>
-        <button class="secondary-button audit-more" id="audit-more" type="button" hidden>Cargar más</button>
+        <div class="term" aria-label="Consola de movimientos">
+          <div class="term-bar">
+            <span class="term-dots" aria-hidden="true"><i></i><i></i><i></i></span>
+            <strong class="term-title">movimientos · <span id="audit-route-name">—</span></strong>
+            <span class="term-status" id="audit-status" aria-live="polite"></span>
+          </div>
+          <div class="term-tools">
+            <button type="button" id="audit-prev" aria-label="Día anterior">◀</button>
+            <button type="button" id="audit-day-label" title="Volver a hoy">HOY</button>
+            <button type="button" id="audit-next" aria-label="Día siguiente">▶</button>
+            <input id="audit-search" type="search" placeholder="buscar cliente, trabajador o monto…" autocomplete="off" aria-label="Buscar">
+            <button type="button" id="audit-alerts" aria-pressed="false">⚠ solo para revisar</button>
+          </div>
+          <div class="term-screen" id="audit-screen" role="log" aria-live="polite"></div>
+          <p class="term-help">Muestra el cobro elegido en el menú. Toca una línea para deshacer, volver a poner, editar o abrir el cliente.</p>
+        </div>
       </section>
       <section class="admin-content admin-section-panel" data-admin-panel="settings" hidden>
         <div class="admin-section-intro"><div><p class="eyebrow">CUENTA Y PREFERENCIAS</p><h2>Configuración</h2><p>Apariencia del sistema y seguridad de la cuenta del administrador.</p></div></div>
@@ -547,7 +551,7 @@
     // al cambiar el sello, el navegador descarga el JS/CSS nuevo en vez de usar su caché.
     // Para desarrollar con los módulos sueltos, abre index.html?dev desde un servidor local.
     (() => {
-      const APP_VERSION = 'a9ff197f8f';
+      const APP_VERSION = 'ea6df94c75';
       const dev = new URLSearchParams(location.search).has('dev') && location.protocol !== 'file:';
       if (dev) {
         document.getElementById('app-styles').href = 'styles.css';
