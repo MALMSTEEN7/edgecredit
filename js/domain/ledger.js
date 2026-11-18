@@ -185,6 +185,64 @@ export function carriedBase(route, today = localDateISO(), transfersOn = () => 0
 }
 
 /**
+ * Cierre (fecha del libro) en el que entró un abono, o null si sigue pendiente de cierre.
+ * Mismas reglas que «Abonos del día»: entra al primer cierre posterior a su fecha, o al de
+ * su mismo día si se registró antes de cerrar.
+ */
+export function closureOfPayment(route, payment) {
+  ensureLedger(route);
+  if (!payment?.date) return null;
+  const closed = Object.keys(route.ledger).filter(date => route.ledger[date]?.closed).sort();
+  for (const date of closed) {
+    if (payment.date < date) return date;
+    if (payment.date === date) {
+      const ts = Number(route.ledger[date].closedTs) || 0;
+      if (payment.backdated || !ts || !payment.at || Date.parse(payment.at) <= ts) return date;
+    }
+  }
+  return null;
+}
+
+/**
+ * El admin corrigió un abono que ya entró a un cierre (forma de pago, monto, fecha o lo
+ * borró). Si cambian las transferencias de ese cierre, se corrigen en el libro y, si la base
+ * de hoy salió de ese cierre, también la base: lo que pasa a transferencia está en el banco
+ * y sale de la base; lo que pasa a efectivo vuelve a la base. `before`/`after`: el abono
+ * antes y después (null si no existe). Devuelve la lista de ajustes [{ date, delta, base }].
+ */
+export function adjustClosedTransfers(route, before, after) {
+  if (!route) return [];
+  ensureLedger(route);
+  const changes = new Map();
+  const add = (payment, sign) => {
+    if (!payment || payment.method !== 'transfer') return;
+    const date = closureOfPayment(route, payment);
+    if (date) changes.set(date, (changes.get(date) || 0) + sign * (Number(payment.amount) || 0));
+  };
+  add(before, -1);
+  add(after, 1);
+  const latest = Object.keys(route.ledger).filter(date => route.ledger[date]?.closed).sort().at(-1);
+  const adjustments = [];
+  changes.forEach((delta, date) => {
+    if (!delta) return;
+    const record = route.ledger[date];
+    record.transfers = Math.max(0, Number(record.transfers || 0) + delta);
+    const adjustment = { date, delta, base: false };
+    adjustments.push(adjustment);
+    // La base actual salió de ese cierre (el sábado no: la base del lunes la asigna el admin).
+    const [year, month, day] = date.split('-').map(Number);
+    const saturday = new Date(year, month - 1, day).getDay() === 6;
+    if (date !== latest || saturday) return;
+    route.base = Math.max(0, Number(route.base || 0) - delta);
+    adjustment.base = true;
+    if (route.lastClosure?.date === date && route.lastClosure.carriedBase !== undefined) {
+      route.lastClosure.carriedBase = Math.max(0, Number(route.lastClosure.carriedBase || 0) - delta);
+    }
+  });
+  return adjustments;
+}
+
+/**
  * Base para el lunes que el admin dejó asignada el sábado `saturdayISO` (0 si no dejó ninguna).
  * Es la única forma de que un trabajador empiece la semana con base.
  */

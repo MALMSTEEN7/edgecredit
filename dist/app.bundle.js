@@ -2200,6 +2200,64 @@ function carriedBase(route, today = localDateISO(), transfersOn = () => 0) {
 }
 
 /**
+ * Cierre (fecha del libro) en el que entró un abono, o null si sigue pendiente de cierre.
+ * Mismas reglas que «Abonos del día»: entra al primer cierre posterior a su fecha, o al de
+ * su mismo día si se registró antes de cerrar.
+ */
+function closureOfPayment(route, payment) {
+  ensureLedger(route);
+  if (!payment?.date) return null;
+  const closed = Object.keys(route.ledger).filter(date => route.ledger[date]?.closed).sort();
+  for (const date of closed) {
+    if (payment.date < date) return date;
+    if (payment.date === date) {
+      const ts = Number(route.ledger[date].closedTs) || 0;
+      if (payment.backdated || !ts || !payment.at || Date.parse(payment.at) <= ts) return date;
+    }
+  }
+  return null;
+}
+
+/**
+ * El admin corrigió un abono que ya entró a un cierre (forma de pago, monto, fecha o lo
+ * borró). Si cambian las transferencias de ese cierre, se corrigen en el libro y, si la base
+ * de hoy salió de ese cierre, también la base: lo que pasa a transferencia está en el banco
+ * y sale de la base; lo que pasa a efectivo vuelve a la base. `before`/`after`: el abono
+ * antes y después (null si no existe). Devuelve la lista de ajustes [{ date, delta, base }].
+ */
+function adjustClosedTransfers(route, before, after) {
+  if (!route) return [];
+  ensureLedger(route);
+  const changes = new Map();
+  const add = (payment, sign) => {
+    if (!payment || payment.method !== 'transfer') return;
+    const date = closureOfPayment(route, payment);
+    if (date) changes.set(date, (changes.get(date) || 0) + sign * (Number(payment.amount) || 0));
+  };
+  add(before, -1);
+  add(after, 1);
+  const latest = Object.keys(route.ledger).filter(date => route.ledger[date]?.closed).sort().at(-1);
+  const adjustments = [];
+  changes.forEach((delta, date) => {
+    if (!delta) return;
+    const record = route.ledger[date];
+    record.transfers = Math.max(0, Number(record.transfers || 0) + delta);
+    const adjustment = { date, delta, base: false };
+    adjustments.push(adjustment);
+    // La base actual salió de ese cierre (el sábado no: la base del lunes la asigna el admin).
+    const [year, month, day] = date.split('-').map(Number);
+    const saturday = new Date(year, month - 1, day).getDay() === 6;
+    if (date !== latest || saturday) return;
+    route.base = Math.max(0, Number(route.base || 0) - delta);
+    adjustment.base = true;
+    if (route.lastClosure?.date === date && route.lastClosure.carriedBase !== undefined) {
+      route.lastClosure.carriedBase = Math.max(0, Number(route.lastClosure.carriedBase || 0) - delta);
+    }
+  });
+  return adjustments;
+}
+
+/**
  * Base para el lunes que el admin dejó asignada el sábado `saturdayISO` (0 si no dejó ninguna).
  * Es la única forma de que un trabajador empiece la semana con base.
  */
@@ -8733,6 +8791,13 @@ async function captureClientLocation() {
     : `Ubicación de ${client.name} guardada (± ${client.location.accuracy} m).`);
 }
 
+/** Aviso al admin cuando corregir un abono ya cerrado cambió las transferencias (y la base). */
+function notifyClosedTransfers(adjustments) {
+  if (!adjustments.length) return;
+  const text = adjustments.map(({ date, delta }) => `${delta > 0 ? '+' : '−'}${formatMoney(Math.abs(delta))} en transferencias del cierre del ${formatDate(date)}`).join(' · ');
+  showToast(`${text}.${adjustments.some(item => item.base) ? ' La base de hoy se corrigió.' : ''}`);
+}
+
 function openClient(clientId) {
   const client = clients[clientId];
   if (!client) return;
@@ -9318,7 +9383,7 @@ function __mount_clientDetailModule() {
     if (button.dataset.paymentAction === 'delete') {
       openCustomModal({
         title: 'Eliminar abono', description: `Se eliminará el abono de ${formatDate(client.payments[index].date)}.`, submitLabel: 'Eliminar',
-        onSubmit: () => { const amount = Number(client.payments[index].amount) || 0; client.balance += amount; client.payments.splice(index, 1); if (routeSettlements[client.route]) syncRouteCollections(clients, { [client.route]: routeSettlements[client.route] }); updatePaidAmountTotal(client); client.settledAt = Number(client.balance) <= 0 ? client.settledAt || localDateISO() : null; syncCancelledCard(client, state.activeClient); persistBusinessData(); renderClientRows(state.activeClient); openClient(state.activeClient); }
+        onSubmit: () => { const amount = Number(client.payments[index].amount) || 0; const removed = { ...client.payments[index] }; client.balance += amount; client.payments.splice(index, 1); notifyClosedTransfers(adjustClosedTransfers(routeSettlements[client.route], removed, null)); if (routeSettlements[client.route]) syncRouteCollections(clients, { [client.route]: routeSettlements[client.route] }); updatePaidAmountTotal(client); client.settledAt = Number(client.balance) <= 0 ? client.settledAt || localDateISO() : null; syncCancelledCard(client, state.activeClient); persistBusinessData(); renderClientRows(state.activeClient); openClient(state.activeClient); }
       });
     } else {
       const payment = client.payments[index];
@@ -9344,6 +9409,7 @@ function __mount_clientDetailModule() {
           if (amount > oldAmount + Number(client.balance)) { customModalError.textContent = 'El monto corregido supera el saldo disponible.'; return false; }
           const date = String(values.date || '');
           if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || date > today) { customModalError.textContent = 'Elige una fecha válida (no puede ser posterior a hoy).'; return false; }
+          const before = { ...payment };
           client.balance = Math.max(0, Number(client.balance) + oldAmount - amount);
           payment.amount = amount;
           payment.method = values.method === 'transfer' ? 'transfer' : 'cash';
@@ -9356,6 +9422,8 @@ function __mount_clientDetailModule() {
             sortPaymentsByDate(client);
             reassignPaymentCycles(client);
           }
+          // Si el abono ya entró a un cierre, sus transferencias y la base que salió de él se corrigen.
+          notifyClosedTransfers(adjustClosedTransfers(routeSettlements[client.route], before, { ...payment }));
           if (routeSettlements[client.route]) syncRouteCollections(clients, { [client.route]: routeSettlements[client.route] });
           client.settledAt = client.balance <= 0 ? client.settledAt || localDateISO() : null;
           updatePaidAmountTotal(client); syncCancelledCard(client, state.activeClient); persistBusinessData(); renderClientRows(state.activeClient); openClient(state.activeClient);
