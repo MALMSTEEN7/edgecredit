@@ -25,7 +25,7 @@
 import { backend, backendErrorMessage } from './backend.js';
 import { offlineDelete, offlineGet, offlinePut, offlineSaved, requestPersistentOfflineStorage } from './offline-store.js';
 import { state } from './state.js';
-import { clients, emptyRoute, pendingRequests, personnel, routeDirectory, routeSettlements, security, shared, onPersist } from './store.js';
+import { clients, emptyRoute, pendingRequests, personnel, requestedDeletes, routeDirectory, routeSettlements, security, shared, onPersist } from './store.js';
 import { isWithinSchedule } from '../domain/access-schedule.js';
 import { routeKey } from '../shared/format.js';
 import { showToast } from '../ui/toast.js';
@@ -222,13 +222,24 @@ function pendingItems() {
       present.add(id);
       if (lastSynced.get(id) !== stable(row)) pending.push({ table, op: 'upsert', row, id, base: lastSynced.get(id) || null });
     });
-    // Borrados: solo el admin elimina clientes, rutas (y su estado) y solicitudes.
+    // Borrados: solo el admin, y solo lo que se pidió borrar a propósito (eliminar un cliente,
+    // quitar un cobro sin uso) o un borrado que quedó pendiente en la cola. Antes se borraba en el
+    // servidor todo lo que faltara en este equipo: un equipo con datos incompletos llegó a borrar
+    // clientes y el estado de casi todas las rutas.
     if (syncSession.role === 'admin' && DELETABLE.includes(table)) {
-      [...lastSynced.keys()].filter(id => id.startsWith(`${table}:`) && !present.has(id))
+      [...lastSynced.keys()].filter(id => id.startsWith(`${table}:`) && !present.has(id) && deleteAllowed(table, id))
         .forEach(id => pending.push({ table, op: 'delete', key: id.slice(table.length + 1), id }));
     }
   });
   return pending;
+}
+
+/** ¿Este borrado se pidió a propósito? (route_state se borra junto con su cobro). */
+function deleteAllowed(table, id) {
+  if (lastSynced.get(id) === PENDING_DELETE) return true;
+  const key = id.slice(table.length + 1);
+  if (table === 'route_state') return requestedDeletes.has(`routes:${key}`);
+  return requestedDeletes.has(id);
 }
 
 function scheduleFlush(delay = 400) {
@@ -301,7 +312,7 @@ async function sendPending(pending) {
       if (deletes.length) {
         const { error } = await db.from(table).delete().in(TABLE_KEYS[table], deletes.map(item => item.key));
         if (error) { failed.push(...deletes); reportError(error); }
-        else deletes.forEach(item => lastSynced.delete(item.id));
+        else deletes.forEach(item => { lastSynced.delete(item.id); if (item.table !== 'routes') requestedDeletes.delete(item.id); });
       }
     }
     // Lo que cambió mientras se enviaba también queda en la cola.

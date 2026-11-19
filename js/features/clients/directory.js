@@ -6,7 +6,7 @@
 import { paymentFrequencyLabels } from '../../core/config.js';
 import { clientButtons, directoryClientList, routeSelect } from '../../core/dom.js';
 import { state } from '../../core/state.js';
-import { clients, persistBusinessData, routeSettlements } from '../../core/store.js';
+import { clients, persistBusinessData, requestedDeletes, routeSettlements } from '../../core/store.js';
 import { paidPercent, paymentBehavior, paymentHistory } from '../../domain/loan-schedule.js';
 import { clientPendingPayments } from '../../domain/ledger.js';
 import { openClient } from './client-detail.js';
@@ -174,9 +174,10 @@ export function renderClientsBulk(ids) {
 export function removeClient(clientId) {
   if (state.userRole !== 'admin' || !clients[clientId]) return;
   openCustomModal({
-    title: 'Eliminar cliente', description: `Se quitará a ${clients[clientId].name} del directorio de demostración.`, submitLabel: 'Eliminar',
+    title: 'Eliminar cliente', description: `Se borrará a ${clients[clientId].name} (saldo ${formatMoney(Number(clients[clientId].balance) || 0)}) para todos los equipos, con sus abonos. Si fue un error, se recupera desde Movimientos.`, submitLabel: 'Eliminar para siempre',
     onSubmit: () => {
       delete clients[clientId];
+      requestedDeletes.add(`clients:${clientId}`);
       persistBusinessData();
       document.querySelectorAll(`.client-row[data-client="${clientId}"]`).forEach(node => { node.hidden = true; });
       showView('directorio');

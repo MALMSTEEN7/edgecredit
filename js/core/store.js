@@ -45,6 +45,13 @@ export const personnel = [];
 export const pendingRequests = [];
 
 /**
+ * Borrados pedidos a propósito (`tabla:clave`): eliminar un cliente o quitar un cobro sin uso.
+ * La sincronización solo borra en el servidor lo que está aquí; si algo falta en este equipo
+ * por cualquier otro motivo (datos incompletos), NO se borra en el servidor.
+ */
+export const requestedDeletes = new Set();
+
+/**
  * Datos operativos compartidos por trabajador: caja del día (base en efectivo/bancos)
  * y última ubicación GPS. Se guardan con el resto de los datos (y se sincronizan con el
  * servidor cuando está configurado), así el admin y el trabajador ven lo mismo.
@@ -102,6 +109,7 @@ export function pruneOrphanRoutes() {
     const hasHistory = Object.values(route?.ledger || {}).some(day => day?.closed);
     if (used.has(id) || hasHistory) return;
     delete routeSettlements[id];
+    requestedDeletes.add(`routes:${id}`);
     removed = true;
   });
   if (routeSelect) [...routeSelect.options].forEach(option => { if (!routeSettlements[option.value]) option.remove(); });

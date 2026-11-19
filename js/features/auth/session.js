@@ -21,7 +21,7 @@ import { adminView, customModal, interestModal, loginError, loginGateway, newCli
 import { state } from '../../core/state.js';
 import { clients, pendingRequests, persistBusinessData, personnel, routeSettlements, security } from '../../core/store.js';
 import { backend, backendEnabled, backendErrorMessage, usernameToEmail } from '../../core/backend.js';
-import { hasOfflineCopy, retryConnection, setAccessHook, setAuthHook, startSync, stopSync, wipeOfflineUser } from '../../core/sync.js';
+import { hasOfflineCopy, retryConnection, setAccessHook, setAuthHook, startSync, stopSync, syncActive, wipeOfflineUser } from '../../core/sync.js';
 import { openCustomModal } from '../../ui/custom-modal.js';
 import { LOCKOUT_SECONDS, MAX_LOGIN_ATTEMPTS, TWO_FACTOR_REQUIRED } from '../../core/security-config.js';
 import { isAccountTrusted, refreshTrustedState, trustAccount } from './device-trust.js';
@@ -474,6 +474,8 @@ async function endServerSession() {
   passwordPromptShown = false;
   try { localStorage.removeItem(OFFLINE_SESSION_KEY); } catch { /* opcional */ }
   await stopSync();
+  // Si mientras se cerraba ya se abrió otra sesión (salir y entrar enseguida), no se toca nada.
+  if (syncActive()) return;
   let signedOut = false;
   try { const db = await backend(); const { error } = await db.auth.signOut({ scope: 'local' }); signedOut = !error; } catch { /* sin conexión */ }
   // Sin conexión supabase-js conserva la sesión guardada: se borra a mano para que al
