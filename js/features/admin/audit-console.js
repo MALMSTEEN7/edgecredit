@@ -43,7 +43,7 @@ const MONEY_FIELDS = new Set(['balance', 'totalPaidAmount', 'paid', 'principal',
   'otherExpenses', 'cashDelivered', 'monthlyInsurance', 'weeklyCollections', 'amount', 'value', 'insurance', 'cash', 'transfers', 'cashOut', 'cashIn']);
 // Campos que se recalculan solos o repiten lo que ya dice otra línea: no se muestran.
 const QUIET_FIELDS = new Set(['collections', 'weeklyCollections', 'weeklyCardCount', 'lastClosure', 'baseCarriedOn', 'baseCarriedFrom', 'totalPaidAmount',
-  'paidPeriodIndexes', 'updatedAt', 'worstHistory', 'paymentsCount', 'closedTs']);
+  'paidPeriodIndexes', 'updatedAt', 'archivedPaymentsAt', 'receiptPurgedAt', 'worstHistory', 'paymentsCount', 'closedTs']);
 
 let auditRows = [];
 let auditDay = '';
@@ -158,7 +158,11 @@ function auditListLines(change) {
 function auditRowLines(row) {
   const changes = row.changes || [];
   if (row.action === 'merge') {
-    return [{ tag: '⇄ CHOQUE', tone: 'alert', text: changes.map(change => `${fieldLabel(change.p || [])}: este equipo ${shortValue(change.mine, change.p?.[0])} · el otro ${shortValue(change.theirs, change.p?.[0])}`).join(' | ') || 'dos equipos cambiaron lo mismo; se combinaron' }];
+    // Dos celulares cambiaron lo mismo a la vez y la app juntó los dos cambios (no se pierde nada:
+    // si algo se hubiera quitado, sale aparte como «QUITADO»). Los montos que se recalculan solos no cuentan.
+    const shown = changes.filter(change => !QUIET_FIELDS.has(change.p?.[0]));
+    if (!shown.length) return [];
+    return [{ tag: '⇄ COMBINADO', tone: 'info', text: `dos celulares cambiaron a la vez y se juntaron los dos · ${shown.map(change => fieldLabel(change.p || [])).join(', ')}` }];
   }
   const find = key => changes.find(change => change.p?.length === 1 && change.p[0] === key);
   if (row.table_name === 'clients' && row.action === 'insert') {
@@ -173,9 +177,15 @@ function auditRowLines(row) {
   }
   const lines = [];
   const paymentsChanged = changes.some(change => change.p?.[0] === 'payments');
+  const archived = changes.some(change => change.p?.[0] === 'archivedPaymentsAt' && change.new);
   changes.forEach(change => {
     const path = change.p || [];
     if (!path.length || QUIET_FIELDS.has(path[0]) || QUIET_FIELDS.has(path[path.length - 1])) return;
+    // Cartulina pagada hace una semana: sus abonos se archivan (no es una pisada).
+    if (path[0] === 'payments' && archived && !(change.added || []).length) {
+      lines.push({ tag: 'ARCHIVADA', tone: 'dim-info', text: `cartulina pagada: ${(change.removed || []).length} abonos archivados (pasa a la semana de pagarse)` });
+      return;
+    }
     if ('added' in change || 'removed' in change) { lines.push(...auditListLines(change)); return; }
     if (path[0] === 'ledger' && path.length === 2) {
       const closedNow = change.new && typeof change.new === 'object' && change.new.closed && !(change.old && change.old.closed);

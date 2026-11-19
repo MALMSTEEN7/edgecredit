@@ -580,9 +580,13 @@ function mergeSummary(value) {
  * Choque real: el mismo campo cambió aquí y en otro equipo. Se anota en el historial del
  * servidor (consola del administrador) sin esperar respuesta; si falla no pasa nada.
  */
+/** Montos que la app recalcula sola (el cobro sale de los abonos): no son un choque real. */
+const MERGE_LOG_QUIET = new Set(['collections', 'weeklyCollections', 'weeklyCardCount', 'totalPaidAmount', 'paidPeriodIndexes']);
+
 function logMerge(table, key, routeId, base, mine, theirs) {
   if (table === 'route_state' || !navigator.onLine || !isPlainObject(mine) || !isPlainObject(theirs)) return;
   const fields = [...new Set([...Object.keys(mine), ...Object.keys(theirs)])]
+    .filter(field => !MERGE_LOG_QUIET.has(field))
     .filter(field => stable(mine[field]) !== stable(base?.[field]) && stable(theirs[field]) !== stable(base?.[field]) && stable(mine[field]) !== stable(theirs[field]));
   if (!fields.length) return;
   const changes = fields.slice(0, 20).map(field => ({ p: [field], base: mergeSummary(base?.[field]), mine: mergeSummary(mine[field]), theirs: mergeSummary(theirs[field]) }));

@@ -37,3 +37,4 @@
   .term-actions { padding-left: 4px; }
 }
 @media (prefers-reduced-motion: reduce) { .term-cursor { animation: none; } }
+.term-line.is-dim-info .term-tag, .term-line.is-dim-info .term-text { color: var(--term-dim); }
