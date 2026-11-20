@@ -2449,7 +2449,7 @@ function startDateForPayday(client, weekday) {
  * domain/insurance · Seguros del crédito.
  *
  * Regla general: 10% del capital prestado. El trabajador (o el admin) puede cobrar
- * un valor distinto en pesos, siempre con un comentario que lo justifique. Los
+ * un valor distinto en pesos; el comentario que lo explique es opcional. Los
  * seguros se cobran al entregar el préstamo, así que entran a la caja ese mismo día.
  */
 
@@ -2484,8 +2484,8 @@ function resolveInsurance(principal, wantsCustom, rawAmount, rawReason) {
   if (String(rawAmount ?? '').trim() === '' || !Number.isFinite(amount) || amount < 0) return { error: 'Escribe el valor de los seguros en pesos.' };
   if (amount > Number(principal)) return { error: 'Los seguros no pueden superar el monto del préstamo.' };
   if (amount === general) return { amount: general, custom: false, reason: '' };
+  // El motivo es opcional (si lo escriben, queda guardado y lo ve el admin).
   const reason = String(rawReason || '').trim();
-  if (reason.length < 5) return { error: 'Explica por qué los seguros son diferentes al 10% general.' };
   return { amount, custom: true, reason };
 }
 
@@ -10514,7 +10514,7 @@ function __mount_clientDetailModule() {
         { name: 'installment', label: 'Valor de cuota ($)', type: 'number', min: 0, step: 1, value: client.installment, required: true },
         { name: 'interestPercent', label: 'Interés (%)', type: 'number', min: 0, step: 0.1, value: client.interestPercent ?? 20, required: true },
         { name: 'insuranceAmount', label: `Seguros cobrados ($) · general: ${formatMoney(generalInsuranceAmount(inferClientPrincipal(client)))}`, type: 'number', min: 0, step: 1, value: clientInsurance(client).amount, required: true },
-        { name: 'insuranceReason', label: 'Motivo si los seguros son diferentes al 10%', type: 'textarea', rows: 2, value: clientInsurance(client).reason },
+        { name: 'insuranceReason', label: 'Motivo si los seguros son diferentes al 10% (opcional)', type: 'textarea', rows: 2, value: clientInsurance(client).reason },
         { name: 'paid', label: 'Cuotas pagadas', type: 'number', min: 0, step: 1, value: client.paid, required: true },
         { name: 'installments', label: 'Total de cuotas', type: 'number', min: 1, step: 1, value: client.installments, required: true },
         { name: 'creditStartDate', label: 'Fecha de inicio de la cartulina (si la cambias, manda sobre el día de cobro y los días que lleva)', type: 'date', value: client.creditStartDate || localDateISO(), required: true },
@@ -11119,6 +11119,7 @@ function __mount_interestModule() {
 
 
 
+
 // Cartulina de origen cuando el modal está en modo «Renovar crédito» (linkMode 'renew')
 // o «Otra cartulina» para la misma persona (linkMode 'extra').
 let renewSourceId = null;
@@ -11206,7 +11207,7 @@ function setInsuranceCustom(open) {
   document.querySelector('#insurance-custom-toggle').checked = open;
   document.querySelector('#insurance-custom-fields').hidden = !open;
   document.querySelector('#insurance-custom-amount').required = open;
-  document.querySelector('#insurance-custom-reason').required = open;
+  document.querySelector('#insurance-custom-reason').required = false; // el motivo es opcional
   if (open) window.setTimeout(() => document.querySelector('#insurance-custom-amount').focus(), 20);
 }
 
@@ -11352,7 +11353,8 @@ function openRenewalModal(sourceId) {
       : 'Esta cartulina ya fue renovada.');
     return;
   }
-  openLinkedModal(sourceId, 'renew');
+  // Cancelada antes de la mitad del plazo: primero se resuelve la reducción de intereses.
+  requireReductionBeforeRenewal(sourceId, () => openLinkedModal(sourceId, 'renew'));
 }
 
 /** Otra cartulina simultánea para la misma persona (hasta el máximo permitido). */
@@ -12029,15 +12031,27 @@ function paidSinceBuilt(client, builtTs) {
  * La ruta armada no se borra sola al cambiar de día: si se armó el lunes y se sale a cobrar el
  * miércoles, sigue igual. Solo cambia cuando:
  *  - el trabajador registra el abono de un cliente de la lista (ese cliente sale), o
- *  - el admin verifica y cierra la ruta (la lista se vacía y se puede armar la siguiente).
+ *  - el admin verifica y cierra la ruta: salen los clientes ya visitados (abonaron, no pagaron o
+ *    cancelaron) y los que faltaban por visitar QUEDAN para el siguiente día. Antes la lista se
+ *    vaciaba entera: si el trabajador ya había armado la ruta de mañana antes del cierre, la perdía.
+ * El resultado es el mismo en todos los equipos (sale solo de los datos compartidos), así el
+ * celular del trabajador y el del admin no se contradicen.
  */
 function storedRouteOrder(route) {
   const order = state.dailyRouteOrder[route] || [];
   if (!order.length) return order;
   if (!state.dailyRouteDates[route]) state.dailyRouteDates[route] = new Date().toISOString();
-  if (closureAfterBuild(route)) {
-    state.dailyRouteOrder[route] = [];
-    delete state.dailyRouteDates[route];
+  const closure = closureAfterBuild(route);
+  if (closure) {
+    const builtTs = routeBuiltTs(route);
+    const visited = new Set(Object.entries(state.collectedRouteClients)
+      .filter(([key]) => key.startsWith(`${route}:`) && Date.parse(`${key.slice(route.length + 1)}T23:59:59`) >= builtTs)
+      .flatMap(([, ids]) => ids || []));
+    const pending = order.filter(id => clients[id] && Number(clients[id].balance) > 0 && !visited.has(id) && !paidSinceBuilt(clients[id], builtTs));
+    state.dailyRouteOrder[route] = pending;
+    // La ruta que queda cuenta desde el cierre (misma hora en todos los equipos).
+    if (pending.length) state.dailyRouteDates[route] = closure.submittedAt;
+    else delete state.dailyRouteDates[route];
     return state.dailyRouteOrder[route];
   }
   return order;
@@ -12560,10 +12574,41 @@ function __mount_operationsListModule() {
 
 
 
+
 /** ¿Se puede ofrecer «Reducir intereses» para este abono final? */
 function canOfferReduction(client, payment) {
-  return Boolean(client && payment) && Number(client.balance) <= 0 && !payment.reductionRequest
+  return Boolean(client && payment) && Number(client.balance) <= 0 && !payment.reductionRequest && !payment.reductionWaived
     && !(Number(payment.interestReduction) > 0) && reductionAllowed(client, payment);
+}
+
+/**
+ * Antes de renovar una cartulina cancelada antes de la mitad del plazo hay que resolver la
+ * reducción de intereses: aplicarla (admin), solicitarla (trabajador) o indicar que no hubo
+ * descuento. Mientras no se resuelva, no se puede renovar. `proceed()` sigue con la renovación.
+ */
+function requireReductionBeforeRenewal(clientId, proceed) {
+  const client = clients[clientId];
+  const payment = client && finalPayment(client);
+  if (!canOfferReduction(client, payment)) { proceed(); return; }
+  const isAdmin = state.userRole === 'admin';
+  openCustomModal({
+    title: 'Primero, la reducción de intereses',
+    description: `${client.name} canceló antes de la mitad del plazo. Antes de renovar, ${isAdmin ? 'aplica' : 'solicita'} la reducción de intereses. Si no se le hizo ningún descuento, indícalo con «No hubo descuento».`,
+    submitLabel: isAdmin ? 'Reducir intereses' : 'Solicitar reducción',
+    cancelLabel: 'Ahora no',
+    extraAction: {
+      label: 'No hubo descuento',
+      onClick: () => {
+        payment.reductionWaived = { at: new Date().toISOString(), by: isAdmin ? 'Administrador' : (state.activeWorker?.name || 'Trabajador') };
+        persistBusinessData();
+        proceed();
+      },
+    },
+    onSubmit: () => {
+      // Se abre después de que esta ventana se cierre.
+      window.setTimeout(() => openInterestReduction(clientId, payment, { onDone: proceed }), 0);
+    },
+  });
 }
 
 /**

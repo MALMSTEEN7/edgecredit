@@ -34,7 +34,7 @@
   <link rel="icon" href="icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="icon-192.png">
   <meta name="apple-mobile-web-app-capable" content="yes">
-  <link rel="stylesheet" id="app-styles" href="dist/styles.bundle.css?v=065b2317a4">
+  <link rel="stylesheet" id="app-styles" href="dist/styles.bundle.css?v=e542f6f33a">
   <script>
     // Si hay una sesión guardada, al recargar se muestra «Cargando tu sesión…» en vez del
     // formulario de ingreso mientras la app la restaura (features/auth/session.js).
@@ -503,7 +503,7 @@
         <section class="insurance-block" aria-labelledby="insurance-block-title">
           <div class="insurance-general"><div><span id="insurance-block-title">Seguros</span><small>General: 10% del préstamo</small></div><strong id="insurance-general-amount">$ 0</strong></div>
           <label class="exception-toggle"><input type="checkbox" id="insurance-custom-toggle"><span>Cobrar un valor de seguros diferente al general</span></label>
-          <div class="exception-fields" id="insurance-custom-fields" hidden><label class="custom-field">Valor de los seguros ($)<input name="insuranceAmount" data-money data-money-thousands id="insurance-custom-amount" type="number" min="0" step="1" inputmode="numeric" placeholder="Ej. 50"></label><label class="custom-field">¿Por qué este valor es diferente?<textarea name="insuranceReason" id="insurance-custom-reason" rows="2" maxlength="400" placeholder="Ej. Cliente renovado, acuerdo especial, préstamo pequeño…"></textarea></label></div>
+          <div class="exception-fields" id="insurance-custom-fields" hidden><label class="custom-field">Valor de los seguros ($)<input name="insuranceAmount" data-money data-money-thousands id="insurance-custom-amount" type="number" min="0" step="1" inputmode="numeric" placeholder="Ej. 50"></label><label class="custom-field">¿Por qué este valor es diferente? (opcional)<textarea name="insuranceReason" id="insurance-custom-reason" rows="2" maxlength="400" placeholder="Ej. Cliente renovado, acuerdo especial, préstamo pequeño…"></textarea></label></div>
           <small class="insurance-note">Los seguros se cobran al entregar el préstamo y se suman a la base del día.</small>
         </section>
         <label class="exception-toggle admin-base-exception" id="admin-no-base-impact-wrap" hidden><input type="checkbox" id="admin-no-base-impact"><span>Registrar préstamo sin afectar la base del trabajador</span></label>
@@ -551,7 +551,7 @@
     // al cambiar el sello, el navegador descarga el JS/CSS nuevo en vez de usar su caché.
     // Para desarrollar con los módulos sueltos, abre index.html?dev desde un servidor local.
     (() => {
-      const APP_VERSION = '065b2317a4';
+      const APP_VERSION = 'e542f6f33a';
       const dev = new URLSearchParams(location.search).has('dev') && location.protocol !== 'file:';
       if (dev) {
         document.getElementById('app-styles').href = 'styles.css';

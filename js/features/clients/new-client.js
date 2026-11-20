@@ -21,6 +21,7 @@ import { compressClientPhoto } from '../../shared/media.js';
 import { LOCATION_FAILURE_LABELS, hasCoordinates, isApproximateLocation, locateDevice } from '../../shared/geo.js';
 import { showToast } from '../../ui/toast.js';
 import { roundToThousand } from '../../shared/math.js';
+import { requireReductionBeforeRenewal } from '../payments/interest-reduction.js';
 
 // Cartulina de origen cuando el modal está en modo «Renovar crédito» (linkMode 'renew')
 // o «Otra cartulina» para la misma persona (linkMode 'extra').
@@ -109,7 +110,7 @@ function setInsuranceCustom(open) {
   document.querySelector('#insurance-custom-toggle').checked = open;
   document.querySelector('#insurance-custom-fields').hidden = !open;
   document.querySelector('#insurance-custom-amount').required = open;
-  document.querySelector('#insurance-custom-reason').required = open;
+  document.querySelector('#insurance-custom-reason').required = false; // el motivo es opcional
   if (open) window.setTimeout(() => document.querySelector('#insurance-custom-amount').focus(), 20);
 }
 
@@ -255,7 +256,8 @@ export function openRenewalModal(sourceId) {
       : 'Esta cartulina ya fue renovada.');
     return;
   }
-  openLinkedModal(sourceId, 'renew');
+  // Cancelada antes de la mitad del plazo: primero se resuelve la reducción de intereses.
+  requireReductionBeforeRenewal(sourceId, () => openLinkedModal(sourceId, 'renew'));
 }
 
 /** Otra cartulina simultánea para la misma persona (hasta el máximo permitido). */
