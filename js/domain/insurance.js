@@ -2,7 +2,7 @@
  * domain/insurance · Seguros del crédito.
  *
  * Regla general: 10% del capital prestado. El trabajador (o el admin) puede cobrar
- * un valor distinto en pesos, siempre con un comentario que lo justifique. Los
+ * un valor distinto en pesos; el comentario que lo explique es opcional. Los
  * seguros se cobran al entregar el préstamo, así que entran a la caja ese mismo día.
  */
 
@@ -38,8 +38,8 @@ export function resolveInsurance(principal, wantsCustom, rawAmount, rawReason) {
   if (String(rawAmount ?? '').trim() === '' || !Number.isFinite(amount) || amount < 0) return { error: 'Escribe el valor de los seguros en pesos.' };
   if (amount > Number(principal)) return { error: 'Los seguros no pueden superar el monto del préstamo.' };
   if (amount === general) return { amount: general, custom: false, reason: '' };
+  // El motivo es opcional (si lo escriben, queda guardado y lo ve el admin).
   const reason = String(rawReason || '').trim();
-  if (reason.length < 5) return { error: 'Explica por qué los seguros son diferentes al 10% general.' };
   return { amount, custom: true, reason };
 }
 

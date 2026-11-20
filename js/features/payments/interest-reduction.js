@@ -12,6 +12,7 @@ import { customModalError } from '../../core/dom.js';
 import { state } from '../../core/state.js';
 import { clients, pendingRequests, persistBusinessData, routeSettlements } from '../../core/store.js';
 import { syncCancelledCard } from '../../domain/accounting.js';
+import { finalPayment } from '../../domain/route-day.js';
 import { syncRouteCollections } from '../../domain/ledger.js';
 import { applyInterestReduction, maxInterestReduction, reductionAllowed } from '../../domain/restructure.js';
 import { formatDate, formatMoney, routeKey } from '../../shared/format.js';
@@ -21,8 +22,38 @@ import { renderPendingRequests } from '../admin/pending.js';
 
 /** ¿Se puede ofrecer «Reducir intereses» para este abono final? */
 export function canOfferReduction(client, payment) {
-  return Boolean(client && payment) && Number(client.balance) <= 0 && !payment.reductionRequest
+  return Boolean(client && payment) && Number(client.balance) <= 0 && !payment.reductionRequest && !payment.reductionWaived
     && !(Number(payment.interestReduction) > 0) && reductionAllowed(client, payment);
+}
+
+/**
+ * Antes de renovar una cartulina cancelada antes de la mitad del plazo hay que resolver la
+ * reducción de intereses: aplicarla (admin), solicitarla (trabajador) o indicar que no hubo
+ * descuento. Mientras no se resuelva, no se puede renovar. `proceed()` sigue con la renovación.
+ */
+export function requireReductionBeforeRenewal(clientId, proceed) {
+  const client = clients[clientId];
+  const payment = client && finalPayment(client);
+  if (!canOfferReduction(client, payment)) { proceed(); return; }
+  const isAdmin = state.userRole === 'admin';
+  openCustomModal({
+    title: 'Primero, la reducción de intereses',
+    description: `${client.name} canceló antes de la mitad del plazo. Antes de renovar, ${isAdmin ? 'aplica' : 'solicita'} la reducción de intereses. Si no se le hizo ningún descuento, indícalo con «No hubo descuento».`,
+    submitLabel: isAdmin ? 'Reducir intereses' : 'Solicitar reducción',
+    cancelLabel: 'Ahora no',
+    extraAction: {
+      label: 'No hubo descuento',
+      onClick: () => {
+        payment.reductionWaived = { at: new Date().toISOString(), by: isAdmin ? 'Administrador' : (state.activeWorker?.name || 'Trabajador') };
+        persistBusinessData();
+        proceed();
+      },
+    },
+    onSubmit: () => {
+      // Se abre después de que esta ventana se cierre.
+      window.setTimeout(() => openInterestReduction(clientId, payment, { onDone: proceed }), 0);
+    },
+  });
 }
 
 /**

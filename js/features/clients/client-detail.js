@@ -916,7 +916,7 @@ export function mount() {
         { name: 'installment', label: 'Valor de cuota ($)', type: 'number', min: 0, step: 1, value: client.installment, required: true },
         { name: 'interestPercent', label: 'Interés (%)', type: 'number', min: 0, step: 0.1, value: client.interestPercent ?? 20, required: true },
         { name: 'insuranceAmount', label: `Seguros cobrados ($) · general: ${formatMoney(generalInsuranceAmount(inferClientPrincipal(client)))}`, type: 'number', min: 0, step: 1, value: clientInsurance(client).amount, required: true },
-        { name: 'insuranceReason', label: 'Motivo si los seguros son diferentes al 10%', type: 'textarea', rows: 2, value: clientInsurance(client).reason },
+        { name: 'insuranceReason', label: 'Motivo si los seguros son diferentes al 10% (opcional)', type: 'textarea', rows: 2, value: clientInsurance(client).reason },
         { name: 'paid', label: 'Cuotas pagadas', type: 'number', min: 0, step: 1, value: client.paid, required: true },
         { name: 'installments', label: 'Total de cuotas', type: 'number', min: 1, step: 1, value: client.installments, required: true },
         { name: 'creditStartDate', label: 'Fecha de inicio de la cartulina (si la cambias, manda sobre el día de cobro y los días que lleva)', type: 'date', value: client.creditStartDate || localDateISO(), required: true },

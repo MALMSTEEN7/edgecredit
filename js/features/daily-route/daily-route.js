@@ -176,15 +176,27 @@ function paidSinceBuilt(client, builtTs) {
  * La ruta armada no se borra sola al cambiar de día: si se armó el lunes y se sale a cobrar el
  * miércoles, sigue igual. Solo cambia cuando:
  *  - el trabajador registra el abono de un cliente de la lista (ese cliente sale), o
- *  - el admin verifica y cierra la ruta (la lista se vacía y se puede armar la siguiente).
+ *  - el admin verifica y cierra la ruta: salen los clientes ya visitados (abonaron, no pagaron o
+ *    cancelaron) y los que faltaban por visitar QUEDAN para el siguiente día. Antes la lista se
+ *    vaciaba entera: si el trabajador ya había armado la ruta de mañana antes del cierre, la perdía.
+ * El resultado es el mismo en todos los equipos (sale solo de los datos compartidos), así el
+ * celular del trabajador y el del admin no se contradicen.
  */
 function storedRouteOrder(route) {
   const order = state.dailyRouteOrder[route] || [];
   if (!order.length) return order;
   if (!state.dailyRouteDates[route]) state.dailyRouteDates[route] = new Date().toISOString();
-  if (closureAfterBuild(route)) {
-    state.dailyRouteOrder[route] = [];
-    delete state.dailyRouteDates[route];
+  const closure = closureAfterBuild(route);
+  if (closure) {
+    const builtTs = routeBuiltTs(route);
+    const visited = new Set(Object.entries(state.collectedRouteClients)
+      .filter(([key]) => key.startsWith(`${route}:`) && Date.parse(`${key.slice(route.length + 1)}T23:59:59`) >= builtTs)
+      .flatMap(([, ids]) => ids || []));
+    const pending = order.filter(id => clients[id] && Number(clients[id].balance) > 0 && !visited.has(id) && !paidSinceBuilt(clients[id], builtTs));
+    state.dailyRouteOrder[route] = pending;
+    // La ruta que queda cuenta desde el cierre (misma hora en todos los equipos).
+    if (pending.length) state.dailyRouteDates[route] = closure.submittedAt;
+    else delete state.dailyRouteDates[route];
     return state.dailyRouteOrder[route];
   }
   return order;
