@@ -694,9 +694,29 @@ function workerIdsForRoute(routeId) {
   return personnel.filter(worker => routeKey(worker.route) === routeId).map(worker => worker.id);
 }
 
+/**
+ * Estado de cada ruta tal como llegó del servidor (lo usa el admin). La ruta del día, el orden
+ * de la biblioteca, la base de trabajo y la ubicación los maneja el CELULAR DEL TRABAJADOR: el
+ * admin los envía tal como los conoce del servidor y nunca con su copia, que puede estar
+ * desactualizada. Antes, un equipo del admin con una copia vieja podía reemplazar la ruta que el
+ * trabajador acababa de armar (Atalaya semanal, al renovar unas cartulinas).
+ */
+let serverRouteState = new Map();
+const WORKER_OWNED_KEYS = ['dailyRouteOrder', 'dailyRouteDate', 'clientLibraryOrder', 'workBases', 'workerLocations'];
+
 function routeStateData(routeId) {
   const ids = workerIdsForRoute(routeId);
   if (syncSession?.role === 'worker' && state.activeWorker?.id && !ids.includes(state.activeWorker.id)) ids.push(state.activeWorker.id);
+  if (syncSession?.role === 'admin') {
+    const known = serverRouteState.get(routeId) || {};
+    const own = ownRouteStateData(routeId, ids);
+    WORKER_OWNED_KEYS.forEach(key => { own[key] = known[key] ?? (key === 'dailyRouteDate' ? '' : Array.isArray(own[key]) ? [] : {}); });
+    return own;
+  }
+  return ownRouteStateData(routeId, ids);
+}
+
+function ownRouteStateData(routeId, ids) {
   return {
     dailyRouteOrder: state.dailyRouteOrder[routeId] || [],
     dailyRouteDate: state.dailyRouteDates[routeId] || '',
@@ -1048,6 +1068,7 @@ function applyRow(table, row, removed = false) {
     else routeSettlements[row.id] = { ...emptyRoute(row.data?.name || row.id), ...row.data };
     lastSynced.set(id, stable({ id: row.id, data: routeSettlements[row.id] }));
   } else if (table === 'route_state') {
+    serverRouteState.set(row.route_id, row.data || {});
     applyRouteState(row.route_id, row.data);
     lastSynced.set(id, stable({ route_id: row.route_id, data: routeStateData(row.route_id) }));
   } else if (table === 'pending_requests') {
@@ -1343,6 +1364,7 @@ async function downloadAll() {
   if (syncSession.role === 'worker') Object.keys(routeSettlements).filter(key => key !== syncSession.routeId).forEach(key => delete routeSettlements[key]);
   const previousSynced = lastSynced;
   lastSynced = new Map();
+  serverRouteState = new Map();
   versions = new Map();
   results.forEach(result => (result.data || []).forEach(row => applyRow(result.table, row)));
   if (syncSession.role === 'worker' && !routeSettlements[syncSession.routeId]) routeSettlements[syncSession.routeId] = emptyRoute(syncSession.routeName || syncSession.routeId);
@@ -1597,6 +1619,8 @@ function applySnapshot(snap) {
   if (data.workerAccess) Object.assign(security.workerAccess, data.workerAccess);
   if (data.session) Object.assign(security.session, data.session);
   lastSynced = new Map(JSON.parse(snap.synced || '[]'));
+  serverRouteState = new Map([...lastSynced].filter(([id, value]) => id.startsWith('route_state:') && value !== PENDING_DELETE)
+    .map(([id, value]) => { try { return [id.slice('route_state:'.length), JSON.parse(value)?.data || {}]; } catch { return [id.slice('route_state:'.length), {}]; } }));
   versions = new Map(JSON.parse(snap.versions || '[]'));
   cursor = snap.cursor || null;
   lastFullSync = snap.lastFullSync || 0;
@@ -1705,6 +1729,7 @@ async function startSync({ userId, role, routeId, routeName }) {
   cursor = null;
   lastFullSync = 0;
   lastSynced = new Map();
+  serverRouteState = new Map();
   versions = new Map();
   realtimeFailed = false;
   reconnectAttempt = 0;
@@ -1723,6 +1748,7 @@ async function startSync({ userId, role, routeId, routeName }) {
       console.warn('Copia local dañada: se descarga todo', error);
       loaded = false;
       lastSynced = new Map();
+  serverRouteState = new Map();
       versions = new Map();
     }
   }
@@ -1772,6 +1798,7 @@ async function stopSync() {
   cursor = null;
   realtime = 'off';
   lastSynced = new Map();
+  serverRouteState = new Map();
   versions = new Map();
   updateSyncBadge();
 }
@@ -12031,27 +12058,15 @@ function paidSinceBuilt(client, builtTs) {
  * La ruta armada no se borra sola al cambiar de día: si se armó el lunes y se sale a cobrar el
  * miércoles, sigue igual. Solo cambia cuando:
  *  - el trabajador registra el abono de un cliente de la lista (ese cliente sale), o
- *  - el admin verifica y cierra la ruta: salen los clientes ya visitados (abonaron, no pagaron o
- *    cancelaron) y los que faltaban por visitar QUEDAN para el siguiente día. Antes la lista se
- *    vaciaba entera: si el trabajador ya había armado la ruta de mañana antes del cierre, la perdía.
- * El resultado es el mismo en todos los equipos (sale solo de los datos compartidos), así el
- * celular del trabajador y el del admin no se contradicen.
+ *  - el admin verifica y cierra la ruta (la lista se vacía y se puede armar la siguiente).
  */
 function storedRouteOrder(route) {
   const order = state.dailyRouteOrder[route] || [];
   if (!order.length) return order;
   if (!state.dailyRouteDates[route]) state.dailyRouteDates[route] = new Date().toISOString();
-  const closure = closureAfterBuild(route);
-  if (closure) {
-    const builtTs = routeBuiltTs(route);
-    const visited = new Set(Object.entries(state.collectedRouteClients)
-      .filter(([key]) => key.startsWith(`${route}:`) && Date.parse(`${key.slice(route.length + 1)}T23:59:59`) >= builtTs)
-      .flatMap(([, ids]) => ids || []));
-    const pending = order.filter(id => clients[id] && Number(clients[id].balance) > 0 && !visited.has(id) && !paidSinceBuilt(clients[id], builtTs));
-    state.dailyRouteOrder[route] = pending;
-    // La ruta que queda cuenta desde el cierre (misma hora en todos los equipos).
-    if (pending.length) state.dailyRouteDates[route] = closure.submittedAt;
-    else delete state.dailyRouteDates[route];
+  if (closureAfterBuild(route)) {
+    state.dailyRouteOrder[route] = [];
+    delete state.dailyRouteDates[route];
     return state.dailyRouteOrder[route];
   }
   return order;
