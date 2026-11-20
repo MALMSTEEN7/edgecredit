@@ -456,8 +456,15 @@ async function captureClientLocation() {
 /** Aviso al admin cuando corregir un abono ya cerrado cambió las transferencias (y la base). */
 function notifyClosedTransfers(adjustments) {
   if (!adjustments.length) return;
-  const text = adjustments.map(({ date, delta }) => `${delta > 0 ? '+' : '−'}${formatMoney(Math.abs(delta))} en transferencias del cierre del ${formatDate(date)}`).join(' · ');
-  showToast(`${text}.${adjustments.some(item => item.base) ? ' La base de hoy se corrigió.' : ''}`);
+  const signed = value => `${value > 0 ? '+' : '−'}${formatMoney(Math.abs(value))}`;
+  const text = adjustments.map(({ date, collections, transfers, cash, base }) => {
+    const parts = [];
+    if (collections) parts.push(`cobro ${signed(collections)}`);
+    if (transfers) parts.push(`transferencias ${signed(transfers)}`);
+    if (cash) parts.push(`efectivo ${signed(cash)}`);
+    return `Cierre del ${formatDate(date)}: ${parts.join(', ')}${base ? `. Base de hoy ${signed(cash)}` : ''}`;
+  }).join(' · ');
+  showToast(`${text}.`);
 }
 
 export function openClient(clientId) {
