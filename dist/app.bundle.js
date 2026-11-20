@@ -1117,7 +1117,15 @@ function mergeArrays(base, local, remote) {
   const out = [];
   remote.forEach(item => {
     const key = itemIdentity(item);
-    if (l.has(key)) out.push(b.has(key) && same(l.get(key), b.get(key)) ? item : l.get(key));
+    if (l.has(key)) {
+      const mine = l.get(key);
+      if (!b.has(key) || same(mine, item) || same(item, b.get(key))) out.push(mine);
+      else if (same(mine, b.get(key))) out.push(item);
+      // Los dos equipos editaron el mismo registro (p. ej. aquí se quitó la foto vencida y allá se
+      // cambió la forma de pago): se combinan campo por campo. Antes ganaba el registro de aquí
+      // completo y se perdía lo que cambió el otro equipo.
+      else out.push(mergeThreeWay(b.get(key), mine, item, 1));
+    }
     else if (!b.has(key) || !same(item, b.get(key))) out.push(item); // nuevo allá (o borrado aquí pero editado allá)
   });
   local.forEach((item, position) => {
@@ -2743,39 +2751,53 @@ function closureOfPayment(route, payment) {
 }
 
 /**
- * El admin corrigió un abono que ya entró a un cierre (forma de pago, monto, fecha o lo
- * borró). Si cambian las transferencias de ese cierre, se corrigen en el libro y, si la base
- * de hoy salió de ese cierre, también la base: lo que pasa a transferencia está en el banco
- * y sale de la base; lo que pasa a efectivo vuelve a la base. `before`/`after`: el abono
- * antes y después (null si no existe). Devuelve la lista de ajustes [{ date, delta, base }].
+ * El admin corrigió un abono que ya entró a un cierre (monto, forma de pago, fecha o lo
+ * borró). Se corrige ese día guardado y, si la base de hoy salió de ese cierre, también la base:
+ * - Cobro del día: sube o baja con el monto.
+ * - Transferencias: lo que pasa a transferencia está en el banco; lo que pasa a efectivo vuelve.
+ * - Efectivo entregado: si el día cerró cuadrado (se entregó lo calculado), sigue al cobro; si el
+ *   trabajador entregó otra cifra, esa cifra no se toca y lo que cambia es el descuadre.
+ * - Base de hoy (efectivo del cierre menos transferencias): cambia en lo que cambió ese efectivo.
+ * `before`/`after`: el abono antes y después (null si no existe). Devuelve los ajustes
+ * [{ date, collections, transfers, cash, base }].
  */
 function adjustClosedTransfers(route, before, after) {
   if (!route) return [];
   ensureLedger(route);
   const changes = new Map();
   const add = (payment, sign) => {
-    if (!payment || payment.method !== 'transfer') return;
+    if (!payment) return;
     const date = closureOfPayment(route, payment);
-    if (date) changes.set(date, (changes.get(date) || 0) + sign * (Number(payment.amount) || 0));
+    if (!date) return;
+    const amount = sign * (Number(payment.amount) || 0);
+    const entry = changes.get(date) || { collections: 0, transfers: 0 };
+    entry.collections += amount;
+    if (payment.method === 'transfer') entry.transfers += amount;
+    changes.set(date, entry);
   };
   add(before, -1);
   add(after, 1);
   const latest = Object.keys(route.ledger).filter(date => route.ledger[date]?.closed).sort().at(-1);
   const adjustments = [];
-  changes.forEach((delta, date) => {
-    if (!delta) return;
+  changes.forEach(({ collections, transfers }, date) => {
+    if (!collections && !transfers) return;
     const record = route.ledger[date];
-    record.transfers = Math.max(0, Number(record.transfers || 0) + delta);
-    const adjustment = { date, delta, base: false };
+    const squared = ledgerDifference(dayRecord(route, date)) === 0;
+    const delivered = squared ? collections : 0;
+    record.collections = Number(record.collections || 0) + collections;
+    if (delivered) record.cashDelivered = Math.max(0, Number(record.cashDelivered || 0) + delivered);
+    record.transfers = Math.max(0, Number(record.transfers || 0) + transfers);
+    const cash = delivered - transfers;
+    const adjustment = { date, collections, transfers, cash, delta: transfers, base: false };
     adjustments.push(adjustment);
     // La base actual salió de ese cierre (el sábado no: la base del lunes la asigna el admin).
     const [year, month, day] = date.split('-').map(Number);
     const saturday = new Date(year, month - 1, day).getDay() === 6;
-    if (date !== latest || saturday) return;
-    route.base = Math.max(0, Number(route.base || 0) - delta);
+    if (!cash || date !== latest || saturday) return;
+    route.base = Math.max(0, Number(route.base || 0) + cash);
     adjustment.base = true;
     if (route.lastClosure?.date === date && route.lastClosure.carriedBase !== undefined) {
-      route.lastClosure.carriedBase = Math.max(0, Number(route.lastClosure.carriedBase || 0) - delta);
+      route.lastClosure.carriedBase = Math.max(0, Number(route.lastClosure.carriedBase || 0) + cash);
     }
   });
   return adjustments;
@@ -10032,8 +10054,15 @@ async function captureClientLocation() {
 /** Aviso al admin cuando corregir un abono ya cerrado cambió las transferencias (y la base). */
 function notifyClosedTransfers(adjustments) {
   if (!adjustments.length) return;
-  const text = adjustments.map(({ date, delta }) => `${delta > 0 ? '+' : '−'}${formatMoney(Math.abs(delta))} en transferencias del cierre del ${formatDate(date)}`).join(' · ');
-  showToast(`${text}.${adjustments.some(item => item.base) ? ' La base de hoy se corrigió.' : ''}`);
+  const signed = value => `${value > 0 ? '+' : '−'}${formatMoney(Math.abs(value))}`;
+  const text = adjustments.map(({ date, collections, transfers, cash, base }) => {
+    const parts = [];
+    if (collections) parts.push(`cobro ${signed(collections)}`);
+    if (transfers) parts.push(`transferencias ${signed(transfers)}`);
+    if (cash) parts.push(`efectivo ${signed(cash)}`);
+    return `Cierre del ${formatDate(date)}: ${parts.join(', ')}${base ? `. Base de hoy ${signed(cash)}` : ''}`;
+  }).join(' · ');
+  showToast(`${text}.`);
 }
 
 function openClient(clientId) {

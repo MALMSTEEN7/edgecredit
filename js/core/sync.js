@@ -542,7 +542,15 @@ function mergeArrays(base, local, remote) {
   const out = [];
   remote.forEach(item => {
     const key = itemIdentity(item);
-    if (l.has(key)) out.push(b.has(key) && same(l.get(key), b.get(key)) ? item : l.get(key));
+    if (l.has(key)) {
+      const mine = l.get(key);
+      if (!b.has(key) || same(mine, item) || same(item, b.get(key))) out.push(mine);
+      else if (same(mine, b.get(key))) out.push(item);
+      // Los dos equipos editaron el mismo registro (p. ej. aquí se quitó la foto vencida y allá se
+      // cambió la forma de pago): se combinan campo por campo. Antes ganaba el registro de aquí
+      // completo y se perdía lo que cambió el otro equipo.
+      else out.push(mergeThreeWay(b.get(key), mine, item, 1));
+    }
     else if (!b.has(key) || !same(item, b.get(key))) out.push(item); // nuevo allá (o borrado aquí pero editado allá)
   });
   local.forEach((item, position) => {
