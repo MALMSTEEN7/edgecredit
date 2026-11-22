@@ -2,8 +2,10 @@
  * domain/person-cards · Varias cartulinas a nombre de una misma persona.
  *
  * Cada cartulina sigue siendo un registro independiente en `clients` (su propio saldo,
- * cuota, calendario y abonos). Lo que las agrupa es la cédula de la persona. Así el
- * cobrador ve y cobra cada cartulina por separado, y la ficha permite saltar entre ellas.
+ * cuota, calendario y abonos). Lo que las agrupa es la cédula de la persona DENTRO DEL MISMO
+ * COBRO: si la misma persona tiene cartulinas en dos cobros, cada cobro solo ve y cuenta las
+ * suyas (no se mezclan saldos, números de préstamo ni el máximo de cartulinas). Así el cobrador
+ * ve y cobra cada cartulina por separado, y la ficha permite saltar entre las de su cobro.
  */
 
 /** Máximo de cartulinas ACTIVAS (con saldo) que puede tener una misma persona. */
@@ -56,21 +58,26 @@ export function withPersonIndex(clients, fn) {
   Object.keys(clients).forEach(id => {
     const key = clients[id] ? personKey(clients[id].id) : '';
     if (!key) return;
-    if (!map.has(key)) map.set(key, []);
-    map.get(key).push(id);
+    [key, `${clients[id].route}|${key}`].forEach(indexKey => {
+      if (!map.has(indexKey)) map.set(indexKey, []);
+      map.get(indexKey).push(id);
+    });
   });
   map.forEach(ids => ids.sort(byStart(clients)));
   personIndex = { clients, map };
   try { return fn(); } finally { personIndex = null; }
 }
 
-/** Todas las cartulinas de la persona (activas, canceladas y renovadas), de la más antigua a la más reciente. */
-export function personCardIds(clients, idNumber) {
+/**
+ * Cartulinas de la persona (activas, canceladas y renovadas), de la más antigua a la más
+ * reciente. Con `route`, solo las de ese cobro (lo normal: los cobros no se mezclan).
+ */
+export function personCardIds(clients, idNumber, route) {
   const key = personKey(idNumber);
   if (!key) return [];
-  if (personIndex?.clients === clients) return [...(personIndex.map.get(key) || [])];
+  if (personIndex?.clients === clients) return [...(personIndex.map.get(route ? `${route}|${key}` : key) || [])];
   return Object.keys(clients)
-    .filter(id => clients[id] && personKey(clients[id].id) === key)
+    .filter(id => clients[id] && personKey(clients[id].id) === key && (!route || clients[id].route === route))
     .sort(byStart(clients));
 }
 
@@ -78,8 +85,8 @@ export function personCardIds(clients, idNumber) {
  * Veces que se le ha prestado a la persona: cada cartulina a su nombre (activas, canceladas
  * o renovadas) más cada retanqueo. Devuelve { total, cards, retanqueos }.
  */
-export function loanCount(clients, idNumber) {
-  const ids = personCardIds(clients, idNumber);
+export function loanCount(clients, idNumber, route) {
+  const ids = personCardIds(clients, idNumber, route);
   const retanqueos = ids.reduce((sum, id) => sum + (clients[id].restructures || []).filter(entry => entry.type === 'retanqueo').length, 0);
   return { total: ids.length + retanqueos, cards: ids.length, retanqueos };
 }
@@ -94,13 +101,13 @@ export function isActiveCard(client) {
   return Number(client?.balance) > 0;
 }
 
-export function activeCardIds(clients, idNumber) {
-  return personCardIds(clients, idNumber).filter(id => isActiveCard(clients[id]));
+export function activeCardIds(clients, idNumber, route) {
+  return personCardIds(clients, idNumber, route).filter(id => isActiveCard(clients[id]));
 }
 
 /** Número de la cartulina dentro de la persona (1, 2, 3…), o 0 si no la encuentra. */
 export function cardNumber(clients, clientId) {
-  return personCardIds(clients, clients[clientId]?.id).indexOf(clientId) + 1;
+  return personCardIds(clients, clients[clientId]?.id, clients[clientId]?.route).indexOf(clientId) + 1;
 }
 
 /**
@@ -111,14 +118,14 @@ export function cardNumber(clients, clientId) {
 export function cardLabel(clients, clientId) {
   const client = clients[clientId];
   if (!client) return '';
-  const active = activeCardIds(clients, client.id);
-  if (!isActiveCard(client)) return personCardIds(clients, client.id).length > 1 ? 'Cartulina cancelada' : '';
+  const active = activeCardIds(clients, client.id, client.route);
+  if (!isActiveCard(client)) return personCardIds(clients, client.id, client.route).length > 1 ? 'Cartulina cancelada' : '';
   return active.length > 1 ? `Cartulina ${active.indexOf(clientId) + 1}` : '';
 }
 
 /** ¿Se puede abrir otra cartulina simultánea para esta persona? */
-export function canAddCard(clients, idNumber) {
-  return activeCardIds(clients, idNumber).length < MAX_ACTIVE_CARDS_PER_PERSON;
+export function canAddCard(clients, idNumber, route) {
+  return activeCardIds(clients, idNumber, route).length < MAX_ACTIVE_CARDS_PER_PERSON;
 }
 
 // ── Número de préstamo e historial de préstamos ──
@@ -129,8 +136,8 @@ export function canAddCard(clients, idNumber) {
 // Las cartulinas que se crean después en EdgeCredit siguen la cuenta: #31, #32…
 
 /** Historial del sistema anterior de la persona (el más completo entre sus cartulinas), o null. */
-export function personLoanHistory(clients, idNumber) {
-  return personCardIds(clients, idNumber)
+export function personLoanHistory(clients, idNumber, route) {
+  return personCardIds(clients, idNumber, route)
     .map(id => clients[id]?.loanHistory)
     .filter(validHistory)
     .sort((a, b) => Number(b.total || b.loans.length) - Number(a.total || a.loans.length))[0] || null;
@@ -143,7 +150,7 @@ const startOf = client => String(client?.creditStartDate || '');
 export function cardLoanHistory(clients, clientId) {
   const client = clients[clientId];
   if (!client) return null;
-  return validHistory(client.loanHistory) ? client.loanHistory : personLoanHistory(clients, client.id);
+  return validHistory(client.loanHistory) ? client.loanHistory : personLoanHistory(clients, client.id, client.route);
 }
 
 /**
@@ -152,7 +159,7 @@ export function cardLoanHistory(clients, clientId) {
  * sistema anterior registró con códigos parecidos no se mezclan.
  */
 function relatedCardIds(clients, clientId, history) {
-  const ids = personCardIds(clients, clients[clientId].id);
+  const ids = personCardIds(clients, clients[clientId].id, clients[clientId].route);
   if (!history) return ids;
   return ids.filter(id => {
     const own = clients[id].loanHistory;

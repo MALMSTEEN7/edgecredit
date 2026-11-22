@@ -120,8 +120,9 @@ const LINK_COPY = {
 };
 
 /**
- * Activa el modo vinculado a una cartulina existente (renovar u otra cartulina):
- * identidad fija, sin foto nueva (se usa la registrada) y sin elegir posición.
+ * Activa el modo vinculado a una cartulina existente (renovar u otra cartulina): la identidad
+ * queda fija y se usa la foto registrada, sin elegir posición. Lo que le falte a la persona
+ * (cédula, teléfono o foto) sí se puede llenar (lo decide openLinkedModal con los datos cargados).
  */
 function setLinkedMode(sourceId, mode) {
   renewSourceId = sourceId;
@@ -144,14 +145,15 @@ function setLinkedMode(sourceId, mode) {
   if (!linked) return;
   const source = clients[sourceId];
   const photo = document.querySelector('#linked-photo-img');
-  if (source.photoData) photo.src = source.photoData; else photo.removeAttribute('src');
-  photo.hidden = !source.photoData;
-  document.querySelector('#linked-photo-text').textContent = source.photoData
+  const knownPhoto = personPhoto(sourceId);
+  if (knownPhoto) photo.src = knownPhoto; else photo.removeAttribute('src');
+  photo.hidden = !knownPhoto;
+  document.querySelector('#linked-photo-text').textContent = knownPhoto
     ? 'Se usa la foto ya registrada de esta persona.'
     : 'Esta persona no tiene foto registrada; puede agregarse luego desde «Editar cliente».';
   linkedPhoto.hidden = false;
   if (linkMode === 'extra') {
-    const active = activeCardIds(clients, source.id).length;
+    const active = activeCardIds(clients, source.id, source.route).length;
     note.hidden = false;
     note.textContent = `${source.name} tiene ${active} cartulina${active === 1 ? '' : 's'} activa${active === 1 ? '' : 's'}. Esta será la ${active + 1} de máximo ${MAX_ACTIVE_CARDS_PER_PERSON}.`;
   }
@@ -264,7 +266,7 @@ export function openRenewalModal(sourceId) {
 export function openExtraCardModal(sourceId) {
   const source = clients[sourceId];
   if (!source) return;
-  if (!canAddCard(clients, source.id)) {
+  if (!canAddCard(clients, source.id, source.route)) {
     showToast(`${source.name} ya tiene ${MAX_ACTIVE_CARDS_PER_PERSON} cartulinas activas, el máximo permitido.`);
     return;
   }
@@ -276,9 +278,18 @@ export function openExtraCardModal(sourceId) {
  * los de la cartulina de origen y, si alguno falta, el más reciente que tenga la persona en
  * cualquiera de sus cartulinas.
  */
+/** Foto de la persona: la de la cartulina de origen o la más reciente de sus otras cartulinas del cobro. */
+function personPhoto(sourceId) {
+  const source = clients[sourceId];
+  if (!source) return '';
+  if (source.photoData) return source.photoData;
+  const card = personCardIds(clients, source.id, source.route).reverse().map(id => clients[id]).find(item => item?.photoData);
+  return card?.photoData || '';
+}
+
 export function personContact(sourceId) {
   const source = clients[sourceId] || {};
-  const cards = personCardIds(clients, source.id).reverse(); // de la más reciente a la más antigua
+  const cards = personCardIds(clients, source.id, source.route).reverse(); // de la más reciente a la más antigua
   const pick = field => {
     const own = String(source[field] ?? '').trim();
     if (own) return own;
@@ -303,8 +314,15 @@ function openLinkedModal(sourceId, mode) {
   // dirección: se toma el dato más reciente de cualquier cartulina de la persona.
   const contact = personContact(sourceId);
   fields.name.value = source.name;
-  fields.idNumber.value = source.id;
-  fields.phone.value = contact.phone;
+  // Cédula y teléfono sin números (p. ej. «ZULIA SEMANAL» del sistema anterior) cuentan como faltantes.
+  const hasDigits = value => /\d/.test(String(value || ''));
+  fields.idNumber.value = hasDigits(source.id) ? source.id : '';
+  fields.phone.value = hasDigits(contact.phone) ? contact.phone : '';
+  // Solo se puede escribir lo que falta; lo que ya está registrado queda fijo.
+  ['name', 'idNumber', 'phone'].forEach(name => { fields[name].readOnly = Boolean(String(fields[name].value).trim()); });
+  const missingPhoto = !personPhoto(sourceId);
+  document.querySelector('.client-photo-field').hidden = !missingPhoto;
+  if (missingPhoto) document.querySelector('#linked-photo-text').textContent = 'Esta persona no tiene foto registrada: tómala o elígela abajo.';
   fields.address.value = contact.address;
   fields.addressNotes.value = contact.addressNotes;
   fields.totalDays.value = source.totalDays || '';
@@ -379,14 +397,14 @@ function addNewClient(values, photoData = '', insurance, gps = null) {
     // la anterior pasa al historial y la ubicación se vuelve a tomar.
     const changedAt = new Date().toISOString();
     const by = isAdmin ? 'Administrador' : state.activeWorker?.name || 'Trabajador';
-    created.photoData = photoData || source.photoData || '';
+    created.photoData = photoData || personPhoto(renewSourceId) || '';
     created.notes = source.notes || '';
     created.notesUpdatedAt = source.notesUpdatedAt || null;
     created.notesUpdatedBy = source.notesUpdatedBy || null;
     created.addressHistory = [...(source.addressHistory || [])];
     // Cartulina de la persona que tiene esta misma dirección (la de origen puede no tenerla si
     // vino sin dirección del sistema anterior): de ella se toma la ubicación.
-    const sameAddressCard = [source, ...personCardIds(clients, source.id).reverse().map(id => clients[id])]
+    const sameAddressCard = [source, ...personCardIds(clients, source.id, source.route).reverse().map(id => clients[id])]
       .find(card => card && String(card.address || '').trim() === created.address && hasCoordinates(card.location));
     if (created.address === String(source.address || '').trim() || sameAddressCard) created.location = (sameAddressCard || source).location || null;
     else created.addressHistory.push({ type: 'principal', address: source.address, replacedBy: created.address, location: source.location || null, changedAt, changedBy: by });
@@ -404,14 +422,14 @@ function addNewClient(values, photoData = '', insurance, gps = null) {
     // Renovación: ocupa el lugar de la anterior. Otra cartulina: va después de la última
     // cartulina de la persona, para cobrarlas en la misma visita.
     const order = currentRouteOrder(assignedRoute).filter(id => id !== clientId);
-    const siblings = personCardIds(clients, source.id).filter(id => id !== clientId && order.includes(id));
+    const siblings = personCardIds(clients, source.id, source.route).filter(id => id !== clientId && order.includes(id));
     const anchor = mode === 'extra' ? siblings.sort((a, b) => order.indexOf(a) - order.indexOf(b)).pop() || renewSourceId : renewSourceId;
     const index = order.indexOf(anchor);
     order.splice(index < 0 ? order.length : index + 1, 0, clientId);
     state.clientLibraryOrder[assignedRoute] = order;
   } else placeInRoute(assignedRoute, clientId);
   appendClientCards(clientId);
-  if (source) personCardIds(clients, source.id).forEach(id => { if (id !== clientId) renderClientRows(id); });
+  if (source) personCardIds(clients, source.id, source.route).forEach(id => { if (id !== clientId) renderClientRows(id); });
   // El trabajador registra al cliente en su domicilio: esa posición (con su precisión y
   // fecha) va al mismo campo que usa el mapa. Sin ubicación, queda marcado para tomarla
   // después desde la ficha.
@@ -509,6 +527,15 @@ function updateInstallmentsHint() {
 //  - si tiene cartulinas activas, como «Otra cartulina» (o se avisa si ya tiene el máximo).
 
 const idDigits = value => String(value || '').replace(/\D/g, '');
+
+/**
+ * Cobro donde queda la cartulina que se está creando. Las personas solo se buscan y se comparan
+ * dentro de ese cobro: la misma persona en otro cobro es otro cliente (los cobros no se mezclan).
+ */
+function newClientRoute() {
+  if (renewSourceId && clients[renewSourceId]) return clients[renewSourceId].route;
+  return state.userRole === 'admin' ? routeSelect.value : state.workerRoute;
+}
 const nameKey = value => normalizeSearch(value).replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
 const MIN_FUZZY_ID = 6;
 const MIN_FUZZY_NAME = 8;
@@ -539,8 +566,9 @@ const firstName = value => nameKey(value).split(' ')[0] || '';
  */
 function lookalikePerson(values) {
   let similar = null;
+  const route = newClientRoute();
   for (const client of Object.values(clients)) {
-    if (!client) continue;
+    if (!client || client.route !== route) continue;
     const exactId = Boolean(personKey(client.id)) && personKey(client.id) === personKey(values.idNumber);
     if (exactId) return { client, field: 'idNumber', level: 'block' };
     if (nameLooksSame(client, values.name)) return { client, field: 'name', level: 'block' };
@@ -563,18 +591,19 @@ function existingPeople(field, text) {
   if (field === 'idNumber' ? digits.length < 4 : words.join('').length < 3) return [];
   const seen = new Set();
   const people = [];
+  const route = newClientRoute();
   Object.keys(clients).forEach(id => {
     const client = clients[id];
     const key = personKey(client?.id);
-    if (!client || !key || seen.has(key)) return;
+    if (!client || client.route !== route || !key || seen.has(key)) return;
     const matches = field === 'idNumber'
       ? String(client.id || '').replace(/\D/g, '').includes(digits) || idLooksSame(client, text)
       : words.every(word => normalizeSearch(client.name).includes(word)) || nameLooksSame(client, text);
     if (!matches) return;
     seen.add(key);
-    const cards = personCardIds(clients, client.id);
+    const cards = personCardIds(clients, client.id, route);
     const latest = clients[cards.at(-1)];
-    const active = activeCardIds(clients, client.id);
+    const active = activeCardIds(clients, client.id, route);
     const renewable = cards.filter(cardId => canRenew(cardId)).at(-1) || null;
     const person = { latest, active: active.length, renewSource: active.length ? null : renewable, extraSource: active.length ? active.at(-1) : null };
     if (person.renewSource || person.extraSource) people.push(person);
@@ -618,7 +647,7 @@ function renderExistingSuggestions(input) {
     meta.textContent = [`Cédula ${latest.id}`, status, routeName && `Ruta ${routeName}`].filter(Boolean).join(' · ');
     const action = document.createElement('span');
     action.className = `existing-person-action ${person.active ? 'is-active' : ''}`;
-    action.textContent = person.renewSource ? 'Renovar' : canAddCard(clients, latest.id) ? 'Otra cartulina' : 'Máximo de cartulinas';
+    action.textContent = person.renewSource ? 'Renovar' : canAddCard(clients, latest.id, latest.route) ? 'Otra cartulina' : 'Máximo de cartulinas';
     const copy = document.createElement('span');
     copy.className = 'existing-person-copy';
     copy.append(name, meta);
@@ -734,7 +763,7 @@ export function mount() {
       // GPS solo del trabajador (está en el domicilio). Una renovación con la misma dirección
       // conserva la ubicación que ya tenía.
       const source = linked ? clients[renewSourceId] : null;
-      const keepsLocation = source && personCardIds(clients, source.id).map(id => clients[id]).concat(source).some(card => card && String(card.address || '').trim() === values.address.trim() && hasCoordinates(card.location));
+      const keepsLocation = source && personCardIds(clients, source.id, source.route).map(id => clients[id]).concat(source).some(card => card && String(card.address || '').trim() === values.address.trim() && hasCoordinates(card.location));
       let gps = null;
       if (state.userRole === 'worker' && !keepsLocation) {
         submit.disabled = true;
