@@ -66,7 +66,7 @@ export function deliveredLoans(clients, routeId, route, date = null, today = loc
     const delivered = deliveryDate(client);
     if (counts(delivered, Number(client.insuranceCollectedTs) || 0)) {
       const key = personKey(client.id);
-      const before = all.some(([otherId, other]) => otherId !== clientId && personKey(other.id) === key
+      const before = all.some(([otherId, other]) => otherId !== clientId && other.route === client.route && personKey(other.id) === key
         && (deliveryDate(other) < delivered || (deliveryDate(other) === delivered && otherId < clientId)));
       const isNew = !before && !client.renewedFrom;
       loans.push({ clientId, name: client.name, principal: Number(client.principal) || 0, amount: Number(client.total) || 0, isNew, date: delivered, kind: isNew ? 'Cliente nuevo' : client.renewedFrom ? 'Renovación' : 'Cliente que ya había estado' });

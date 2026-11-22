@@ -542,7 +542,7 @@ export function openClient(clientId) {
   // Número de este préstamo en la historia de la persona (igual que «Préstamo #» en la ruta diaria).
   const number = loanNumber(clients, state.activeClient);
   const total = personLoanTotal(clients, state.activeClient);
-  const retanqueos = loanCount(clients, client.id).retanqueos;
+  const retanqueos = loanCount(clients, client.id, client.route).retanqueos;
   document.querySelector('#detail-loan-count').textContent = `Préstamo #${number}${total > number ? ` de ${total}` : ''}${retanqueos ? ` · ${retanqueos} retanqueo${retanqueos === 1 ? '' : 's'}` : ''}`;
   document.querySelector('#detail-breakdown').textContent = client.breakdown;
   renderAddressDetails(client);
@@ -670,7 +670,7 @@ function renderCardActions(client) {
   pending.hidden = cancelled;
   pending.textContent = cancelled ? '' : `Falta pagar ${formatMoney(client.balance)}`;
   renewButton.title = locked ? 'Para renovar, primero hay que pagar todo el saldo de esta cartulina' : 'Crear una cartulina nueva con los mismos datos';
-  const room = canAddCard(clients, client.id);
+  const room = canAddCard(clients, client.id, client.route);
   extraButton.disabled = !room;
   extraButton.title = room ? 'Abrir otro crédito a nombre de esta persona' : `Máximo ${MAX_ACTIVE_CARDS_PER_PERSON} cartulinas activas por persona`;
   const notes = [];
@@ -704,7 +704,7 @@ function renderCardActions(client) {
  */
 function renderPersonCards(clientId) {
   const client = clients[clientId];
-  const ids = activeCardIds(clients, client.id);
+  const ids = activeCardIds(clients, client.id, client.route);
   const nav = document.querySelector('#person-cards');
   const list = document.querySelector('#person-cards-list');
   const currentActive = ids.includes(clientId);
