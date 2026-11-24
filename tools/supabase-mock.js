@@ -222,7 +222,7 @@
         async enroll() {
           const db = load();
           const secret = Array.from(crypto.getRandomValues(new Uint8Array(16)), b => B32[b % 32]).join('');
-          const factor = { id: uuid(), user_id: currentUser.id, secret, status: 'unverified' };
+          const factor = { id: uuid(), user_id: currentUser.id, secret, status: 'unverified', created_at: new Date().toISOString() };
           db.factors.push(factor); save(db);
           return { data: { id: factor.id, totp: { secret, uri: `otpauth://totp/EdgeCredit:${currentUser.email}?secret=${secret}&issuer=EdgeCredit`, qr_code: '' } }, error: null };
         },

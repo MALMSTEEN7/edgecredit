@@ -445,15 +445,19 @@ async function authenticateWithServer() {
   }
   // Verificación en dos pasos con el MFA de Supabase.
   const factors = await db.auth.mfa.listFactors();
-  let factorId = factors.data?.totp?.find(factor => factor.status === 'verified')?.id || null;
+  const activeFactor = factors.data?.totp?.find(factor => factor.status === 'verified') || null;
+  let factorId = activeFactor?.id || null;
   const remote = {
     needsEnroll: !factorId,
+    trustVersion: factorId,
+    factorCreatedAt: activeFactor?.created_at || null,
     async enroll() {
       const stale = (factors.data?.all || []).filter(factor => factor.status !== 'verified');
       for (const factor of stale) await db.auth.mfa.unenroll({ factorId: factor.id });
       const { data: enrolled, error: enrollError } = await db.auth.mfa.enroll({ factorType: 'totp', friendlyName: `EdgeCredit ${new Date().toISOString()}`, issuer: 'EdgeCredit' });
       if (enrollError) throw enrollError;
       factorId = enrolled.id;
+      remote.trustVersion = enrolled.id;
       return { secret: enrolled.totp.secret, uri: enrolled.totp.uri };
     },
     async verify(code) {
@@ -546,7 +550,10 @@ async function secondFactorDone(db, userId) {
   if (error || !data) return false;
   if (data.currentLevel === 'aal2') return true;
   // Dispositivo recordado: al ingresar tampoco se pide el código, así que la sesión vale igual.
-  return data.nextLevel === 'aal2' && isAccountTrusted(userId, 0);
+  if (data.nextLevel !== 'aal2') return false;
+  const factors = await db.auth.mfa.listFactors();
+  const active = factors.data?.totp?.find(factor => factor.status === 'verified');
+  return Boolean(active) && isAccountTrusted(userId, active.id, { createdAt: active.created_at });
 }
 
 /**
@@ -728,7 +735,7 @@ export function mount() {
       // En un dispositivo recordado (ya verificado y vigente) no se vuelve a pedir.
       // Sin señal: este celular ya pasó la verificación en dos pasos en su último ingreso con internet.
       const trusted = account.offline || (account.remote
-        ? !account.remote.needsEnroll && isAccountTrusted(account.trustKey, 0)
+        ? !account.remote.needsEnroll && isAccountTrusted(account.trustKey, account.remote.trustVersion, { createdAt: account.remote.factorCreatedAt })
         : Boolean(account.record.totpSecret) && isAccountTrusted(account.label, account.record.trustVersion));
       if (TWO_FACTOR_REQUIRED && !trusted) {
         const verified = await requestSecondFactor(account);
@@ -739,7 +746,7 @@ export function mount() {
           document.querySelector('#login-password').focus();
           return;
         }
-        if (document.querySelector('#two-factor-remember').checked) trustAccount(account.trustKey || account.label, account.remote ? 0 : account.record.trustVersion);
+        if (document.querySelector('#two-factor-remember').checked) trustAccount(account.trustKey || account.label, account.remote ? account.remote.trustVersion : account.record.trustVersion);
         refreshTrustedState();
       }
       // El horario o el acceso pudieron cambiar mientras se escribía el código.

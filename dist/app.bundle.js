@@ -338,10 +338,10 @@ const LOCKOUT_SECONDS = 60;
 
 /**
  * Dispositivo recordado: tras verificar el código en un dispositivo y marcar
- * «Recordar este dispositivo», no se vuelve a pedir el código en ese navegador durante
- * estos días. En otro dispositivo (o al vencer el plazo) se pide de nuevo.
+ * «Recordar este dispositivo», no se vuelve a pedir el código en ese navegador nunca más.
+ * Solo deja de valer cuando el administrador usa «Restablecer 2FA» con ese trabajador
+ * (o si se borran los datos del navegador). En otro dispositivo se pide el código.
  */
-const TRUSTED_DEVICE_DAYS = 30;
 
 // ── js/core/state.js
 /**
@@ -7084,7 +7084,7 @@ function handlePersonnelAction(action, index) {
   } else if (action === 'reset-2fa') {
     openCustomModal({
       title: 'Restablecer verificación en dos pasos',
-      description: `${worker.name} deberá escanear un código QR nuevo con su app de autenticación en el próximo ingreso. El código anterior y los dispositivos recordados dejarán de funcionar.`,
+      description: `${worker.name} deberá escanear un código QR nuevo con su app de autenticación en el próximo ingreso. El código anterior y todos sus dispositivos recordados dejarán de funcionar.`,
       submitLabel: 'Restablecer',
       onSubmit: async () => {
         if (backendEnabled()) {
@@ -8598,12 +8598,11 @@ function __mount_settlementModule() {
 /**
  * features/auth/device-trust · «Recordar este dispositivo».
  *
- * Guarda en este navegador qué cuentas ya pasaron la verificación en dos pasos y hasta
- * cuándo. Mientras esté vigente no se pide el código de verificación.
+ * Guarda en este navegador qué cuentas ya pasaron la verificación en dos pasos. Es
+ * permanente: no se vuelve a pedir el código de verificación en este navegador.
  * Si el admin restablece la verificación de un trabajador (trustVersion cambia), la
  * confianza de ese trabajador deja de valer en todos los dispositivos.
  */
-
 
 const TRUST_KEY = 'edgecredit-trusted-device';
 
@@ -8616,20 +8615,33 @@ function writeTrust(data) {
   try { localStorage.setItem(TRUST_KEY, JSON.stringify(data)); } catch { /* almacenamiento opcional */ }
 }
 
-/** ¿La cuenta ya verificó su código en este dispositivo y sigue vigente? */
-function isAccountTrusted(label, version = 0) {
-  const entry = readTrust().accounts[label];
-  return Boolean(entry && entry.expires > Date.now() && Number(entry.version || 0) === Number(version || 0));
+/**
+ * ¿La cuenta ya verificó su código en este dispositivo? No vence: solo deja de valer si el
+ * administrador restablece la verificación (cambia `version`: en el servidor es el id del
+ * código activo, que es nuevo tras restablecer y volver a activarlo).
+ * `createdAt`: cuándo se creó el código activo. Los dispositivos recordados antes de guardar
+ * el id del código siguen valiendo si se recordaron después de crearlo (y quedan con el id).
+ */
+function isAccountTrusted(label, version = 0, { createdAt } = {}) {
+  const data = readTrust();
+  const entry = data.accounts[label];
+  if (!entry) return false;
+  if (String(entry.version ?? 0) === String(version ?? 0)) return true;
+  const legacy = !entry.version && entry.since && createdAt && Date.parse(entry.since) >= Date.parse(createdAt) - 10 * 60000; // margen por la hora del celular
+  if (!legacy) return false;
+  entry.version = version;
+  writeTrust(data);
+  return true;
 }
 
 /** ¿Este navegador está recordado para alguna cuenta? */
 function isBrowserTrusted() {
-  return Object.values(readTrust().accounts).some(entry => entry.expires > Date.now());
+  return Object.keys(readTrust().accounts).length > 0;
 }
 
 function trustAccount(label, version = 0) {
   const data = readTrust();
-  data.accounts[label] = { expires: Date.now() + TRUSTED_DEVICE_DAYS * 86400000, version: Number(version || 0), since: new Date().toISOString() };
+  data.accounts[label] = { version: typeof version === 'string' ? version : Number(version || 0), since: new Date().toISOString() };
   writeTrust(data);
 }
 
@@ -9096,15 +9108,19 @@ async function authenticateWithServer() {
   }
   // Verificación en dos pasos con el MFA de Supabase.
   const factors = await db.auth.mfa.listFactors();
-  let factorId = factors.data?.totp?.find(factor => factor.status === 'verified')?.id || null;
+  const activeFactor = factors.data?.totp?.find(factor => factor.status === 'verified') || null;
+  let factorId = activeFactor?.id || null;
   const remote = {
     needsEnroll: !factorId,
+    trustVersion: factorId,
+    factorCreatedAt: activeFactor?.created_at || null,
     async enroll() {
       const stale = (factors.data?.all || []).filter(factor => factor.status !== 'verified');
       for (const factor of stale) await db.auth.mfa.unenroll({ factorId: factor.id });
       const { data: enrolled, error: enrollError } = await db.auth.mfa.enroll({ factorType: 'totp', friendlyName: `EdgeCredit ${new Date().toISOString()}`, issuer: 'EdgeCredit' });
       if (enrollError) throw enrollError;
       factorId = enrolled.id;
+      remote.trustVersion = enrolled.id;
       return { secret: enrolled.totp.secret, uri: enrolled.totp.uri };
     },
     async verify(code) {
@@ -9197,7 +9213,10 @@ async function secondFactorDone(db, userId) {
   if (error || !data) return false;
   if (data.currentLevel === 'aal2') return true;
   // Dispositivo recordado: al ingresar tampoco se pide el código, así que la sesión vale igual.
-  return data.nextLevel === 'aal2' && isAccountTrusted(userId, 0);
+  if (data.nextLevel !== 'aal2') return false;
+  const factors = await db.auth.mfa.listFactors();
+  const active = factors.data?.totp?.find(factor => factor.status === 'verified');
+  return Boolean(active) && isAccountTrusted(userId, active.id, { createdAt: active.created_at });
 }
 
 /**
@@ -9379,7 +9398,7 @@ function __mount_sessionModule() {
       // En un dispositivo recordado (ya verificado y vigente) no se vuelve a pedir.
       // Sin señal: este celular ya pasó la verificación en dos pasos en su último ingreso con internet.
       const trusted = account.offline || (account.remote
-        ? !account.remote.needsEnroll && isAccountTrusted(account.trustKey, 0)
+        ? !account.remote.needsEnroll && isAccountTrusted(account.trustKey, account.remote.trustVersion, { createdAt: account.remote.factorCreatedAt })
         : Boolean(account.record.totpSecret) && isAccountTrusted(account.label, account.record.trustVersion));
       if (TWO_FACTOR_REQUIRED && !trusted) {
         const verified = await requestSecondFactor(account);
@@ -9390,7 +9409,7 @@ function __mount_sessionModule() {
           document.querySelector('#login-password').focus();
           return;
         }
-        if (document.querySelector('#two-factor-remember').checked) trustAccount(account.trustKey || account.label, account.remote ? 0 : account.record.trustVersion);
+        if (document.querySelector('#two-factor-remember').checked) trustAccount(account.trustKey || account.label, account.remote ? account.remote.trustVersion : account.record.trustVersion);
         refreshTrustedState();
       }
       // El horario o el acceso pudieron cambiar mientras se escribía el código.
