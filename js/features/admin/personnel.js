@@ -241,7 +241,7 @@ function handlePersonnelAction(action, index) {
   } else if (action === 'reset-2fa') {
     openCustomModal({
       title: 'Restablecer verificación en dos pasos',
-      description: `${worker.name} deberá escanear un código QR nuevo con su app de autenticación en el próximo ingreso. El código anterior y los dispositivos recordados dejarán de funcionar.`,
+      description: `${worker.name} deberá escanear un código QR nuevo con su app de autenticación en el próximo ingreso. El código anterior y todos sus dispositivos recordados dejarán de funcionar.`,
       submitLabel: 'Restablecer',
       onSubmit: async () => {
         if (backendEnabled()) {

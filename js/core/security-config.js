@@ -14,7 +14,7 @@ export const LOCKOUT_SECONDS = 60;
 
 /**
  * Dispositivo recordado: tras verificar el código en un dispositivo y marcar
- * «Recordar este dispositivo», no se vuelve a pedir el código en ese navegador durante
- * estos días. En otro dispositivo (o al vencer el plazo) se pide de nuevo.
+ * «Recordar este dispositivo», no se vuelve a pedir el código en ese navegador nunca más.
+ * Solo deja de valer cuando el administrador usa «Restablecer 2FA» con ese trabajador
+ * (o si se borran los datos del navegador). En otro dispositivo se pide el código.
  */
-export const TRUSTED_DEVICE_DAYS = 30;

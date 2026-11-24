@@ -1,13 +1,11 @@
 /**
  * features/auth/device-trust · «Recordar este dispositivo».
  *
- * Guarda en este navegador qué cuentas ya pasaron la verificación en dos pasos y hasta
- * cuándo. Mientras esté vigente no se pide el código de verificación.
+ * Guarda en este navegador qué cuentas ya pasaron la verificación en dos pasos. Es
+ * permanente: no se vuelve a pedir el código de verificación en este navegador.
  * Si el admin restablece la verificación de un trabajador (trustVersion cambia), la
  * confianza de ese trabajador deja de valer en todos los dispositivos.
  */
-
-import { TRUSTED_DEVICE_DAYS } from '../../core/security-config.js';
 
 const TRUST_KEY = 'edgecredit-trusted-device';
 
@@ -20,20 +18,33 @@ function writeTrust(data) {
   try { localStorage.setItem(TRUST_KEY, JSON.stringify(data)); } catch { /* almacenamiento opcional */ }
 }
 
-/** ¿La cuenta ya verificó su código en este dispositivo y sigue vigente? */
-export function isAccountTrusted(label, version = 0) {
-  const entry = readTrust().accounts[label];
-  return Boolean(entry && entry.expires > Date.now() && Number(entry.version || 0) === Number(version || 0));
+/**
+ * ¿La cuenta ya verificó su código en este dispositivo? No vence: solo deja de valer si el
+ * administrador restablece la verificación (cambia `version`: en el servidor es el id del
+ * código activo, que es nuevo tras restablecer y volver a activarlo).
+ * `createdAt`: cuándo se creó el código activo. Los dispositivos recordados antes de guardar
+ * el id del código siguen valiendo si se recordaron después de crearlo (y quedan con el id).
+ */
+export function isAccountTrusted(label, version = 0, { createdAt } = {}) {
+  const data = readTrust();
+  const entry = data.accounts[label];
+  if (!entry) return false;
+  if (String(entry.version ?? 0) === String(version ?? 0)) return true;
+  const legacy = !entry.version && entry.since && createdAt && Date.parse(entry.since) >= Date.parse(createdAt) - 10 * 60000; // margen por la hora del celular
+  if (!legacy) return false;
+  entry.version = version;
+  writeTrust(data);
+  return true;
 }
 
 /** ¿Este navegador está recordado para alguna cuenta? */
 export function isBrowserTrusted() {
-  return Object.values(readTrust().accounts).some(entry => entry.expires > Date.now());
+  return Object.keys(readTrust().accounts).length > 0;
 }
 
 export function trustAccount(label, version = 0) {
   const data = readTrust();
-  data.accounts[label] = { expires: Date.now() + TRUSTED_DEVICE_DAYS * 86400000, version: Number(version || 0), since: new Date().toISOString() };
+  data.accounts[label] = { version: typeof version === 'string' ? version : Number(version || 0), since: new Date().toISOString() };
   writeTrust(data);
 }
 
