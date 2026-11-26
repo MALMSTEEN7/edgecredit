@@ -30,6 +30,8 @@ returns json
 language plpgsql
 security definer
 set search_path = public, extensions, pg_temp
+-- Con todas las cartulinas y fotos tarda más que el límite general de la API (8 s).
+set statement_timeout = '120s'
 as $$
 declare
   expected text;
