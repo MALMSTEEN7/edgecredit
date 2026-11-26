@@ -592,3 +592,12 @@
   font-size: 15px;
   font-weight: 700;
 }
+
+/* Firma del cliente (nuevo cliente) */
+.signature-field { display: grid; gap: 6px; }
+.signature-pad { width: 100%; height: auto; aspect-ratio: 600 / 220; background: #fff; border: 1px dashed #94a3b8; border-radius: 10px; touch-action: none; cursor: crosshair; }
+.signature-field.has-signature .signature-pad { border-style: solid; border-color: #64748b; }
+.signature-actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.signature-actions small { color: var(--muted, #64748b); }
+.signature-actions .secondary-button { min-height: 34px; padding: 4px 12px; }
+.detail-signature { display: block; width: 100%; max-width: 280px; background: #fff; border-radius: 8px; border: 1px solid #e2e8f0; }

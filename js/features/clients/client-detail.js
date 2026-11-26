@@ -518,6 +518,10 @@ export function openClient(clientId) {
   due.title = !settled && overdueDays > 0 ? `Vencida hace ${overdueDays} ${overdueDays === 1 ? 'día' : 'días'}` : settled ? 'Cartulina pagada' : `Faltan ${Math.max(0, client.totalDays - day)} días`;
   document.querySelector('#detail-installment').textContent = formatMoney(client.installment);
   document.querySelector('#detail-id').textContent = client.id;
+  // Firma del cliente al recibir el préstamo (si firmó al crear la cartulina).
+  const signature = document.querySelector('#detail-signature');
+  document.querySelector('#detail-signature-row').hidden = !client.signatureData;
+  if (client.signatureData) signature.src = client.signatureData; else signature.removeAttribute('src');
   document.querySelector('#detail-address').textContent = client.address;
   renderLocationLink(client);
   renderLocationPending(client);
