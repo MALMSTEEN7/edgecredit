@@ -6,6 +6,8 @@
  * base, cierre, cliente nuevo o borrado, choque entre equipos— con la hora y quién lo hizo.
  * Se actualiza sola mientras está abierta. Tocar una línea muestra el detalle y lo que se puede
  * hacer: deshacer, volver a poner lo quitado, editar el valor o abrir el cliente.
+ * «Solo abonos» deja solo los abonos registrados ese día, con su total. Se puede elegir el día
+ * (hoy y hasta AUDIT_DAYS_BACK días atrás).
  *
  * Lo anota el servidor (supabase/consola.sql). Los arreglos se guardan como cualquier cambio
  * del administrador y también aparecen en la terminal.
@@ -26,6 +28,9 @@ import { renderClientRows, renderClientsBulk } from '../clients/directory.js';
 
 const AUDIT_PAGE = 1000;
 const AUDIT_POLL_MS = 15000;
+// Días hacia atrás que se pueden consultar en la consola (hoy y los 10 anteriores).
+const AUDIT_DAYS_BACK = 10;
+const PAYMENT_TAGS = new Set(['ABONO', 'ABONO EDITADO', 'ABONO QUITADO']);
 
 const FIELD_LABELS = {
   balance: 'Saldo', payments: 'Abonos', totalPaidAmount: 'Total abonado', paid: 'Pagado', principal: 'Préstamo', total: 'Total a pagar',
@@ -51,7 +56,15 @@ let auditRoute = '';
 let auditTimer = null;
 let auditLoading = false;
 let auditAlertsOnly = false;
+let auditPaymentsOnly = false;
 let auditOpenLine = '';
+
+const oldestAuditDay = () => shiftDateISO(localDateISO(), -AUDIT_DAYS_BACK);
+
+/** Abono registrado ese día (no los abonos viejos que vuelven a aparecer al recuperar un cliente). */
+function isDayPayment(line) {
+  return PAYMENT_TAGS.has(line.tag) && (!line.item?.date || line.item.date === auditDay);
+}
 
 const fieldLabel = path => path.map(key => FIELD_LABELS[key] || key).join(' › ');
 const panelOpen = () => state.activeAdminPanel === 'audit' && !document.querySelector('[data-admin-panel="audit"]')?.hidden;
@@ -230,8 +243,12 @@ async function fetchAuditSince(afterId) {
   }
 }
 
+let auditReloadPending = false;
+
 async function loadAudit({ fresh = false } = {}) {
-  if (auditLoading || !auditRoute) return;
+  if (!auditRoute) return;
+  // Mientras carga otra cosa (p. ej. se cambió de día): se vuelve a cargar al terminar.
+  if (auditLoading) { if (fresh) auditReloadPending = true; return; }
   auditLoading = true;
   const status = document.querySelector('#audit-status');
   if (fresh) { auditRows = []; status.textContent = 'cargando…'; renderAudit(); }
@@ -241,13 +258,17 @@ async function loadAudit({ fresh = false } = {}) {
     const day = auditDay;
     const rows = await fetchAuditSince(afterId);
     if (route !== auditRoute || day !== auditDay) return;
+    auditLoading = false; // ya cargó: si no hay nada, se muestra «sin movimientos» y no «cargando…»
     if (rows.length || fresh) { auditRows.push(...rows); renderAudit({ scroll: rows.length > 0 }); }
     status.textContent = auditDay === localDateISO() ? `en vivo · ${auditClockTime(new Date())}` : 'día cerrado';
   } catch (error) {
     status.textContent = /audit_log|relation|does not exist|schema cache/i.test(String(error?.message))
       ? 'falta activar el historial en el servidor'
       : `sin conexión: ${backendErrorMessage(error)}`;
-  } finally { auditLoading = false; }
+  } finally {
+    auditLoading = false;
+    if (auditReloadPending) { auditReloadPending = false; loadAudit({ fresh: true }); }
+  }
 }
 
 function scheduleAuditPoll() {
@@ -302,13 +323,21 @@ function renderAudit({ scroll = false } = {}) {
   const nodes = [];
   let total = 0;
   let alerts = 0;
+  let paymentsCount = 0;
+  let paymentsSum = 0;
   auditRows.forEach(row => {
     const name = recordName(row).toLocaleLowerCase('es');
     auditRowLines(row).forEach((line, index) => {
       total += 1;
       if (line.tone === 'alert') alerts += 1;
       if (auditAlertsOnly && line.tone !== 'alert') return;
+      if (auditPaymentsOnly && !isDayPayment(line)) return;
       if (search && !name.includes(search) && !line.text.toLocaleLowerCase('es').includes(search) && !actorName(row).toLocaleLowerCase('es').includes(search)) return;
+      if (auditPaymentsOnly) {
+        const amount = Number(line.item?.amount) || 0;
+        if (line.tag === 'ABONO') { paymentsCount += 1; paymentsSum += amount; }
+        if (line.tag === 'ABONO QUITADO') { paymentsCount -= 1; paymentsSum -= amount; }
+      }
       nodes.push(auditLineNode(row, line, index));
       if (auditOpenLine === `${row.id}:${index}`) nodes.push(auditActionsNode(row, line));
     });
@@ -316,21 +345,27 @@ function renderAudit({ scroll = false } = {}) {
   const routeName = routeSettlements[auditRoute]?.name || auditRoute || '—';
   const head = document.createElement('div');
   head.className = 'term-line is-dim';
-  head.textContent = `$ movimientos --cobro "${routeName}" --dia ${auditDay}${auditAlertsOnly ? ' --solo-alertas' : ''}${search ? ` --buscar "${search}"` : ''}`;
+  head.textContent = `$ movimientos --cobro "${routeName}" --dia ${auditDay}${auditAlertsOnly ? ' --solo-alertas' : ''}${auditPaymentsOnly ? ' --solo-abonos' : ''}${search ? ` --buscar "${search}"` : ''}`;
   const tail = document.createElement('div');
   tail.className = 'term-line is-dim';
-  tail.textContent = auditRows.length || !auditLoading ? `${total} movimiento${total === 1 ? '' : 's'} · ${alerts} para revisar` : '';
+  tail.textContent = !auditRows.length && auditLoading ? ''
+    : auditPaymentsOnly ? `${paymentsCount} abono${paymentsCount === 1 ? '' : 's'} · total ${auditMoney(paymentsSum)}`
+      : `${total} movimiento${total === 1 ? '' : 's'} · ${alerts} para revisar`;
   const cursor = document.createElement('span');
   cursor.className = 'term-cursor';
   tail.append(cursor);
   const empty = document.createElement('div');
   empty.className = 'term-line is-dim';
-  empty.textContent = auditLoading && !auditRows.length ? 'cargando…' : 'sin movimientos';
+  empty.textContent = auditLoading && !auditRows.length ? 'cargando…' : auditPaymentsOnly ? 'sin abonos este día' : 'sin movimientos';
   screen.replaceChildren(head, ...(nodes.length ? nodes : [empty]), tail);
   if (scroll && atBottom) screen.scrollTop = screen.scrollHeight;
   document.querySelector('#audit-alerts')?.setAttribute('aria-pressed', String(auditAlertsOnly));
   document.querySelector('#audit-day-label').textContent = auditDay === localDateISO() ? 'HOY' : auditShortDate(auditDay) + '/' + auditDay.slice(0, 4);
+  document.querySelector('#audit-payments')?.setAttribute('aria-pressed', String(auditPaymentsOnly));
   document.querySelector('#audit-next').disabled = auditDay >= localDateISO();
+  document.querySelector('#audit-prev').disabled = auditDay <= oldestAuditDay();
+  const picker = document.querySelector('#audit-date');
+  if (picker) { picker.min = oldestAuditDay(); picker.max = localDateISO(); picker.value = auditDay; }
   document.querySelector('#audit-route-name').textContent = routeName;
 }
 
@@ -446,7 +481,8 @@ export function renderAuditConsole({ keepDay = false } = {}) {
 }
 
 function setAuditDay(day) {
-  auditDay = day > localDateISO() ? localDateISO() : day;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(day || ''))) day = localDateISO();
+  auditDay = day > localDateISO() ? localDateISO() : day < oldestAuditDay() ? oldestAuditDay() : day;
   auditOpenLine = '';
   loadAudit({ fresh: true });
   scheduleAuditPoll();
@@ -464,6 +500,8 @@ export function mount() {
   document.querySelector('#audit-next').addEventListener('click', () => setAuditDay(shiftDateISO(auditDay, 1)));
   document.querySelector('#audit-day-label').addEventListener('click', () => setAuditDay(localDateISO()));
   document.querySelector('#audit-alerts').addEventListener('click', () => { auditAlertsOnly = !auditAlertsOnly; renderAudit(); });
+  document.querySelector('#audit-payments').addEventListener('click', () => { auditPaymentsOnly = !auditPaymentsOnly; auditOpenLine = ''; renderAudit(); });
+  document.querySelector('#audit-date').addEventListener('change', event => { if (event.target.value) setAuditDay(event.target.value); });
   document.querySelector('#audit-search').addEventListener('input', () => renderAudit());
   document.addEventListener('visibilitychange', () => { if (!document.hidden && panelOpen()) { loadAudit(); scheduleAuditPoll(); } });
 }

@@ -34,7 +34,7 @@
   <link rel="icon" href="icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="icon-192.png">
   <meta name="apple-mobile-web-app-capable" content="yes">
-  <link rel="stylesheet" id="app-styles" href="dist/styles.bundle.css?v=3e33ef06c8">
+  <link rel="stylesheet" id="app-styles" href="dist/styles.bundle.css?v=e32015738f">
   <script>
     // Si hay una sesión guardada, al recargar se muestra «Cargando tu sesión…» en vez del
     // formulario de ingreso mientras la app la restaura (features/auth/session.js).
@@ -412,6 +412,8 @@
             <button type="button" id="audit-prev" aria-label="Día anterior">◀</button>
             <button type="button" id="audit-day-label" title="Volver a hoy">HOY</button>
             <button type="button" id="audit-next" aria-label="Día siguiente">▶</button>
+            <input id="audit-date" type="date" aria-label="Elegir día (hasta 10 días atrás)" title="Elegir día (hasta 10 días atrás)">
+            <button type="button" id="audit-payments" aria-pressed="false">$ solo abonos</button>
             <input id="audit-search" type="search" placeholder="buscar cliente, trabajador o monto…" autocomplete="off" aria-label="Buscar">
             <button type="button" id="audit-alerts" aria-pressed="false">⚠ solo para revisar</button>
           </div>
@@ -551,7 +553,7 @@
     // al cambiar el sello, el navegador descarga el JS/CSS nuevo en vez de usar su caché.
     // Para desarrollar con los módulos sueltos, abre index.html?dev desde un servidor local.
     (() => {
-      const APP_VERSION = '3e33ef06c8';
+      const APP_VERSION = 'e32015738f';
       const dev = new URLSearchParams(location.search).has('dev') && location.protocol !== 'file:';
       if (dev) {
         document.getElementById('app-styles').href = 'styles.css';

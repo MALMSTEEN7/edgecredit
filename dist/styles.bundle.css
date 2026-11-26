@@ -11907,6 +11907,8 @@ button.expense-receipt-link:active {
 .term-tools button:disabled { opacity: 0.4; }
 .term-tools input { flex: 1 1 200px; min-width: 0; }
 .term-tools button[aria-pressed="true"] { border-color: var(--term-red); color: var(--term-red); }
+.term-tools #audit-payments[aria-pressed="true"] { border-color: var(--term-green); color: var(--term-green); }
+.term-tools input[type="date"] { flex: 0 0 auto; color-scheme: dark; }
 .term-screen { height: min(68vh, 640px); overflow: auto; padding: 10px 14px 14px; }
 .term-line { display: grid; grid-template-columns: 70px 90px 150px minmax(120px, 220px) 1fr; gap: 10px; padding: 2px 4px; border-radius: 4px; cursor: pointer; white-space: pre-wrap; overflow-wrap: anywhere; }
 .term-line:hover, .term-line:focus-visible { background: #142018; outline: none; }
