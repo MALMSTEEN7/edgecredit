@@ -23,6 +23,7 @@ import { showToast } from '../../ui/toast.js';
 import { roundToThousand } from '../../shared/math.js';
 import { requireReductionBeforeRenewal } from '../payments/interest-reduction.js';
 import { openPayment } from '../payments/payment.js';
+import { clearSignature, mountSignaturePad, signatureData } from './signature-pad.js';
 import { openClient } from './client-detail.js';
 
 // Cartulina de origen cuando el modal está en modo «Renovar crédito» (linkMode 'renew')
@@ -218,6 +219,7 @@ function openNewClientModal() {
   newClientForm.reset();
   document.querySelector('#client-photo-preview').hidden = true;
   document.querySelector('#client-photo-preview').removeAttribute('src');
+  clearSignature();
   const isAdmin = state.userRole === 'admin';
   // La ruta la define el cobro abierto (admin: el seleccionado; trabajador: el suyo).
   const openRoute = routeSettlements[isAdmin ? routeSelect.value : state.workerRoute];
@@ -344,6 +346,7 @@ export function closeNewClientModal() {
   newClientForm.reset();
   document.querySelector('#client-photo-preview').hidden = true;
   document.querySelector('#client-photo-preview').removeAttribute('src');
+  clearSignature();
   document.querySelector('#client-photo-file-name').textContent = 'Ningún archivo seleccionado';
   setLinkedMode(null);
   if (customModal.hidden && interestModal.hidden && modal.hidden) document.body.classList.remove('modal-open');
@@ -379,7 +382,7 @@ function addNewClient(values, photoData = '', insurance, gps = null) {
     paid: 0, installments, progress: 0, routeDay: 1, totalDays, generalInterest: 0,
     interestPercent, insurancePercent: null, insuranceAmount: insurance.amount, insuranceCustom: insurance.custom, insuranceReason: insurance.reason, insuranceCollectedAt: today, insuranceCollectedTs: Date.now(),
     addressNotes: (values.addressNotes || '').trim(), notes: '', notesUpdatedAt: null, notesUpdatedBy: null, payments: [], interestHistory: [], noBaseImpact,
-    frequency, creditStartDate: today, visitHistory: [], paymentWarning: false, paidPeriodIndexes: [], schedulePaidBaseline: 0, photoData, totalPaidAmount: 0, settledAt: null
+    frequency, creditStartDate: today, visitHistory: [], paymentWarning: false, paidPeriodIndexes: [], schedulePaidBaseline: 0, photoData, signatureData: values.signatureData || '', signedAt: values.signatureData ? new Date().toISOString() : null, totalPaidAmount: 0, settledAt: null
   };
   const created = clients[clientId];
   // Creada un domingo: nunca arranca en domingo. Semanal: el día de cobro elegido (y su color);
@@ -701,6 +704,7 @@ export function mount() {
   document.querySelector('#add-client').addEventListener('click', openNewClientModal);
   document.querySelector('#renew-client').addEventListener('click', () => openRenewalModal(state.activeClient));
   document.querySelector('#extra-card-client').addEventListener('click', () => openExtraCardModal(state.activeClient));
+  mountSignaturePad();
   document.querySelector('#client-photo-input').addEventListener('change', event => {
     const preview = document.querySelector('#client-photo-preview');
     const file = event.target.files?.[0];
@@ -775,6 +779,7 @@ export function mount() {
         if (newClientModal.hidden) return; // lo cancelaron mientras se tomaba la ubicación
       }
       const payNow = document.querySelector('#new-client-pay-now').checked;
+      values.signatureData = signatureData();
       const createdId = addNewClient(values, photoData, insurance, gps);
       if (sourceId && createdId && state.activeClient === sourceId) onRenewed?.(createdId);
       // «Abona hoy»: se abre la cartulina nueva con el registro de abono listo.

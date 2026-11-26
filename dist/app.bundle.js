@@ -10207,6 +10207,10 @@ function openClient(clientId) {
   due.title = !settled && overdueDays > 0 ? `Vencida hace ${overdueDays} ${overdueDays === 1 ? 'día' : 'días'}` : settled ? 'Cartulina pagada' : `Faltan ${Math.max(0, client.totalDays - day)} días`;
   document.querySelector('#detail-installment').textContent = formatMoney(client.installment);
   document.querySelector('#detail-id').textContent = client.id;
+  // Firma del cliente al recibir el préstamo (si firmó al crear la cartulina).
+  const signature = document.querySelector('#detail-signature');
+  document.querySelector('#detail-signature-row').hidden = !client.signatureData;
+  if (client.signatureData) signature.src = client.signatureData; else signature.removeAttribute('src');
   document.querySelector('#detail-address').textContent = client.address;
   renderLocationLink(client);
   renderLocationPending(client);
@@ -11213,6 +11217,7 @@ function __mount_interestModule() {
 
 
 
+
 // Cartulina de origen cuando el modal está en modo «Renovar crédito» (linkMode 'renew')
 // o «Otra cartulina» para la misma persona (linkMode 'extra').
 let renewSourceId = null;
@@ -11406,6 +11411,7 @@ function openNewClientModal() {
   newClientForm.reset();
   document.querySelector('#client-photo-preview').hidden = true;
   document.querySelector('#client-photo-preview').removeAttribute('src');
+  clearSignature();
   const isAdmin = state.userRole === 'admin';
   // La ruta la define el cobro abierto (admin: el seleccionado; trabajador: el suyo).
   const openRoute = routeSettlements[isAdmin ? routeSelect.value : state.workerRoute];
@@ -11532,6 +11538,7 @@ function closeNewClientModal() {
   newClientForm.reset();
   document.querySelector('#client-photo-preview').hidden = true;
   document.querySelector('#client-photo-preview').removeAttribute('src');
+  clearSignature();
   document.querySelector('#client-photo-file-name').textContent = 'Ningún archivo seleccionado';
   setLinkedMode(null);
   if (customModal.hidden && interestModal.hidden && modal.hidden) document.body.classList.remove('modal-open');
@@ -11567,7 +11574,7 @@ function addNewClient(values, photoData = '', insurance, gps = null) {
     paid: 0, installments, progress: 0, routeDay: 1, totalDays, generalInterest: 0,
     interestPercent, insurancePercent: null, insuranceAmount: insurance.amount, insuranceCustom: insurance.custom, insuranceReason: insurance.reason, insuranceCollectedAt: today, insuranceCollectedTs: Date.now(),
     addressNotes: (values.addressNotes || '').trim(), notes: '', notesUpdatedAt: null, notesUpdatedBy: null, payments: [], interestHistory: [], noBaseImpact,
-    frequency, creditStartDate: today, visitHistory: [], paymentWarning: false, paidPeriodIndexes: [], schedulePaidBaseline: 0, photoData, totalPaidAmount: 0, settledAt: null
+    frequency, creditStartDate: today, visitHistory: [], paymentWarning: false, paidPeriodIndexes: [], schedulePaidBaseline: 0, photoData, signatureData: values.signatureData || '', signedAt: values.signatureData ? new Date().toISOString() : null, totalPaidAmount: 0, settledAt: null
   };
   const created = clients[clientId];
   // Creada un domingo: nunca arranca en domingo. Semanal: el día de cobro elegido (y su color);
@@ -11889,6 +11896,7 @@ function __mount_newClientModule() {
   document.querySelector('#add-client').addEventListener('click', openNewClientModal);
   document.querySelector('#renew-client').addEventListener('click', () => openRenewalModal(state.activeClient));
   document.querySelector('#extra-card-client').addEventListener('click', () => openExtraCardModal(state.activeClient));
+  mountSignaturePad();
   document.querySelector('#client-photo-input').addEventListener('change', event => {
     const preview = document.querySelector('#client-photo-preview');
     const file = event.target.files?.[0];
@@ -11963,6 +11971,7 @@ function __mount_newClientModule() {
         if (newClientModal.hidden) return; // lo cancelaron mientras se tomaba la ubicación
       }
       const payNow = document.querySelector('#new-client-pay-now').checked;
+      values.signatureData = signatureData();
       const createdId = addNewClient(values, photoData, insurance, gps);
       if (sourceId && createdId && state.activeClient === sourceId) onRenewed?.(createdId);
       // «Abona hoy»: se abre la cartulina nueva con el registro de abono listo.
@@ -11979,6 +11988,78 @@ function __mount_newClientModule() {
       submit.innerHTML = submitLabel;
     }
   });
+}
+
+// ── js/features/clients/signature-pad.js
+/**
+ * features/clients/signature-pad · Firma del cliente al crear la cartulina.
+ *
+ * Un recuadro donde el cliente firma con el dedo (o el mouse). Es opcional. Se guarda como una
+ * imagen pequeña (PNG de trazos, sin fondo) en `client.signatureData`.
+ */
+
+const SIGNATURE_ID = '#client-signature';
+let drawn = false;
+
+function canvas() { return document.querySelector(SIGNATURE_ID); }
+
+/** Borra la firma del recuadro. */
+function clearSignature() {
+  const pad = canvas();
+  if (!pad) return;
+  pad.getContext('2d').clearRect(0, 0, pad.width, pad.height);
+  drawn = false;
+  pad.closest('.signature-field')?.classList.remove('has-signature');
+}
+
+/** Firma dibujada como imagen, o '' si no firmó. */
+function signatureData() {
+  const pad = canvas();
+  return pad && drawn ? pad.toDataURL('image/png') : '';
+}
+
+function point(pad, event) {
+  const box = pad.getBoundingClientRect();
+  return { x: (event.clientX - box.left) * (pad.width / box.width), y: (event.clientY - box.top) * (pad.height / box.height) };
+}
+
+function mountSignaturePad() {
+  const pad = canvas();
+  if (!pad) return;
+  const context = pad.getContext('2d');
+  let last = null;
+  const start = event => {
+    event.preventDefault();
+    pad.setPointerCapture?.(event.pointerId);
+    last = point(pad, event);
+    context.fillStyle = '#111827';
+    context.beginPath();
+    context.arc(last.x, last.y, 1.6, 0, Math.PI * 2);
+    context.fill();
+    drawn = true;
+    pad.closest('.signature-field')?.classList.add('has-signature');
+  };
+  const move = event => {
+    if (!last) return;
+    event.preventDefault();
+    const next = point(pad, event);
+    context.strokeStyle = '#111827';
+    context.lineWidth = 3.2;
+    context.lineCap = 'round';
+    context.lineJoin = 'round';
+    context.beginPath();
+    context.moveTo(last.x, last.y);
+    context.lineTo(next.x, next.y);
+    context.stroke();
+    last = next;
+  };
+  const end = () => { last = null; };
+  pad.addEventListener('pointerdown', start);
+  pad.addEventListener('pointermove', move);
+  pad.addEventListener('pointerup', end);
+  pad.addEventListener('pointercancel', end);
+  pad.addEventListener('pointerleave', end);
+  document.querySelector('#client-signature-clear')?.addEventListener('click', clearSignature);
 }
 
 // ── js/features/daily-route/daily-route.js
