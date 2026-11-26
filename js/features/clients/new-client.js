@@ -22,6 +22,8 @@ import { LOCATION_FAILURE_LABELS, hasCoordinates, isApproximateLocation, locateD
 import { showToast } from '../../ui/toast.js';
 import { roundToThousand } from '../../shared/math.js';
 import { requireReductionBeforeRenewal } from '../payments/interest-reduction.js';
+import { openPayment } from '../payments/payment.js';
+import { openClient } from './client-detail.js';
 
 // Cartulina de origen cuando el modal está en modo «Renovar crédito» (linkMode 'renew')
 // o «Otra cartulina» para la misma persona (linkMode 'extra').
@@ -772,8 +774,14 @@ export function mount() {
         gps = await locateDevice({ timeout: 10000 });
         if (newClientModal.hidden) return; // lo cancelaron mientras se tomaba la ubicación
       }
+      const payNow = document.querySelector('#new-client-pay-now').checked;
       const createdId = addNewClient(values, photoData, insurance, gps);
       if (sourceId && createdId && state.activeClient === sourceId) onRenewed?.(createdId);
+      // «Abona hoy»: se abre la cartulina nueva con el registro de abono listo.
+      if (payNow && createdId && clients[createdId]) {
+        if (state.activeClient !== createdId || state.currentView !== 'detalle-cliente') openClient(createdId);
+        openPayment();
+      }
       if (createdId && gps && !gps.location && (gps.reason === 'timeout' || gps.reason === 'unavailable')) retryCreationLocation(createdId);
     } catch (error) { newClientError.textContent = error.message || 'No se pudo procesar la foto.'; }
     finally {
