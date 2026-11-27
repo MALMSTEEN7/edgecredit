@@ -161,11 +161,23 @@ export function mount() {
     const status = document.querySelector('#payment-location-status');
     const clientId = state.activeClient;
     if (!clientId || button.disabled) return;
-    button.disabled = true;
-    status.textContent = 'Tomando ubicación…';
-    const result = await takeLocationHere(clientId);
-    button.disabled = false;
-    status.textContent = result;
+    // Doble confirmación: un toque por error no debe cambiar la ubicación del cliente.
+    const name = clients[clientId]?.name || 'el cliente';
+    openCustomModal({
+      title: `¿Cambiar la ubicación de ${name}?`,
+      description: `La ubicación guardada del domicilio de ${name} se reemplazará por la de este celular en este momento. Hazlo solo si estás en su casa.`,
+      submitLabel: 'Sí, estoy en su casa',
+      cancelLabel: 'No, cancelar',
+      onSubmit: () => {
+        window.setTimeout(async () => {
+          button.disabled = true;
+          status.textContent = 'Tomando ubicación…';
+          const result = await takeLocationHere(clientId);
+          button.disabled = false;
+          status.textContent = result;
+        }, 0);
+      },
+    });
   });
   document.querySelectorAll('input[name="method"]').forEach(input => input.addEventListener('change', updatePaymentMethod));
   modal.addEventListener('click', event => { if (event.target === modal) closePayment(); });
