@@ -9,6 +9,7 @@ const CORS = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
+const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36';
 const GOOGLE_HOST = /^([a-z0-9-]+\.)*(goo\.gl|google\.[a-z.]+|g\.co|googleusercontent\.com)$/i;
 
 const PATTERNS = [
@@ -49,6 +50,63 @@ function coordinates(text: string) {
   return null;
 }
 
+// Lugares de Google («/maps/place/Nombre/data=…!1s0x…:0x…»): el enlace no trae coordenadas. La
+// página trae un enlace interno «/maps/preview/place?…» con los datos del lugar, incluido su punto.
+async function placeFromPreview(page: string) {
+  const href = page.match(/href="(\/maps\/preview\/place\?[^"]+)"/)?.[1]?.replace(/&amp;/g, '&');
+  if (!href) return null;
+  try {
+    const res = await fetch('https://www.google.com' + href, { headers: { 'User-Agent': UA, 'Accept-Language': 'es-CO,es;q=0.9' }, signal: AbortSignal.timeout(8000) });
+    const text = await res.text();
+    const m = text.match(/\[null,null,(-?\d{1,2}\.\d+),(-?\d{1,3}\.\d+)\],"0x[0-9a-f]+:0x[0-9a-f]+"/) || text.match(/\[null,null,(-?\d{1,2}\.\d+),(-?\d{1,3}\.\d+)\]/);
+    if (m) return { latitude: Number(m[1]), longitude: Number(m[2]) };
+    const view = text.match(/^\)\]\}'\s*\[null,\[\],null,null,\[\[[\d.]+,(-?\d{1,3}\.\d+),(-?\d{1,2}\.\d+)\]/);
+    if (view) return { latitude: Number(view[2]), longitude: Number(view[1]) };
+  } catch { /* sin respuesta */ }
+  return null;
+}
+
+// Último recurso: el primer número del código del lugar («0x…:0x…») es una celda S2 de Google
+// con la posición del lugar (en las pruebas, a pocos metros del punto real).
+const S2_LOOKUP_IJ: number[] = new Array(1024).fill(0);
+(() => {
+  const POS_TO_IJ = [[0, 1, 3, 2], [0, 2, 3, 1], [3, 2, 0, 1], [3, 1, 0, 2]];
+  const POS_TO_ORIENT = [1, 0, 0, 3];
+  const init = (level: number, i: number, j: number, orig: number, pos: number, orient: number) => {
+    if (level === 4) { S2_LOOKUP_IJ[(pos << 2) + orig] = (((i << 4) + j) << 2) + orient; return; }
+    const r = POS_TO_IJ[orient];
+    for (let idx = 0; idx < 4; idx++) init(level + 1, (i << 1) + (r[idx] >> 1), (j << 1) + (r[idx] & 1), orig, (pos << 2) + idx, orient ^ POS_TO_ORIENT[idx]);
+  };
+  for (let o = 0; o < 4; o++) init(0, 0, 0, o, 0, o);
+})();
+function s2CellToLatLng(hex: string) {
+  const id = BigInt(hex);
+  const face = Number(id >> 61n);
+  if (face > 5) return null;
+  let bits = face & 1, i = 0, j = 0;
+  for (let k = 7; k >= 0; k--) {
+    const nbits = k === 7 ? 2 : 4;
+    bits += Number((id >> BigInt(k * 8 + 1)) & BigInt((1 << (2 * nbits)) - 1)) << 2;
+    bits = S2_LOOKUP_IJ[bits];
+    i += (bits >> 6) * 2 ** (k * 4);
+    j += ((bits >> 2) & 15) * 2 ** (k * 4);
+    bits &= 3;
+  }
+  const MAX = 2 ** 30;
+  const stToUv = (s: number) => (s >= 0.5 ? (4 * s * s - 1) / 3 : (1 - 4 * (1 - s) * (1 - s)) / 3);
+  const u = stToUv((2 * i + 1) / (2 * MAX));
+  const v = stToUv((2 * j + 1) / (2 * MAX));
+  const [x, y, z] = [[1, u, v], [-u, 1, v], [-u, -v, 1], [-1, -v, -u], [v, -1, -u], [v, u, -1]][face];
+  return { latitude: Math.atan2(z, Math.hypot(x, y)) * 180 / Math.PI, longitude: Math.atan2(y, x) * 180 / Math.PI };
+}
+function placeFromFeatureId(text: string) {
+  for (const variant of decoded(text)) {
+    const hex = variant.match(/(?:!1s|ftid=)(0x[0-9a-f]{8,16}):0x[0-9a-f]+/i)?.[1];
+    if (hex) return s2CellToLatLng(hex);
+  }
+  return null;
+}
+
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { ...CORS, 'Content-Type': 'application/json' } });
 
 Deno.serve(async (req) => {
@@ -79,7 +137,7 @@ Deno.serve(async (req) => {
     if (found) return json({ ...found, final: current.href });
     let res: Response;
     try {
-      res = await fetch(current.href, { redirect: 'manual', headers: { 'User-Agent': 'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Chrome/120 Mobile Safari/537.36', 'Accept-Language': 'es-CO,es;q=0.9' }, signal: AbortSignal.timeout(8000) });
+      res = await fetch(current.href, { redirect: 'manual', headers: { 'User-Agent': UA, 'Accept-Language': 'es-CO,es;q=0.9' }, signal: AbortSignal.timeout(8000) });
     } catch {
       return json({ error: 'No se pudo abrir el enlace' }, 502);
     }
@@ -91,10 +149,14 @@ Deno.serve(async (req) => {
       current = next;
       continue;
     }
-    // Página final: a veces las coordenadas solo están dentro del contenido.
-    const text = (await res.text()).slice(0, 600000);
+    // Página final: un lugar de Google; sus datos vienen aparte (preview) o en su código.
+    const text = (await res.text()).slice(0, 800000);
+    const preview = await placeFromPreview(text);
+    if (preview) return json({ ...preview, final: current.href, source: 'lugar' });
     const inPage = coordinates(text);
     if (inPage) return json({ ...inPage, final: current.href });
+    const approx = placeFromFeatureId(current.href);
+    if (approx) return json({ ...approx, final: current.href, source: 'codigo', approximate: true });
     break;
   }
   return json({ error: 'El enlace no trae las coordenadas (puede ser solo una dirección escrita)', final: current.href }, 422);
