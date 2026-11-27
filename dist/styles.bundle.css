@@ -7036,6 +7036,9 @@ button.evidence-link:active {
   font-weight: 600;
 }
 
+/* Pegar ubicación (Maps / WhatsApp) */
+#client-paste-location { font: inherit; cursor: pointer; }
+
 /* ── css/features/payment.css */
 /* features/payment · Modal de registro de pago. */
 
@@ -7410,6 +7413,11 @@ button.evidence-link:active {
 .payment-balance-note:empty {
   display: none;
 }
+
+/* «Estoy en la casa: actualizar ubicación» (trabajador) */
+.payment-location { display: grid; gap: 6px; margin: 4px 0 14px; padding: 10px 12px; border: 1px dashed var(--line); border-radius: 12px; }
+.payment-location .secondary-button { width: 100%; min-height: 40px; }
+.payment-location small { color: var(--muted); font-size: 12.5px; line-height: 1.35; }
 
 /* ── css/features/daily-route.css */
 /* features/daily-route · Constructor de ruta diaria. */

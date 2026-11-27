@@ -1386,3 +1386,6 @@ button.evidence-link:active {
   font-size: 10px;
   font-weight: 600;
 }
+
+/* Pegar ubicación (Maps / WhatsApp) */
+#client-paste-location { font: inherit; cursor: pointer; }

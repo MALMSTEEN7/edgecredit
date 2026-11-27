@@ -9755,6 +9755,7 @@ function __mount_twoFactorModule() {
 
 
 
+
 /** Dentro de la ficha: la «cicatriz» del historial de pagos de la cartulina. */
 function updatePaymentBehaviorUI(client) {
   const indicator = document.querySelector('#payment-behavior-indicator');
@@ -10587,6 +10588,7 @@ function __mount_clientDetailModule() {
   document.querySelector('#finance-client').addEventListener('click', openFinanceModal);
   document.querySelector('#retanqueo-client').addEventListener('click', openRetanqueoModal);
   document.querySelector('#client-capture-location').addEventListener('click', captureClientLocation);
+  document.querySelector('#client-paste-location').addEventListener('click', () => openPasteLocation(state.activeClient));
   // La ubicación llegó tarde (reintento tras crear la cartulina): se actualiza la ficha abierta.
   document.addEventListener('edgecredit:client-location', event => {
     const client = clients[event.detail?.clientId];
@@ -10835,6 +10837,151 @@ function __mount_clientDetailModule() {
     else expandedPaymentHistory.add(state.activeClient);
     renderHistory(clients[state.activeClient]);
   });
+}
+
+// ── js/features/clients/client-location.js
+/**
+ * features/clients/client-location · Cambiar la ubicación del domicilio de un cliente.
+ *
+ * - «Pegar ubicación»: el cliente manda su ubicación por WhatsApp o un enlace de Google Maps y
+ *   se pega aquí. Los enlaces cortos (maps.app.goo.gl) los abre el servidor
+ *   (supabase/functions/resolve-maps-link) para sacar las coordenadas.
+ * - «Estoy en la casa: actualizar ubicación» (al registrar un abono): toma el GPS del celular.
+ *   Si la ubicación del celular está bloqueada, muestra los pasos para activarla.
+ * La ubicación anterior queda en `client.locationHistory` (las últimas 5).
+ */
+
+
+
+
+
+
+
+
+
+
+
+/** Precisión mínima para aceptar la ubicación tomada en la casa (más que esto no se guarda). */
+const HOME_LOCATION_MAX_METERS = 150;
+
+function whoChanges() {
+  return state.userRole === 'admin' ? 'Administrador' : state.activeWorker?.name || 'Trabajador';
+}
+
+/** Guarda la nueva ubicación del domicilio (la anterior queda en el historial). */
+function saveClientLocation(clientId, point) {
+  const client = clients[clientId];
+  if (!client) return false;
+  if (hasCoordinates(client.location)) {
+    client.locationHistory = [{ ...client.location, replacedAt: new Date().toISOString(), replacedBy: whoChanges() }, ...(client.locationHistory || [])].slice(0, 5);
+  }
+  client.location = { ...point, capturedAt: point.capturedAt || new Date().toISOString(), by: whoChanges() };
+  delete client.locationPending;
+  delete client.locationFailure;
+  persistBusinessData();
+  document.dispatchEvent(new CustomEvent('edgecredit:client-location', { detail: { clientId } }));
+  return true;
+}
+
+function distanceCopy(client, point) {
+  if (!hasCoordinates(client.location)) return 'El cliente no tenía ubicación guardada.';
+  const meters = trackDistance({ latitude: Number(client.location.latitude), longitude: Number(client.location.longitude) }, point);
+  const text = meters >= 1000 ? `${(meters / 1000).toFixed(1).replace('.', ',')} km` : `${Math.round(meters)} m`;
+  return `Queda a ${text} de la ubicación que tenía guardada.`;
+}
+
+/** Abre un enlace corto en el servidor y devuelve sus coordenadas. */
+async function resolveShortLink(url) {
+  if (!backendEnabled()) throw new Error('Para leer enlaces cortos se necesita conexión con el servidor.');
+  const db = await backend();
+  const { data, error } = await db.functions.invoke('resolve-maps-link', { body: { url } });
+  if (data && Number.isFinite(Number(data.latitude))) return { latitude: Number(data.latitude), longitude: Number(data.longitude) };
+  let message = data?.error;
+  if (!message && error?.context?.json) { try { message = (await error.context.json())?.error; } catch { /* sin detalle */ } }
+  if (!message && /fetch|network|Failed/i.test(String(error?.message || ''))) message = 'Sin conexión. Inténtalo cuando tengas señal.';
+  throw new Error(message || 'No se pudo leer el enlace.');
+}
+
+/** Coordenadas del texto pegado (enlace o coordenadas). */
+async function locationFromPastedText(text) {
+  const direct = coordinatesFromText(text);
+  if (direct) return direct;
+  const link = firstLink(text);
+  if (link && (isShortMapsLink(link) || isGoogleMapsLink(link))) return resolveShortLink(link);
+  throw new Error(link
+    ? 'Ese enlace no es de Google Maps. Pide al cliente que comparta su ubicación desde Google Maps o WhatsApp.'
+    : 'No se encontró una ubicación. Pega el enlace que mandó el cliente o las coordenadas (ej. 7.8939, -72.5078).');
+}
+
+/** «Pegar ubicación de Maps / WhatsApp». */
+function openPasteLocation(clientId) {
+  const client = clients[clientId];
+  if (!client) return;
+  openCustomModal({
+    title: 'Pegar ubicación del cliente',
+    description: `Pide a ${client.name} que te mande su ubicación por WhatsApp (📎 → Ubicación → Enviar tu ubicación actual, estando en su casa) o el enlace de Google Maps (Compartir). Mantén presionado el mensaje, copia el enlace y pégalo aquí.`,
+    fields: [{ name: 'link', label: 'Enlace o coordenadas', type: 'textarea', required: true, placeholder: 'https://maps.app.goo.gl/…  ó  7.8939, -72.5078' }],
+    submitLabel: 'Revisar ubicación',
+    onSubmit: async values => {
+      const save = document.querySelector('#custom-modal-save');
+      const label = save.textContent;
+      save.disabled = true;
+      save.textContent = 'Leyendo enlace…';
+      let point;
+      try { point = await locationFromPastedText(values.link); }
+      catch (error) { customModalError.textContent = error.message; return false; }
+      finally { save.disabled = false; save.textContent = label; }
+      const target = clients[clientId];
+      if (!target) return true;
+      window.setTimeout(() => confirmPastedLocation(clientId, point), 0);
+      return true;
+    },
+  });
+}
+
+function confirmPastedLocation(clientId, point) {
+  const client = clients[clientId];
+  if (!client) return;
+  const coords = `${point.latitude.toFixed(6)}, ${point.longitude.toFixed(6)}`;
+  openCustomModal({
+    title: '¿Guardar esta ubicación?',
+    description: `Nueva ubicación del domicilio de ${client.name}: ${coords}. ${distanceCopy(client, point)} Después de guardarla, revísala con «Ver ubicación del domicilio».`,
+    submitLabel: 'Guardar ubicación',
+    extraAction: { label: 'Ver en Google Maps', onClick: () => { window.open(`https://www.google.com/maps/search/?api=1&query=${point.latitude},${point.longitude}`, '_blank', 'noopener,noreferrer'); window.setTimeout(() => confirmPastedLocation(clientId, point), 300); } },
+    onSubmit: () => {
+      saveClientLocation(clientId, { latitude: point.latitude, longitude: point.longitude, accuracy: null, source: 'enlace' });
+      showToast(`Ubicación de ${client.name} guardada desde el enlace.`);
+    },
+  });
+}
+
+/**
+ * «Estoy en la casa: actualizar ubicación» (trabajador). Devuelve un texto con el resultado.
+ * Si la ubicación del celular está bloqueada, abre los pasos para activarla.
+ */
+async function takeLocationHere(clientId) {
+  const client = clients[clientId];
+  if (!client) return '';
+  const current = gpsState();
+  if (current === 'denied' || current === 'unsupported') { openGpsHelp(current); return 'Activa la ubicación del celular y vuelve a intentarlo.'; }
+  // El GPS del trabajador ya está encendido: si acaba de dar una posición buena, se usa esa.
+  const recent = recentGpsFix(20000);
+  const { location, reason } = recent && recent.accuracy <= HOME_LOCATION_MAX_METERS
+    ? { location: recent, reason: null }
+    : await locateDevice({ timeout: 12000 });
+  if (!location) {
+    if (reason === 'denied' || reason === 'unsupported') { openGpsHelp(reason); return 'Activa la ubicación del celular y vuelve a intentarlo.'; }
+    if (reason === 'unavailable') openGpsHelp('searching');
+    return 'No se pudo tomar la ubicación (sin señal de GPS). Sal a cielo abierto e inténtalo de nuevo.';
+  }
+  if (location.accuracy > HOME_LOCATION_MAX_METERS) {
+    return `La ubicación salió muy imprecisa (± ${location.accuracy} m) y no se guardó. Inténtalo de nuevo frente a la casa, al aire libre.`;
+  }
+  const before = hasCoordinates(client.location) ? distanceCopy(client, location) : '';
+  saveClientLocation(clientId, { ...location, source: 'abono' });
+  const note = `Ubicación de ${client.name} actualizada (± ${location.accuracy} m).${isApproximateLocation(location) ? ' Es aproximada.' : ''}`;
+  showToast(`${note} ${before}`.trim());
+  return note;
 }
 
 // ── js/features/clients/directory.js
@@ -12940,6 +13087,7 @@ function openInterestReduction(clientId, payment, { onDone = () => {}, onCancel 
 
 
 
+
 /** Comprobante elegido: captura de la galería («Subir captura») o foto («Tomar foto»). */
 function chosenVoucher() {
   return voucherFile.files?.[0] || document.querySelector('#voucher-camera').files?.[0] || null;
@@ -12963,6 +13111,10 @@ function openPayment() {
   updatePaymentDateHint();
   updatePaymentMethod();
   updateBalancePreview();
+  // Trabajador en la casa del cliente: puede actualizar la ubicación del domicilio aquí mismo.
+  document.querySelector('#payment-location').hidden = state.userRole !== 'worker';
+  document.querySelector('#payment-location-status').textContent = 'Úsalo solo si estás en el domicilio del cliente.';
+  document.querySelector('#payment-take-location').disabled = false;
   window.setTimeout(() => amountInput.focus(), 40);
 }
 
@@ -13069,6 +13221,17 @@ function offerRenewal(clientId, returnHome, { reduced = false } = {}) {
 function __mount_paymentModule() {
   document.querySelectorAll('[data-open-payment]').forEach(button => button.addEventListener('click', openPayment));
   document.querySelectorAll('[data-close-payment]').forEach(button => button.addEventListener('click', closePayment));
+  document.querySelector('#payment-take-location').addEventListener('click', async event => {
+    const button = event.currentTarget;
+    const status = document.querySelector('#payment-location-status');
+    const clientId = state.activeClient;
+    if (!clientId || button.disabled) return;
+    button.disabled = true;
+    status.textContent = 'Tomando ubicación…';
+    const result = await takeLocationHere(clientId);
+    button.disabled = false;
+    status.textContent = result;
+  });
   document.querySelectorAll('input[name="method"]').forEach(input => input.addEventListener('change', updatePaymentMethod));
   modal.addEventListener('click', event => { if (event.target === modal) closePayment(); });
   amountInput.addEventListener('input', updateBalancePreview);
@@ -13817,6 +13980,14 @@ const GPS_STATUS = {
 };
 
 let gpsMode = 'off';
+let lastGpsFix = null; // última posición que dio el GPS (seguimiento del trabajador)
+
+/** Posición reciente del GPS (de hace menos de `maxAgeMs`), o null. */
+function recentGpsFix(maxAgeMs = 20000) {
+  if (!lastGpsFix || gpsMode !== 'active' || Date.now() - lastGpsFix.receivedAt > maxAgeMs) return null;
+  const { receivedAt, ...fix } = lastGpsFix;
+  return fix;
+}
 let gpsPermission = 'unknown'; // permiso del navegador: granted, denied, prompt o unknown
 
 function setGpsStatus(mode) {
@@ -13960,6 +14131,7 @@ function startWatch() {
       accuracy: position.coords.accuracy,
       updated_at: new Date(position.timestamp || Date.now()).toISOString()
     };
+    lastGpsFix = { latitude: location.latitude, longitude: location.longitude, accuracy: Math.round(location.accuracy), capturedAt: location.updated_at, receivedAt: Date.now() };
     setGpsStatus('active');
     const point = {
       latitude: location.latitude, longitude: location.longitude, accuracy: Math.round(location.accuracy),
@@ -14045,7 +14217,16 @@ function __mount_locationModule() {
   window.setInterval(renderGpsBanner, 30000);
   document.querySelector('#gps-banner-activate').addEventListener('click', activateGps);
   document.querySelector('#gps-help-close').addEventListener('click', closeGpsHelp);
-  document.querySelector('#gps-help-retry').addEventListener('click', () => { closeGpsHelp(); window.location.reload(); });
+  document.querySelector('#gps-help-retry').addEventListener('click', () => {
+    closeGpsHelp();
+    // Si hay algo a medio llenar (abono, cliente nuevo), no se recarga: se vuelve a intentar aquí.
+    const busy = !document.querySelector('#payment-modal').hidden || !document.querySelector('#new-client-modal').hidden;
+    if (!busy) { window.location.reload(); return; }
+    if (state.locationWatchId !== null) { navigator.geolocation?.clearWatch(state.locationWatchId); state.locationWatchId = null; }
+    if (gpsMode === 'denied') gpsMode = 'off';
+    startWatch();
+    window.setTimeout(() => { if (gpsState() === 'denied') showToast('Sigue bloqueada. Revisa los pasos; si ya la activaste, termina el registro y recarga la página.'); }, 3000);
+  });
   document.querySelector('#gps-help').addEventListener('click', event => { if (event.target.id === 'gps-help') closeGpsHelp(); });
   document.querySelector('#gps-setting-button').addEventListener('click', () => {
     if (state.userRole !== 'worker') return;
@@ -14214,6 +14395,70 @@ async function geocodeMunicipality(city, departmentName = '') {
     try { localStorage.setItem(GEOCODE_CACHE_KEY, JSON.stringify(cache)); } catch { /* caché opcional */ }
     return result;
   } catch { return null; } finally { window.clearTimeout(timer); }
+}
+
+// ── js/shared/maps-link.js
+/**
+ * shared/maps-link · Leer una ubicación pegada por el usuario: enlace de Google Maps, ubicación
+ * compartida por WhatsApp, enlace «geo:» o coordenadas escritas («7.8939, -72.5078»).
+ *
+ * Los enlaces cortos (maps.app.goo.gl, goo.gl/maps) no traen las coordenadas: hay que abrirlos.
+ * Eso lo hace el servidor (supabase/functions/resolve-maps-link), porque el navegador no puede.
+ */
+
+/** Intenta decodificar el texto (los enlaces traen «%2C» en vez de la coma, etc.). */
+function decodedVariants(text) {
+  const variants = [text];
+  let current = text;
+  for (let i = 0; i < 3; i += 1) {
+    try {
+      const next = decodeURIComponent(current.replace(/\+/g, ' '));
+      if (next === current) break;
+      variants.push(next);
+      current = next;
+    } catch { break; }
+  }
+  return variants;
+}
+
+const COORDINATE_PATTERNS = [
+  /!3d(-?\d{1,2}\.\d+)!4d(-?\d{1,3}\.\d+)/,                                   // lugar: …!3d7.89!4d-72.5
+  /@(-?\d{1,2}\.\d+),\s*(-?\d{1,3}\.\d+)/,                                     // vista: /@7.89,-72.5,17z
+  /[?&](?:q|query|ll|sll|destination|daddr|center|saddr)=(?:loc:)?\s*(-?\d{1,2}\.\d+)\s*,\s*(-?\d{1,3}\.\d+)/i,
+  /geo:(-?\d{1,2}\.\d+),\s*(-?\d{1,3}\.\d+)/i,                                 // geo:7.89,-72.5
+  /\/maps\/(?:search|place|dir)\/(?:[^/]*\/)?(-?\d{1,2}\.\d+),\s*\+?(-?\d{1,3}\.\d+)/i,
+  /(?:^|[^\d.])(-?\d{1,2}\.\d{3,})\s*[,;]\s*(-?\d{1,3}\.\d{3,})(?![\d.])/,     // «7.8939, -72.5078»
+];
+
+/** Coordenadas válidas dentro del texto, o null. */
+function coordinatesFromText(text) {
+  for (const variant of decodedVariants(String(text || ''))) {
+    for (const pattern of COORDINATE_PATTERNS) {
+      const match = variant.match(pattern);
+      if (!match) continue;
+      const latitude = Number(match[1]);
+      const longitude = Number(match[2]);
+      if (Number.isFinite(latitude) && Number.isFinite(longitude) && Math.abs(latitude) <= 90 && Math.abs(longitude) <= 180 && !(latitude === 0 && longitude === 0)) {
+        return { latitude, longitude };
+      }
+    }
+  }
+  return null;
+}
+
+/** Primer enlace del texto (WhatsApp pega «Mi ubicación: https://…»). */
+function firstLink(text) {
+  return String(text || '').match(/https?:\/\/[^\s<>"']+/i)?.[0] || '';
+}
+
+/** Enlace corto de Google Maps que hay que abrir en el servidor para ver las coordenadas. */
+function isShortMapsLink(url) {
+  return /^https?:\/\/(maps\.app\.goo\.gl|goo\.gl\/maps|g\.co\/kgs)\//i.test(url);
+}
+
+/** ¿Es un enlace de Google Maps (o de Google) que el servidor puede abrir? */
+function isGoogleMapsLink(url) {
+  return /^https?:\/\/([a-z0-9-]+\.)*(goo\.gl|google\.[a-z.]+|g\.co)\//i.test(url);
 }
 
 // ── js/shared/math.js
