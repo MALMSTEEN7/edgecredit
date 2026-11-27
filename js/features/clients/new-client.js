@@ -24,6 +24,7 @@ import { roundToThousand } from '../../shared/math.js';
 import { requireReductionBeforeRenewal } from '../payments/interest-reduction.js';
 import { openPayment } from '../payments/payment.js';
 import { clearSignature, mountSignaturePad, signatureData } from './signature-pad.js';
+import { activateGps, gpsState, openGpsHelp } from '../worker/location.js';
 import { openClient } from './client-detail.js';
 
 // Cartulina de origen cuando el modal está en modo «Renovar crédito» (linkMode 'renew')
@@ -212,6 +213,26 @@ function updateSundayPayday() {
   });
 }
 
+/** Indicador de ubicación en «Nuevo cliente» (solo el trabajador: él toma la ubicación del domicilio). */
+const NEW_CLIENT_GPS_TEXT = {
+  active: 'Ubicación activa: se guardará la del domicilio',
+  searching: 'Buscando señal de GPS…',
+  prompt: 'Ubicación sin activar: acepta el permiso',
+  denied: 'Ubicación bloqueada: el cliente quedará sin ubicación',
+  unsupported: 'Este navegador no da la ubicación',
+};
+function renderNewClientGps() {
+  const box = document.querySelector('#new-client-gps');
+  if (!box) return;
+  box.hidden = state.userRole !== 'worker';
+  if (box.hidden) return;
+  const current = gpsState();
+  box.dataset.state = current;
+  document.querySelector('#new-client-gps-text').textContent = NEW_CLIENT_GPS_TEXT[current] || NEW_CLIENT_GPS_TEXT.searching;
+  document.querySelector('#new-client-gps-activate').hidden = current === 'active' || current === 'unsupported';
+  document.querySelector('#new-client-gps-help').hidden = current === 'active';
+}
+
 function openNewClientModal() {
   if (state.userRole !== 'worker' && state.userRole !== 'admin') return;
   newClientError.textContent = '';
@@ -243,6 +264,7 @@ function openNewClientModal() {
   updateSundayPayday();
   updateInstallmentsHint();
   newClientModal.hidden = false;
+  renderNewClientGps();
   newClientModal.classList.add('active');
   document.body.classList.add('modal-open');
   window.setTimeout(() => newClientForm.querySelector('input')?.focus(), 20);
@@ -705,6 +727,9 @@ export function mount() {
   document.querySelector('#renew-client').addEventListener('click', () => openRenewalModal(state.activeClient));
   document.querySelector('#extra-card-client').addEventListener('click', () => openExtraCardModal(state.activeClient));
   mountSignaturePad();
+  document.addEventListener('edgecredit:gps-status', renderNewClientGps);
+  document.querySelector('#new-client-gps-activate').addEventListener('click', activateGps);
+  document.querySelector('#new-client-gps-help').addEventListener('click', () => openGpsHelp());
   document.querySelector('#client-photo-input').addEventListener('change', event => {
     const preview = document.querySelector('#client-photo-preview');
     const file = event.target.files?.[0];

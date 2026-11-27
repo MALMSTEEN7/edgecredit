@@ -52,7 +52,44 @@ function syncRouteZone(worker) {
   });
 }
 
+// ── Estado de la ubicación del celular de cada trabajador (lo anota su celular) ──
+let workerGps = {};
+let workerGpsFetchedAt = 0;
+let workerGpsLoading = false;
+const WORKER_GPS_BADGES = {
+  active: ['is-ok', 'Ubicación activa'],
+  searching: ['is-warn', 'GPS sin señal o apagado'],
+  prompt: ['is-warn', 'Falta aceptar el permiso de ubicación'],
+  denied: ['is-danger', 'Ubicación bloqueada en su celular'],
+  unsupported: ['is-danger', 'Su navegador no da la ubicación'],
+};
+
+async function loadWorkerGps() {
+  if (!backendEnabled() || workerGpsLoading || Date.now() - workerGpsFetchedAt < 30000) return;
+  workerGpsLoading = true;
+  try {
+    const db = await backend();
+    const { data, error } = await db.from('worker_device_status').select('worker_id, gps, updated_at');
+    if (error) return;
+    const next = Object.fromEntries((data || []).map(row => [row.worker_id, row]));
+    workerGpsFetchedAt = Date.now();
+    const changed = JSON.stringify(next) !== JSON.stringify(workerGps);
+    workerGps = next;
+    if (changed && !personnelList.closest('[hidden]')) renderPersonnel();
+  } catch { /* sin conexión */ } finally { workerGpsLoading = false; }
+}
+
+function workerGpsBadge(worker) {
+  if (!backendEnabled()) return '';
+  const row = workerGps[worker.id];
+  if (!row) return '<span class="personnel-badge" title="Su celular todavía no ha reportado el estado de la ubicación (se reporta al entrar a la app).">⌖ Ubicación: sin datos aún</span>';
+  const [tone, label] = WORKER_GPS_BADGES[row.gps] || ['', row.gps];
+  const when = row.updated_at ? new Date(row.updated_at).toLocaleString('es-CO', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
+  return `<span class="personnel-badge ${tone}" title="Reportado por su celular el ${escapeHTML(when)}">⌖ ${escapeHTML(label)}${when ? ` · ${escapeHTML(when)}` : ''}</span>`;
+}
+
 export function renderPersonnel() {
+  loadWorkerGps();
   personnelList.replaceChildren();
   if (!personnel.length) {
     const empty = document.createElement('p');
@@ -100,7 +137,7 @@ export function renderPersonnel() {
     const twoFactorBadge = backendEnabled()
       ? '<span class="personnel-badge is-ok">🔒 Verificación en dos pasos obligatoria</span>'
       : `<span class="personnel-badge ${worker.totpSecret ? 'is-ok' : ''}">${worker.totpSecret ? '🔒 2FA activa' : '2FA pendiente (se configura al ingresar)'}</span>`;
-    badges.innerHTML = `${twoFactorBadge}${blocked ? '<span class="personnel-badge is-danger">⛔ Acceso bloqueado</span>' : ''}`;
+    badges.innerHTML = `${twoFactorBadge}${workerGpsBadge(worker)}${blocked ? '<span class="personnel-badge is-danger">⛔ Acceso bloqueado</span>' : ''}`;
 
     const expiryList = document.createElement('div');
     expiryList.className = 'vehicle-expiries';

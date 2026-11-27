@@ -3,6 +3,7 @@
  */
 
 import { gpsIndicator } from '../../core/dom.js';
+import { backend, backendEnabled } from '../../core/backend.js';
 import { state } from '../../core/state.js';
 import { persistBusinessData, shared } from '../../core/store.js';
 import { recordTrackPoint, resumeTrackUpload, trackDistance } from '../../core/tracks.js';
@@ -66,6 +67,116 @@ function setGpsStatus(mode) {
   gpsIndicator.querySelector('.gps-indicator-label').textContent = label;
   gpsIndicator.title = detail ? `${label}. ${detail}` : label; // en el celular solo se ve el ícono
   gpsIndicator.setAttribute('aria-label', `Estado del GPS: ${label}`);
+  announceGps();
+}
+
+// ── Estado de la ubicación para el resto de la app (aviso en Inicio, indicador en «Nuevo
+// cliente») y para el administrador (Personal). ──
+
+/**
+ * Estado de la ubicación de este celular:
+ *  active      el GPS da posición
+ *  searching   hay permiso pero todavía no hay señal (o la ubicación del celular está apagada)
+ *  prompt      el celular todavía no ha preguntado / no ha aceptado el permiso
+ *  denied      permiso bloqueado
+ *  unsupported el navegador no da ubicación
+ */
+export function gpsState() {
+  if (gpsMode === 'unsupported' || !navigator.geolocation) return 'unsupported';
+  if (gpsMode === 'denied' || gpsPermission === 'denied') return 'denied';
+  if (gpsMode === 'active') return 'active';
+  if (gpsPermission === 'prompt') return 'prompt';
+  return 'searching';
+}
+
+let searchingSince = 0;
+function announceGps() {
+  const current = gpsState();
+  searchingSince = current === 'searching' ? searchingSince || Date.now() : 0;
+  document.dispatchEvent(new CustomEvent('edgecredit:gps-status', { detail: { state: current } }));
+  reportGpsState(current);
+}
+
+/** Anota en el servidor el estado de la ubicación del trabajador (lo ve el admin en Personal). */
+const GPS_REPORT_KEY = 'edgecredit-gps-report';
+let gpsReportTimer = null;
+let gpsReportPending = '';
+function reportGpsState(current) {
+  if (state.userRole !== 'worker' || !backendEnabled() || !state.activeWorker?.id) return;
+  // Cada posición vuelve a avisar el mismo estado: solo se reprograma si el estado cambió.
+  if (current === gpsReportPending) return;
+  gpsReportPending = current;
+  window.clearTimeout(gpsReportTimer);
+  // «Buscando» solo se anota si dura (al abrir la app siempre empieza buscando).
+  const delay = current === 'searching' || current === 'prompt' ? 90000 : 1500;
+  gpsReportTimer = window.setTimeout(async () => {
+    gpsReportPending = '';
+    if (gpsState() !== current || state.userRole !== 'worker') return;
+    const workerId = state.activeWorker?.id;
+    let last = null;
+    try { last = JSON.parse(localStorage.getItem(GPS_REPORT_KEY) || 'null'); } catch { /* opcional */ }
+    if (last?.worker === workerId && last.state === current && Date.now() - last.at < 6 * 3600e3) return;
+    try {
+      const db = await backend();
+      const { error } = await db.from('worker_device_status').upsert({ worker_id: workerId, gps: current, detail: navigator.userAgent.slice(0, 200), updated_at: new Date().toISOString() });
+      if (!error) localStorage.setItem(GPS_REPORT_KEY, JSON.stringify({ worker: workerId, state: current, at: Date.now() }));
+    } catch { /* sin señal: se anota la próxima vez */ }
+  }, delay);
+}
+
+/** Los intentos de ubicación al crear un cliente también cuentan (p. ej. permiso negado). */
+function noteLocationResult(event) {
+  const reason = event.detail?.reason;
+  if (state.userRole !== 'worker') return;
+  if (!reason) { if (gpsMode !== 'active') setGpsStatus('active'); return; }
+  if (reason === 'denied') {
+    if (state.locationWatchId !== null) { navigator.geolocation?.clearWatch(state.locationWatchId); state.locationWatchId = null; }
+    setGpsStatus('denied');
+  }
+}
+
+/**
+ * «Activar ubicación»: vuelve a pedir el permiso. Si el celular ya lo bloqueó (no vuelve a
+ * preguntar), se muestran los pasos para activarlo a mano.
+ */
+export function activateGps() {
+  if (state.userRole !== 'worker') return;
+  if (gpsState() === 'unsupported' || gpsPermission === 'denied') { openGpsHelp(); return; }
+  if (state.locationWatchId !== null) { navigator.geolocation?.clearWatch(state.locationWatchId); state.locationWatchId = null; }
+  startWatch();
+  // Si el celular no pregunta (bloqueado) o la ubicación está apagada, se explica cómo activarla.
+  window.setTimeout(() => { if (gpsState() === 'denied' || gpsState() === 'unsupported') openGpsHelp(); }, 2500);
+  window.setTimeout(() => { if (gpsState() === 'searching') openGpsHelp('searching'); }, 15000);
+}
+
+export function openGpsHelp(reason = gpsState()) {
+  const help = document.querySelector('#gps-help');
+  if (!help) return;
+  document.querySelector('#gps-help-reason').textContent = reason === 'searching'
+    ? 'El celular no está dando la ubicación. Lo más común es que la ubicación (GPS) del celular esté apagada.'
+    : reason === 'unsupported' ? 'Este navegador no da la ubicación. Usa Google Chrome.'
+      : 'El permiso de ubicación está bloqueado para EdgeCredit. Así se activa:';
+  help.hidden = false;
+  document.body.classList.add('modal-open');
+}
+
+function closeGpsHelp() {
+  document.querySelector('#gps-help').hidden = true;
+  if (document.querySelector('.modal-backdrop:not([hidden])') === null) document.body.classList.remove('modal-open');
+}
+
+/** Aviso en Inicio cuando la ubicación no está funcionando. */
+function renderGpsBanner() {
+  const banner = document.querySelector('#gps-banner');
+  if (!banner) return;
+  const current = gpsState();
+  const show = state.userRole === 'worker' && (current === 'denied' || current === 'unsupported' || current === 'prompt' || (current === 'searching' && searchingSince && Date.now() - searchingSince > 60000));
+  banner.hidden = !show;
+  if (!show) return;
+  document.querySelector('#gps-banner-text').textContent = current === 'denied' ? 'La ubicación de este celular está bloqueada: los clientes nuevos quedan sin ubicación.'
+    : current === 'unsupported' ? 'Este navegador no da la ubicación. Usa Google Chrome.'
+      : current === 'prompt' ? 'Falta aceptar el permiso de ubicación.'
+        : 'El celular no está dando la ubicación (¿GPS apagado?).';
 }
 
 function shouldRecord(point) {
@@ -141,10 +252,15 @@ function watchGpsPermission() {
   navigator.permissions.query({ name: 'geolocation' }).then(permission => {
     gpsPermission = permission.state;
     renderGpsSetting();
+    announceGps();
     permission.addEventListener('change', () => {
       gpsPermission = permission.state;
-      if (permission.state === 'granted' && state.userRole === 'worker') startWatch();
+      if (permission.state === 'granted' && state.userRole === 'worker') {
+        if (gpsMode === 'denied') gpsMode = 'off';
+        startWatch();
+      }
       renderGpsSetting();
+      announceGps();
     });
   }).catch(() => renderGpsSetting());
 }
@@ -156,11 +272,19 @@ export function resumeWorkerLocationSharing() {
   startWatch();
   resumeTrackUpload(state.activeWorker?.id);
   renderGpsSetting();
+  announceGps();
 }
 
 /** Registra los listeners del módulo. Se invoca una sola vez desde app.js. */
 export function mount() {
   watchGpsPermission();
+  document.addEventListener('edgecredit:gps-result', noteLocationResult);
+  document.addEventListener('edgecredit:gps-status', renderGpsBanner);
+  window.setInterval(renderGpsBanner, 30000);
+  document.querySelector('#gps-banner-activate').addEventListener('click', activateGps);
+  document.querySelector('#gps-help-close').addEventListener('click', closeGpsHelp);
+  document.querySelector('#gps-help-retry').addEventListener('click', () => { closeGpsHelp(); window.location.reload(); });
+  document.querySelector('#gps-help').addEventListener('click', event => { if (event.target.id === 'gps-help') closeGpsHelp(); });
   document.querySelector('#gps-setting-button').addEventListener('click', () => {
     if (state.userRole !== 'worker') return;
     // Si quedó una búsqueda abierta, se reinicia para que el celular vuelva a pedir el permiso.
