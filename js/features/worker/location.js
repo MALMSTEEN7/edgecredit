@@ -55,6 +55,14 @@ const GPS_STATUS = {
 };
 
 let gpsMode = 'off';
+let lastGpsFix = null; // última posición que dio el GPS (seguimiento del trabajador)
+
+/** Posición reciente del GPS (de hace menos de `maxAgeMs`), o null. */
+export function recentGpsFix(maxAgeMs = 20000) {
+  if (!lastGpsFix || gpsMode !== 'active' || Date.now() - lastGpsFix.receivedAt > maxAgeMs) return null;
+  const { receivedAt, ...fix } = lastGpsFix;
+  return fix;
+}
 let gpsPermission = 'unknown'; // permiso del navegador: granted, denied, prompt o unknown
 
 function setGpsStatus(mode) {
@@ -198,6 +206,7 @@ function startWatch() {
       accuracy: position.coords.accuracy,
       updated_at: new Date(position.timestamp || Date.now()).toISOString()
     };
+    lastGpsFix = { latitude: location.latitude, longitude: location.longitude, accuracy: Math.round(location.accuracy), capturedAt: location.updated_at, receivedAt: Date.now() };
     setGpsStatus('active');
     const point = {
       latitude: location.latitude, longitude: location.longitude, accuracy: Math.round(location.accuracy),
@@ -283,7 +292,16 @@ export function mount() {
   window.setInterval(renderGpsBanner, 30000);
   document.querySelector('#gps-banner-activate').addEventListener('click', activateGps);
   document.querySelector('#gps-help-close').addEventListener('click', closeGpsHelp);
-  document.querySelector('#gps-help-retry').addEventListener('click', () => { closeGpsHelp(); window.location.reload(); });
+  document.querySelector('#gps-help-retry').addEventListener('click', () => {
+    closeGpsHelp();
+    // Si hay algo a medio llenar (abono, cliente nuevo), no se recarga: se vuelve a intentar aquí.
+    const busy = !document.querySelector('#payment-modal').hidden || !document.querySelector('#new-client-modal').hidden;
+    if (!busy) { window.location.reload(); return; }
+    if (state.locationWatchId !== null) { navigator.geolocation?.clearWatch(state.locationWatchId); state.locationWatchId = null; }
+    if (gpsMode === 'denied') gpsMode = 'off';
+    startWatch();
+    window.setTimeout(() => { if (gpsState() === 'denied') showToast('Sigue bloqueada. Revisa los pasos; si ya la activaste, termina el registro y recarga la página.'); }, 3000);
+  });
   document.querySelector('#gps-help').addEventListener('click', event => { if (event.target.id === 'gps-help') closeGpsHelp(); });
   document.querySelector('#gps-setting-button').addEventListener('click', () => {
     if (state.userRole !== 'worker') return;

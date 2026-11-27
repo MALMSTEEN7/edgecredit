@@ -316,7 +316,16 @@
     }
     const removeChannel = ch => ch.unsubscribe();
 
-    return { auth, from: query, rpc, channel, removeChannel };
+    // Funciones del servidor (supabase/functions): las pruebas las definen en window.__mockFunctions.
+    const functions = {
+      async invoke(name, { body } = {}) {
+        if (control.offline) return { data: null, error: { message: 'Failed to fetch' } };
+        if (!currentUser) return { data: null, error: { message: 'Inicia sesión para usar esta función' } };
+        const fn = window.__mockFunctions?.[name];
+        return fn ? fn(body) : { data: null, error: { message: 'Function not found' } };
+      },
+    };
+    return { auth, from: query, rpc, channel, removeChannel, functions };
   }
 
   window.supabase = { createClient };

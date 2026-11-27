@@ -28,6 +28,7 @@ import { MAX_ACTIVE_CARDS_PER_PERSON, activeCardIds, canAddCard, loanCount, card
 import { PAYDAY_OPTIONS, cardColor, paintCardColorBand, shiftDays, startDateForPayday, weekdayOf } from '../../domain/card-color.js';
 import { FINANCE_INTEREST_PERCENT, GENERAL_RETANQUEO, RETANQUEO_INTEREST_PERCENT, financeCard, pendingRestructure, percentOrAmount, recordRetanqueoInRoute, retanqueoCard } from '../../domain/restructure.js';
 import { purgedReceiptLabel } from '../../domain/receipt-retention.js';
+import { openPasteLocation } from './client-location.js';
 
 /** Dentro de la ficha: la «cicatriz» del historial de pagos de la cartulina. */
 function updatePaymentBehaviorUI(client) {
@@ -861,6 +862,7 @@ export function mount() {
   document.querySelector('#finance-client').addEventListener('click', openFinanceModal);
   document.querySelector('#retanqueo-client').addEventListener('click', openRetanqueoModal);
   document.querySelector('#client-capture-location').addEventListener('click', captureClientLocation);
+  document.querySelector('#client-paste-location').addEventListener('click', () => openPasteLocation(state.activeClient));
   // La ubicación llegó tarde (reintento tras crear la cartulina): se actualiza la ficha abierta.
   document.addEventListener('edgecredit:client-location', event => {
     const client = clients[event.detail?.clientId];

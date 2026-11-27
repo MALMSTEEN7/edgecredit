@@ -21,6 +21,7 @@ import { openCustomModal } from '../../ui/custom-modal.js';
 import { closeVisit } from '../daily-route/daily-route.js';
 import { canOfferReduction, openInterestReduction } from './interest-reduction.js';
 import { finalPayment } from '../../domain/route-day.js';
+import { takeLocationHere } from '../clients/client-location.js';
 
 /** Comprobante elegido: captura de la galería («Subir captura») o foto («Tomar foto»). */
 function chosenVoucher() {
@@ -45,6 +46,10 @@ export function openPayment() {
   updatePaymentDateHint();
   updatePaymentMethod();
   updateBalancePreview();
+  // Trabajador en la casa del cliente: puede actualizar la ubicación del domicilio aquí mismo.
+  document.querySelector('#payment-location').hidden = state.userRole !== 'worker';
+  document.querySelector('#payment-location-status').textContent = 'Úsalo solo si estás en el domicilio del cliente.';
+  document.querySelector('#payment-take-location').disabled = false;
   window.setTimeout(() => amountInput.focus(), 40);
 }
 
@@ -151,6 +156,17 @@ function offerRenewal(clientId, returnHome, { reduced = false } = {}) {
 export function mount() {
   document.querySelectorAll('[data-open-payment]').forEach(button => button.addEventListener('click', openPayment));
   document.querySelectorAll('[data-close-payment]').forEach(button => button.addEventListener('click', closePayment));
+  document.querySelector('#payment-take-location').addEventListener('click', async event => {
+    const button = event.currentTarget;
+    const status = document.querySelector('#payment-location-status');
+    const clientId = state.activeClient;
+    if (!clientId || button.disabled) return;
+    button.disabled = true;
+    status.textContent = 'Tomando ubicación…';
+    const result = await takeLocationHere(clientId);
+    button.disabled = false;
+    status.textContent = result;
+  });
   document.querySelectorAll('input[name="method"]').forEach(input => input.addEventListener('change', updatePaymentMethod));
   modal.addEventListener('click', event => { if (event.target === modal) closePayment(); });
   amountInput.addEventListener('input', updateBalancePreview);
