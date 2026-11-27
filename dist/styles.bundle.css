@@ -5244,6 +5244,32 @@ html.session-restoring .login-gateway .session-splash,
   color: var(--muted) !important;
 }
 
+/* Aviso: la ubicación del celular no está funcionando */
+.gps-banner { display: grid; grid-template-columns: auto 1fr; gap: 6px 10px; align-items: center; margin: 0 0 14px; padding: 12px 14px; border-radius: 14px;
+  border: 1px solid color-mix(in srgb, var(--alert-color) 45%, var(--line)); background: color-mix(in srgb, var(--alert-color) 10%, transparent); }
+.gps-banner-icon { font-size: 20px; color: var(--alert-color); }
+.gps-banner p { margin: 0; font-size: 14px; font-weight: 600; }
+.gps-banner .primary-button { grid-column: 1 / -1; min-height: 40px; }
+
+/* Indicador de ubicación en «Nuevo cliente» */
+.new-client-gps { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; margin: 0 0 12px; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--line); font-size: 13.5px; font-weight: 600; }
+.new-client-gps-dot { width: 10px; height: 10px; border-radius: 50%; background: #f59e0b; box-shadow: 0 0 0 3px color-mix(in srgb, #f59e0b 25%, transparent); }
+.new-client-gps-text { flex: 1 1 180px; }
+.new-client-gps .secondary-button { min-height: 34px; padding: 4px 14px; }
+.new-client-gps .link-button { background: none; border: 0; padding: 0; color: var(--accent, #3b82f6); text-decoration: underline; font: inherit; font-size: 13px; cursor: pointer; }
+.new-client-gps[data-state="active"] { border-color: color-mix(in srgb, var(--success) 40%, var(--line)); color: var(--success); }
+.new-client-gps[data-state="active"] .new-client-gps-dot { background: var(--success); box-shadow: 0 0 0 3px color-mix(in srgb, var(--success) 25%, transparent); }
+.new-client-gps[data-state="denied"], .new-client-gps[data-state="unsupported"] { border-color: color-mix(in srgb, var(--alert-color) 45%, var(--line)); color: var(--alert-color); }
+.new-client-gps[data-state="denied"] .new-client-gps-dot, .new-client-gps[data-state="unsupported"] .new-client-gps-dot { background: var(--alert-color); box-shadow: 0 0 0 3px color-mix(in srgb, var(--alert-color) 25%, transparent); }
+
+/* Pasos para activar la ubicación */
+.gps-help { max-height: 90vh; overflow: auto; }
+.gps-help-step { border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; margin: 0 0 10px; }
+.gps-help-step summary { font-weight: 700; cursor: pointer; }
+.gps-help-step ol { margin: 8px 0 0; padding-left: 20px; display: grid; gap: 6px; font-size: 14px; line-height: 1.4; }
+.gps-help-note { font-size: 13px; color: var(--muted); margin: 6px 0 12px; }
+.gps-help-backdrop { z-index: 60; }
+
 /* ── css/features/clients.css */
 /* features/clients · Listas y tarjetas de clientes. */
 
@@ -10772,6 +10798,11 @@ button.base-breakdown-insurance:focus-visible {
   .access-schedule-foot .primary-button {
     width: 100%;
   }
+}
+
+.personnel-badge.is-warn {
+  border-color: color-mix(in srgb, #f59e0b 45%, var(--line));
+  color: #d97706;
 }
 
 /* ── css/features/admin-evidence.css */

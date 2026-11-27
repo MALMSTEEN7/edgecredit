@@ -34,7 +34,7 @@
   <link rel="icon" href="icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="icon-192.png">
   <meta name="apple-mobile-web-app-capable" content="yes">
-  <link rel="stylesheet" id="app-styles" href="dist/styles.bundle.css?v=9e794b407d">
+  <link rel="stylesheet" id="app-styles" href="dist/styles.bundle.css?v=c7b165779d">
   <script>
     // Si hay una sesión guardada, al recargar se muestra «Cargando tu sesión…» en vez del
     // formulario de ingreso mientras la app la restaura (features/auth/session.js).
@@ -92,6 +92,7 @@
     <main id="main-content">
       <section class="view is-active" id="inicio" aria-labelledby="home-title">
         <div class="section-heading home-section-heading"><div class="worker-home-identity"><span class="avatar" aria-label="Perfil de Camila">C</span><div><p class="eyebrow">LUNES, 28 DE SEPTIEMBRE</p><h1 id="home-title">Buen día, Camila</h1></div></div><button class="primary-button add-client-button" id="add-client" type="button">Nuevo cliente <span aria-hidden="true">＋</span></button></div>
+        <div class="gps-banner" id="gps-banner" role="alert" hidden><span class="gps-banner-icon" aria-hidden="true">⌖</span><p id="gps-banner-text">La ubicación de este celular está bloqueada.</p><button type="button" class="primary-button" id="gps-banner-activate">Activar ubicación</button></div>
         <div class="list-heading"><div><p class="eyebrow" id="home-list-eyebrow">RUTA DEL DÍA</p><h2>Clientes de hoy</h2></div><button type="button" class="home-route-link" data-go-view="ruta-diaria">Organizar ruta <span aria-hidden="true">→</span></button></div>
         <label class="search-field home-search"><span aria-hidden="true">⌕</span><input id="home-search" type="search" placeholder="Buscar cliente por nombre o cédula" aria-label="Buscar clientes de tu ruta" autocomplete="off"></label>
         <p class="home-search-note" id="home-search-note" role="status" hidden></p>
@@ -436,6 +437,19 @@
     </main>
   </div>
 
+  <div class="modal-backdrop gps-help-backdrop" id="gps-help" hidden>
+    <section class="payment-modal gps-help" role="dialog" aria-modal="true" aria-labelledby="gps-help-title">
+      <p class="eyebrow">UBICACIÓN</p><h2 id="gps-help-title">Activar la ubicación</h2>
+      <p class="modal-subtitle" id="gps-help-reason">El permiso de ubicación está bloqueado para EdgeCredit. Así se activa:</p>
+      <details class="gps-help-step" open><summary>1 · Encender la ubicación del celular</summary><ol><li>Desliza desde arriba de la pantalla para ver los accesos rápidos.</li><li>Toca <strong>Ubicación</strong> (ícono ⌖) para que quede encendida.</li><li>En Ajustes → Ubicación, activa también <strong>Precisión de la ubicación de Google</strong> si aparece.</li></ol></details>
+      <details class="gps-help-step" open><summary>2 · Dar permiso a EdgeCredit (Chrome)</summary><ol><li>Abre EdgeCredit en Chrome y toca el <strong>candado</strong> (o el ícono ⚙) a la izquierda de la dirección de la página.</li><li>Toca <strong>Permisos</strong> → <strong>Ubicación</strong>.</li><li>Elige <strong>Permitir</strong> (no «solo esta vez»).</li></ol></details>
+      <details class="gps-help-step"><summary>3 · Si Chrome no tiene permiso en el celular</summary><ol><li>Ajustes del celular → <strong>Aplicaciones</strong> → <strong>Chrome</strong> → <strong>Permisos</strong> → <strong>Ubicación</strong>.</li><li>Elige <strong>Permitir solo con la app en uso</strong>.</li><li>Activa <strong>Usar ubicación precisa</strong>.</li></ol></details>
+      <details class="gps-help-step"><summary>Si usas EdgeCredit instalada (ícono en la pantalla de inicio)</summary><ol><li>Mantén presionado el ícono de EdgeCredit → <strong>Información de la app</strong> (ⓘ).</li><li><strong>Permisos</strong> → <strong>Ubicación</strong> → <strong>Permitir</strong>.</li><li>Si no aparece, haz el paso 2 desde Chrome.</li></ol></details>
+      <details class="gps-help-step"><summary>iPhone</summary><ol><li>Ajustes → <strong>Privacidad y seguridad</strong> → <strong>Localización</strong>: activada.</li><li>Ahí mismo → <strong>Safari</strong> (o Chrome) → <strong>Mientras se usa</strong> y <strong>Ubicación exacta</strong> activada.</li></ol></details>
+      <p class="gps-help-note">Cuando termines, toca «Ya la activé»: la página se recarga y el indicador debe quedar en verde.</p>
+      <div class="custom-modal-actions"><button class="secondary-button" type="button" id="gps-help-close">Cerrar</button><button class="primary-button" type="button" id="gps-help-retry">Ya la activé</button></div>
+    </section>
+  </div>
   <div class="modal-backdrop" id="payment-modal" hidden>
     <section class="payment-modal" role="dialog" aria-modal="true" aria-labelledby="payment-title" aria-describedby="payment-description">
       <div class="modal-handle" aria-hidden="true"></div><button class="modal-close" type="button" aria-label="Cerrar" data-close-payment>×</button>
@@ -469,6 +483,7 @@
       <button class="modal-close" id="new-client-close" type="button" aria-label="Cerrar">×</button>
       <p class="eyebrow"><span id="new-client-kind">NUEVO CRÉDITO</span> · <span id="new-client-route">RUTA</span></p><h2 id="new-client-title">Registrar cliente</h2><p class="custom-modal-description" id="new-client-description">Los valores excepcionales quedan pendientes de aprobación del administrador.</p><p class="renewal-note" id="renewal-note" hidden></p>
       <form id="new-client-form">
+        <div class="new-client-gps" id="new-client-gps" data-state="searching" hidden><span class="new-client-gps-dot" aria-hidden="true"></span><span class="new-client-gps-text" id="new-client-gps-text">Ubicación: comprobando…</span><button type="button" class="secondary-button" id="new-client-gps-activate" hidden>Activar</button><button type="button" class="link-button" id="new-client-gps-help" hidden>¿Cómo activarla?</button></div>
         <div class="client-create-fields">
           <label class="custom-field">Nombre completo<input name="name" autocomplete="name" required></label>
           <label class="custom-field">Cédula<input name="idNumber" inputmode="numeric" required></label>
@@ -555,7 +570,7 @@
     // al cambiar el sello, el navegador descarga el JS/CSS nuevo en vez de usar su caché.
     // Para desarrollar con los módulos sueltos, abre index.html?dev desde un servidor local.
     (() => {
-      const APP_VERSION = '9e794b407d';
+      const APP_VERSION = 'c7b165779d';
       const dev = new URLSearchParams(location.search).has('dev') && location.protocol !== 'file:';
       if (dev) {
         document.getElementById('app-styles').href = 'styles.css';

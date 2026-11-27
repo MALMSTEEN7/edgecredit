@@ -7,7 +7,12 @@ export function locateDevice({ timeout = 10000 } = {}) {
   if (!navigator.geolocation) return Promise.resolve({ location: null, reason: 'unsupported' });
   return new Promise(resolve => {
     let settled = false;
-    const done = value => { if (!settled) { settled = true; resolve(value); } };
+    const done = value => {
+      if (settled) return;
+      settled = true;
+      document.dispatchEvent(new CustomEvent('edgecredit:gps-result', { detail: { reason: value.reason } }));
+      resolve(value);
+    };
     // Algunos navegadores nunca responden si el usuario ignora el aviso de permiso.
     const guard = window.setTimeout(() => done({ location: null, reason: 'timeout' }), timeout + 500);
     navigator.geolocation.getCurrentPosition(position => {

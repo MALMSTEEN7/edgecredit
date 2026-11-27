@@ -11,7 +11,7 @@
 // propia sesión, así dos usuarios pueden recargar a la vez en el mismo navegador.
 (() => {
   const DB_KEY = 'mock-supabase-db';
-  const TABLE_KEYS = { profiles: 'user_id', routes: 'id', route_state: 'route_id', clients: 'id', pending_requests: 'id', app_settings: 'key', deleted_rows: 'id' };
+  const TABLE_KEYS = { profiles: 'user_id', routes: 'id', route_state: 'route_id', clients: 'id', pending_requests: 'id', app_settings: 'key', deleted_rows: 'id', worker_device_status: 'worker_id' };
   const LOGGED_DELETES = ['clients', 'routes', 'route_state', 'pending_requests'];
   const bus = new BroadcastChannel('mock-supabase');
   const listeners = new Set();
@@ -81,11 +81,13 @@
       if (table === 'app_settings') return true;
       if (table === 'deleted_rows') return isAdmin(db) || canRoute(db, row.route_id);
       if (table === 'audit_log') return isAdmin(db);
+      if (table === 'worker_device_status') return isAdmin(db) || row.worker_id === currentUser.id;
       const route = table === 'routes' ? row.id : row.route_id;
       return canRoute(db, route);
     };
     const writable = (db, table, row) => {
       if (table === 'profiles' || table === 'app_settings') return isAdmin(db);
+      if (table === 'worker_device_status') return row.worker_id === currentUser.id; // supabase/ubicacion.sql
       const route = table === 'routes' ? row.id : row.route_id;
       return canRoute(db, route);
     };
