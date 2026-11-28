@@ -19,7 +19,7 @@ import { showToast } from '../../ui/toast.js';
 import { showView } from '../../ui/navigation.js';
 import { openCustomModal } from '../../ui/custom-modal.js';
 import { closeVisit } from '../daily-route/daily-route.js';
-import { canOfferReduction, openInterestReduction } from './interest-reduction.js';
+import { canAdminReduce, canOfferReduction, openInterestReduction } from './interest-reduction.js';
 import { finalPayment } from '../../domain/route-day.js';
 import { takeLocationHere } from '../clients/client-location.js';
 
@@ -120,7 +120,7 @@ function offerRenewal(clientId, returnHome, { reduced = false } = {}) {
   const goHome = () => { if (returnHome) showView('inicio'); };
   closeButton.addEventListener('click', goHome, { once: true });
   const payment = finalPayment(client);
-  const canReduce = !reduced && canOfferReduction(client, payment);
+  const canReduce = !reduced && (state.userRole === 'admin' ? canAdminReduce(client, payment) : canOfferReduction(client, payment));
   const refresh = () => {
     updateCashTotal();
     renderHistory(client);

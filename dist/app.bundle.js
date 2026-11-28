@@ -10242,6 +10242,12 @@ function openClient(clientId) {
   due.textContent = dueISO ? formatDate(dueISO) : '—';
   // Vencida y sin pagar: la fecha en rojo y, al tocarla, cuántos días de mora lleva.
   due.classList.toggle('is-overdue', !settled && overdueDays > 0);
+  // Días transcurridos desde la entrega (en una cartulina pagada, hasta el día en que se pagó).
+  const elapsed = document.querySelector('#route-days-elapsed');
+  const term = Number(client.totalDays) || 0;
+  elapsed.textContent = client.creditStartDate ? `${day}${term ? ` de ${term}` : ''} ${day === 1 ? 'día' : 'días'}${!settled && overdueDays > 0 ? ` (+${overdueDays})` : ''}` : '—';
+  elapsed.classList.toggle('is-overdue', !settled && overdueDays > 0);
+  elapsed.title = settled ? 'Días que tardó en pagarse' : overdueDays > 0 ? `Lleva ${overdueDays} ${overdueDays === 1 ? 'día' : 'días'} de mora` : `Faltan ${Math.max(0, term - day)} días para vencer`;
   due.title = !settled && overdueDays > 0 ? `Vencida hace ${overdueDays} ${overdueDays === 1 ? 'día' : 'días'}` : settled ? 'Cartulina pagada' : `Faltan ${Math.max(0, client.totalDays - day)} días`;
   document.querySelector('#detail-installment').textContent = formatMoney(client.installment);
   document.querySelector('#detail-id').textContent = client.id;
@@ -10424,6 +10430,8 @@ function renderCardActions(client) {
     button.querySelector('.detail-action-sub').textContent = waiting ? 'Solicitud enviada: esperando al admin' : isWorker && openRequest ? 'Hay otra solicitud pendiente'
       : locked ? `Disponible cuando venza el plazo (falta${daysLeft === 1 ? '' : 'n'} ${daysLeft} día${daysLeft === 1 ? '' : 's'})` : sub;
   });
+  // El admin puede reducir intereses de cualquier cartulina cancelada (sobre el abono final).
+  document.querySelector('#reduce-interest-client').hidden = !(state.userRole === 'admin' && cancelled && canAdminReduce(client, finalPayment(client)));
   hint.textContent = notes.join(' ');
   hint.hidden = !notes.length;
   document.querySelector('.detail-profile .eyebrow').textContent = cancelled ? 'CARTULINA CANCELADA' : 'CRÉDITO ACTIVO';
@@ -10587,6 +10595,12 @@ function __mount_clientDetailModule() {
   document.querySelector('#card-next').addEventListener('click', () => moveToCard(1));
   document.querySelector('#finance-client').addEventListener('click', openFinanceModal);
   document.querySelector('#retanqueo-client').addEventListener('click', openRetanqueoModal);
+  document.querySelector('#reduce-interest-client').addEventListener('click', () => {
+    const client = clients[state.activeClient];
+    const payment = client && finalPayment(client);
+    if (!payment || state.userRole !== 'admin') return;
+    openInterestReduction(state.activeClient, payment, { onDone: () => { renderClientRows(state.activeClient); openClient(state.activeClient); } });
+  });
   document.querySelector('#client-capture-location').addEventListener('click', captureClientLocation);
   document.querySelector('#client-paste-location').addEventListener('click', () => openPasteLocation(state.activeClient));
   // La ubicación llegó tarde (reintento tras crear la cartulina): se actualiza la ficha abierta.
@@ -10791,7 +10805,7 @@ function __mount_clientDetailModule() {
       const oldAmount = Number(payment.amount) || 0;
       const today = localDateISO();
       // Abono final de una cartulina cancelada antes de la mitad del plazo: «Reducir intereses».
-      const reducible = payment === finalPayment(client) && canOfferReduction(client, payment);
+      const reducible = payment === finalPayment(client) && (state.userRole === 'admin' ? canAdminReduce(client, payment) : canOfferReduction(client, payment));
       openCustomModal({
         title: 'Editar abono', description: `Abono registrado el ${formatDate(payment.date)}. Corrige el monto, la forma de pago o la fecha.`,
         extraAction: reducible ? {
@@ -12340,6 +12354,7 @@ function routeCardInfo(clientId) {
     ['V. Cuota', formatMoney(client.installment)],
     ['F. Crédito', client.creditStartDate ? formatDate(client.creditStartDate) : ''],
     ['F. Vence', dueDate ? formatDate(dueDate) : ''],
+    ['Días transcurridos', client.creditStartDate ? `${creditDay(client)}${totalDays ? ` de ${totalDays}` : ''}` : ''],
     ['Días atrasados', lateDays === null ? '' : String(lateDays)],
     ['Tipo', RATING_TYPE[paymentHistory(client).level]],
   ].filter(([, value]) => value !== undefined && value !== null && String(value).trim() !== '');
@@ -12988,6 +13003,15 @@ function canOfferReduction(client, payment) {
 }
 
 /**
+ * El administrador puede reducir intereses de cualquier cartulina cancelada, sin importar
+ * cuándo se pagó (el límite de la mitad del plazo es para ofrecerla al trabajador y antes de
+ * renovar). Mientras quede interés por descontar en el abono final.
+ */
+function canAdminReduce(client, payment) {
+  return Boolean(client && payment) && Number(client.balance) <= 0 && Number(payment.amount) > 0 && maxInterestReduction(client, payment) > 0;
+}
+
+/**
  * Antes de renovar una cartulina cancelada antes de la mitad del plazo hay que resolver la
  * reducción de intereses: aplicarla (admin), solicitarla (trabajador) o indicar que no hubo
  * descuento. Mientras no se resuelva, no se puede renovar. `proceed()` sigue con la renovación.
@@ -13028,7 +13052,7 @@ function openInterestReduction(clientId, payment, { onDone = () => {}, onCancel 
   const max = maxInterestReduction(client, payment);
   openCustomModal({
     title: 'Reducir intereses',
-    description: `${client.name} pagó antes de tiempo (abono final del ${formatDate(payment.date)} por ${formatMoney(payment.amount)}). Escribe cuánto se le descontó de intereses: ese valor no entra a la caja. Máximo ${formatMoney(max)}.${isAdmin ? '' : ' La solicitud le llega al administrador para aprobarla.'}`,
+    description: `${client.name} canceló la cartulina con el abono del ${formatDate(payment.date)} por ${formatMoney(payment.amount)}. Escribe cuánto se le descontó de intereses: ese valor se resta del abono final y no entra a la caja. Máximo ${formatMoney(max)}.${Number(payment.interestReduction) > 0 ? ` Ya se le redujeron ${formatMoney(payment.interestReduction)}.` : ''}${isAdmin ? '' : ' La solicitud le llega al administrador para aprobarla.'}`,
     fields: [{ name: 'amount', label: 'Valor de la reducción', money: true, thousands: true, type: 'number', min: 1, step: 1, required: true }],
     submitLabel: isAdmin ? 'Aplicar reducción' : 'Solicitar reducción',
     onSubmit: values => {
@@ -13036,13 +13060,17 @@ function openInterestReduction(clientId, payment, { onDone = () => {}, onCancel 
       if (!(amount > 0)) { customModalError.textContent = 'Escribe el valor de la reducción.'; return false; }
       if (amount > max) { customModalError.textContent = `La reducción no puede pasar de ${formatMoney(max)}.`; return false; }
       if (isAdmin) {
+        const before = { ...payment };
         const error = applyInterestReduction(client, payment, amount, { by: 'Administrador' });
         if (error) { customModalError.textContent = error; return false; }
         const route = routeSettlements[client.route];
+        // Si el abono final es de un día ya cerrado, ese cierre se corrige (como al editar un abono).
+        const closed = adjustClosedTransfers(route, before, { ...payment });
         if (route) syncRouteCollections(clients, { [client.route]: route });
         syncCancelledCard(client, clientId);
         persistBusinessData();
-        showToast(`Reducción de intereses de ${formatMoney(amount)} aplicada a ${client.name}: el abono final quedó en ${formatMoney(payment.amount)}.`);
+        const closedCopy = closed.length ? ` Cierre del ${formatDate(closed[0].date)} corregido: cobro −${formatMoney(amount)}.` : '';
+        showToast(`Reducción de intereses de ${formatMoney(amount)} aplicada a ${client.name}: el abono final quedó en ${formatMoney(payment.amount)}.${closedCopy}`);
       } else {
         const id = `request-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
         pendingRequests.unshift({
@@ -13185,7 +13213,7 @@ function offerRenewal(clientId, returnHome, { reduced = false } = {}) {
   const goHome = () => { if (returnHome) showView('inicio'); };
   closeButton.addEventListener('click', goHome, { once: true });
   const payment = finalPayment(client);
-  const canReduce = !reduced && canOfferReduction(client, payment);
+  const canReduce = !reduced && (state.userRole === 'admin' ? canAdminReduce(client, payment) : canOfferReduction(client, payment));
   const refresh = () => {
     updateCashTotal();
     renderHistory(client);

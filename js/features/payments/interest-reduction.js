@@ -13,7 +13,7 @@ import { state } from '../../core/state.js';
 import { clients, pendingRequests, persistBusinessData, routeSettlements } from '../../core/store.js';
 import { syncCancelledCard } from '../../domain/accounting.js';
 import { finalPayment } from '../../domain/route-day.js';
-import { syncRouteCollections } from '../../domain/ledger.js';
+import { adjustClosedTransfers, syncRouteCollections } from '../../domain/ledger.js';
 import { applyInterestReduction, maxInterestReduction, reductionAllowed } from '../../domain/restructure.js';
 import { formatDate, formatMoney, routeKey } from '../../shared/format.js';
 import { openCustomModal } from '../../ui/custom-modal.js';
@@ -24,6 +24,15 @@ import { renderPendingRequests } from '../admin/pending.js';
 export function canOfferReduction(client, payment) {
   return Boolean(client && payment) && Number(client.balance) <= 0 && !payment.reductionRequest && !payment.reductionWaived
     && !(Number(payment.interestReduction) > 0) && reductionAllowed(client, payment);
+}
+
+/**
+ * El administrador puede reducir intereses de cualquier cartulina cancelada, sin importar
+ * cuándo se pagó (el límite de la mitad del plazo es para ofrecerla al trabajador y antes de
+ * renovar). Mientras quede interés por descontar en el abono final.
+ */
+export function canAdminReduce(client, payment) {
+  return Boolean(client && payment) && Number(client.balance) <= 0 && Number(payment.amount) > 0 && maxInterestReduction(client, payment) > 0;
 }
 
 /**
@@ -67,7 +76,7 @@ export function openInterestReduction(clientId, payment, { onDone = () => {}, on
   const max = maxInterestReduction(client, payment);
   openCustomModal({
     title: 'Reducir intereses',
-    description: `${client.name} pagó antes de tiempo (abono final del ${formatDate(payment.date)} por ${formatMoney(payment.amount)}). Escribe cuánto se le descontó de intereses: ese valor no entra a la caja. Máximo ${formatMoney(max)}.${isAdmin ? '' : ' La solicitud le llega al administrador para aprobarla.'}`,
+    description: `${client.name} canceló la cartulina con el abono del ${formatDate(payment.date)} por ${formatMoney(payment.amount)}. Escribe cuánto se le descontó de intereses: ese valor se resta del abono final y no entra a la caja. Máximo ${formatMoney(max)}.${Number(payment.interestReduction) > 0 ? ` Ya se le redujeron ${formatMoney(payment.interestReduction)}.` : ''}${isAdmin ? '' : ' La solicitud le llega al administrador para aprobarla.'}`,
     fields: [{ name: 'amount', label: 'Valor de la reducción', money: true, thousands: true, type: 'number', min: 1, step: 1, required: true }],
     submitLabel: isAdmin ? 'Aplicar reducción' : 'Solicitar reducción',
     onSubmit: values => {
@@ -75,13 +84,17 @@ export function openInterestReduction(clientId, payment, { onDone = () => {}, on
       if (!(amount > 0)) { customModalError.textContent = 'Escribe el valor de la reducción.'; return false; }
       if (amount > max) { customModalError.textContent = `La reducción no puede pasar de ${formatMoney(max)}.`; return false; }
       if (isAdmin) {
+        const before = { ...payment };
         const error = applyInterestReduction(client, payment, amount, { by: 'Administrador' });
         if (error) { customModalError.textContent = error; return false; }
         const route = routeSettlements[client.route];
+        // Si el abono final es de un día ya cerrado, ese cierre se corrige (como al editar un abono).
+        const closed = adjustClosedTransfers(route, before, { ...payment });
         if (route) syncRouteCollections(clients, { [client.route]: route });
         syncCancelledCard(client, clientId);
         persistBusinessData();
-        showToast(`Reducción de intereses de ${formatMoney(amount)} aplicada a ${client.name}: el abono final quedó en ${formatMoney(payment.amount)}.`);
+        const closedCopy = closed.length ? ` Cierre del ${formatDate(closed[0].date)} corregido: cobro −${formatMoney(amount)}.` : '';
+        showToast(`Reducción de intereses de ${formatMoney(amount)} aplicada a ${client.name}: el abono final quedó en ${formatMoney(payment.amount)}.${closedCopy}`);
       } else {
         const id = `request-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
         pendingRequests.unshift({
