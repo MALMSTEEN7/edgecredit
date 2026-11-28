@@ -22,7 +22,7 @@ import { bindImageViewer } from '../../ui/image-viewer.js';
 import { LOCATION_FAILURE_LABELS, hasCoordinates, isApproximateLocation, locateDevice } from '../../shared/geo.js';
 import { clientInsurance, generalInsuranceAmount, resolveInsurance } from '../../domain/insurance.js';
 import { canRenew, onClientRenewed } from './new-client.js';
-import { canOfferReduction, openInterestReduction } from '../payments/interest-reduction.js';
+import { canAdminReduce, canOfferReduction, openInterestReduction } from '../payments/interest-reduction.js';
 import { finalPayment } from '../../domain/route-day.js';
 import { MAX_ACTIVE_CARDS_PER_PERSON, activeCardIds, canAddCard, loanCount, cardLoanHistory, loanNumber, loanTimeline, personLoanTotal } from '../../domain/person-cards.js';
 import { PAYDAY_OPTIONS, cardColor, paintCardColorBand, shiftDays, startDateForPayday, weekdayOf } from '../../domain/card-color.js';
@@ -516,6 +516,12 @@ export function openClient(clientId) {
   due.textContent = dueISO ? formatDate(dueISO) : '—';
   // Vencida y sin pagar: la fecha en rojo y, al tocarla, cuántos días de mora lleva.
   due.classList.toggle('is-overdue', !settled && overdueDays > 0);
+  // Días transcurridos desde la entrega (en una cartulina pagada, hasta el día en que se pagó).
+  const elapsed = document.querySelector('#route-days-elapsed');
+  const term = Number(client.totalDays) || 0;
+  elapsed.textContent = client.creditStartDate ? `${day}${term ? ` de ${term}` : ''} ${day === 1 ? 'día' : 'días'}${!settled && overdueDays > 0 ? ` (+${overdueDays})` : ''}` : '—';
+  elapsed.classList.toggle('is-overdue', !settled && overdueDays > 0);
+  elapsed.title = settled ? 'Días que tardó en pagarse' : overdueDays > 0 ? `Lleva ${overdueDays} ${overdueDays === 1 ? 'día' : 'días'} de mora` : `Faltan ${Math.max(0, term - day)} días para vencer`;
   due.title = !settled && overdueDays > 0 ? `Vencida hace ${overdueDays} ${overdueDays === 1 ? 'día' : 'días'}` : settled ? 'Cartulina pagada' : `Faltan ${Math.max(0, client.totalDays - day)} días`;
   document.querySelector('#detail-installment').textContent = formatMoney(client.installment);
   document.querySelector('#detail-id').textContent = client.id;
@@ -698,6 +704,8 @@ function renderCardActions(client) {
     button.querySelector('.detail-action-sub').textContent = waiting ? 'Solicitud enviada: esperando al admin' : isWorker && openRequest ? 'Hay otra solicitud pendiente'
       : locked ? `Disponible cuando venza el plazo (falta${daysLeft === 1 ? '' : 'n'} ${daysLeft} día${daysLeft === 1 ? '' : 's'})` : sub;
   });
+  // El admin puede reducir intereses de cualquier cartulina cancelada (sobre el abono final).
+  document.querySelector('#reduce-interest-client').hidden = !(state.userRole === 'admin' && cancelled && canAdminReduce(client, finalPayment(client)));
   hint.textContent = notes.join(' ');
   hint.hidden = !notes.length;
   document.querySelector('.detail-profile .eyebrow').textContent = cancelled ? 'CARTULINA CANCELADA' : 'CRÉDITO ACTIVO';
@@ -861,6 +869,12 @@ export function mount() {
   document.querySelector('#card-next').addEventListener('click', () => moveToCard(1));
   document.querySelector('#finance-client').addEventListener('click', openFinanceModal);
   document.querySelector('#retanqueo-client').addEventListener('click', openRetanqueoModal);
+  document.querySelector('#reduce-interest-client').addEventListener('click', () => {
+    const client = clients[state.activeClient];
+    const payment = client && finalPayment(client);
+    if (!payment || state.userRole !== 'admin') return;
+    openInterestReduction(state.activeClient, payment, { onDone: () => { renderClientRows(state.activeClient); openClient(state.activeClient); } });
+  });
   document.querySelector('#client-capture-location').addEventListener('click', captureClientLocation);
   document.querySelector('#client-paste-location').addEventListener('click', () => openPasteLocation(state.activeClient));
   // La ubicación llegó tarde (reintento tras crear la cartulina): se actualiza la ficha abierta.
@@ -1065,7 +1079,7 @@ export function mount() {
       const oldAmount = Number(payment.amount) || 0;
       const today = localDateISO();
       // Abono final de una cartulina cancelada antes de la mitad del plazo: «Reducir intereses».
-      const reducible = payment === finalPayment(client) && canOfferReduction(client, payment);
+      const reducible = payment === finalPayment(client) && (state.userRole === 'admin' ? canAdminReduce(client, payment) : canOfferReduction(client, payment));
       openCustomModal({
         title: 'Editar abono', description: `Abono registrado el ${formatDate(payment.date)}. Corrige el monto, la forma de pago o la fecha.`,
         extraAction: reducible ? {

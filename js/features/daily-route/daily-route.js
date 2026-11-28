@@ -67,6 +67,7 @@ function routeCardInfo(clientId) {
     ['V. Cuota', formatMoney(client.installment)],
     ['F. Crédito', client.creditStartDate ? formatDate(client.creditStartDate) : ''],
     ['F. Vence', dueDate ? formatDate(dueDate) : ''],
+    ['Días transcurridos', client.creditStartDate ? `${creditDay(client)}${totalDays ? ` de ${totalDays}` : ''}` : ''],
     ['Días atrasados', lateDays === null ? '' : String(lateDays)],
     ['Tipo', RATING_TYPE[paymentHistory(client).level]],
   ].filter(([, value]) => value !== undefined && value !== null && String(value).trim() !== '');

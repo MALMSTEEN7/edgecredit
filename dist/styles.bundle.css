@@ -7039,6 +7039,10 @@ button.evidence-link:active {
 /* Pegar ubicación (Maps / WhatsApp) */
 #client-paste-location { font: inherit; cursor: pointer; }
 
+/* Fecha de crédito · vencimiento · días transcurridos */
+.route-metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.route-metrics strong.is-overdue { color: var(--alert-color); }
+
 /* ── css/features/payment.css */
 /* features/payment · Modal de registro de pago. */
 
